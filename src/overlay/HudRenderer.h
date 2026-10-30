@@ -119,6 +119,7 @@ struct MinimapLayout {
     bool diagReader = false;         // reader state, last log line and errors at the bottom-left
     bool salvageConfirm = false;     // the anvil button needs a second click before a run starts
     bool salvagePreview = true;      // red marks on items a run would destroy
+    bool safeOnlyAtAnvil = true;     // safe area + its editor are shown only while the salvage tab is open
     uint32_t salvagePreviewRgb = 0xFF3232;
 
     // global hotkeys (virtual-key codes, 0 = unbound); ids 1.. in main.cpp

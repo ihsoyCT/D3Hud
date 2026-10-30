@@ -151,6 +151,7 @@ bool MinimapLayout::Load(const char* path) {
             else if (!strcmp(k, "extraDelayMs")) salvageRules.extraDelayMs = std::clamp(static_cast<int>(v), 0, 2000);
             else if (!strcmp(k, "confirm")) salvageConfirm = v != 0.f;
             else if (!strcmp(k, "preview")) salvagePreview = v != 0.f;
+            else if (!strcmp(k, "safeOnlyAtAnvil")) safeOnlyAtAnvil = v != 0.f;
             else if (!strcmp(k, "previewRgb")) salvagePreviewRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
         }
         else if (!strcmp(key, "readerAutostart")) readerAutostart = v != 0.f;
@@ -287,7 +288,7 @@ bool MinimapLayout::Save(const char* path) const {
     std::print(f, "salvage.rarityMask={}\nsalvage.keepAncient={}\nsalvage.keepPrimal={}\nsalvage.neverFamilies={}\nsalvage.maxPerRun={}\nsalvage.extraDelayMs={}\n",
                salvageRules.rarityMask, salvageRules.keepAncient ? 1 : 0, salvageRules.keepPrimal ? 1 : 0,
                salvageRules.neverFamilies, salvageRules.maxPerRun, salvageRules.extraDelayMs);
-    std::print(f, "salvage.confirm={}\nsalvage.preview={}\nsalvage.previewRgb={}\n", salvageConfirm ? 1 : 0, salvagePreview ? 1 : 0, salvagePreviewRgb);
+    std::print(f, "salvage.confirm={}\nsalvage.preview={}\nsalvage.previewRgb={}\nsalvage.safeOnlyAtAnvil={}\n", salvageConfirm ? 1 : 0, salvagePreview ? 1 : 0, salvagePreviewRgb, safeOnlyAtAnvil ? 1 : 0);
     std::print(f, "readerAutostart={}\nreaderHz={}\ndiagFps={}\ndiagReader={}\n",
                readerAutostart ? 1 : 0, readerHz, diagFps ? 1 : 0, diagReader ? 1 : 0);
     std::print(f, "uiScale={:.2f}\ndockCorner={}\ndockAlpha={:.2f}\ndockAutoHide={}\npanelAlpha={:.2f}\ncompact={}\n",
@@ -1368,9 +1369,11 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
     if (cw < 4.0f || ch < 4.0f) return;  // not laid out
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     SafeArea& safe = layout_.safeArea;
+    const bool showSafe = !layout_.safeOnlyAtAnvil || snap.ui.salvageOpen;  // see Settings > Auto salvage
+    if (!showSafe) editSafeArea_ = false;
 
     // safe cells: edit by clicking (only while the overlay takes input)
-    if (editSafeArea_ && opt.mouseLive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+    if (showSafe && editSafeArea_ && opt.mouseLive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::GetIO().WantCaptureMouse) {
         const ImVec2 m = ImGui::GetIO().MousePos;
         const int cx = static_cast<int>((m.x - grid.x0) / cw), cy = static_cast<int>((m.y - grid.y0) / ch);
@@ -1379,31 +1382,33 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
             layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
         }
     }
-    for (int y = 0; y < kBackpackRows; ++y)
-        for (int x = 0; x < kBackpackCols; ++x) {
-            const ImVec2 a(grid.x0 + x * cw + 1, grid.y0 + y * ch + 1), b(grid.x0 + (x + 1) * cw - 1, grid.y0 + (y + 1) * ch - 1);
-            if (safe.Has(x, y)) {
-                dl->AddRectFilled(a, b, IM_COL32(60, 220, 90, editSafeArea_ ? 90 : 45));
-                dl->AddRect(a, b, IM_COL32(60, 220, 90, 200), 0.f, 0, 1.5f);
-            } else if (editSafeArea_) {
-                dl->AddRect(a, b, IM_COL32(255, 255, 255, 60));
+    if (showSafe) {
+        for (int y = 0; y < kBackpackRows; ++y)
+            for (int x = 0; x < kBackpackCols; ++x) {
+                const ImVec2 a(grid.x0 + x * cw + 1, grid.y0 + y * ch + 1), b(grid.x0 + (x + 1) * cw - 1, grid.y0 + (y + 1) * ch - 1);
+                if (safe.Has(x, y)) {
+                    dl->AddRectFilled(a, b, IM_COL32(60, 220, 90, editSafeArea_ ? 90 : 45));
+                    dl->AddRect(a, b, IM_COL32(60, 220, 90, 200), 0.f, 0, 1.5f);
+                } else if (editSafeArea_) {
+                    dl->AddRect(a, b, IM_COL32(255, 255, 255, 60));
+                }
             }
-        }
 
-    // toolbar under the backpack: the edit toggle works without F8 (hot rect, see main.cpp)
-    ImGui::SetNextWindowPos(ImVec2(grid.x0, grid.y1 + 6.0f), ImGuiCond_Always);
-    if (ImGui::Begin("##safe_toolbar", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                         ImGuiWindowFlags_NoNav)) {
-        if (ImGui::Button(editSafeArea_ ? "Done editing safe area" : "Edit safe area")) editSafeArea_ = !editSafeArea_;
-        ImGui::SameLine();
-        ImGui::TextDisabled(editSafeArea_ ? "click cells to toggle" : "%d safe cells", safe.Count());
-        const ImVec2 p = ImGui::GetWindowPos(), s = ImGui::GetWindowSize();
-        opt.AddHot(editSafeArea_ ? std::min(p.x, grid.x0) : p.x, editSafeArea_ ? std::min(p.y, grid.y0) : p.y,
-                   editSafeArea_ ? std::max(p.x + s.x, grid.x1) : p.x + s.x, p.y + s.y);
+        // toolbar under the backpack: the edit toggle works without F8 (hot rect, see main.cpp)
+        ImGui::SetNextWindowPos(ImVec2(grid.x0, grid.y1 + 6.0f), ImGuiCond_Always);
+        if (ImGui::Begin("##safe_toolbar", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav)) {
+            if (ImGui::Button(editSafeArea_ ? "Done editing safe area" : "Edit safe area")) editSafeArea_ = !editSafeArea_;
+            ImGui::SameLine();
+            ImGui::TextDisabled(editSafeArea_ ? "click cells to toggle" : "%d safe cells", safe.Count());
+            const ImVec2 p = ImGui::GetWindowPos(), s = ImGui::GetWindowSize();
+            opt.AddHot(editSafeArea_ ? std::min(p.x, grid.x0) : p.x, editSafeArea_ ? std::min(p.y, grid.y0) : p.y,
+                       editSafeArea_ ? std::max(p.x + s.x, grid.x1) : p.x + s.x, p.y + s.y);
+        }
+        ImGui::End();
     }
-    ImGui::End();
 
     // preview: what a salvage run would destroy
     int candidates = 0;
@@ -1469,6 +1474,7 @@ void HudRenderer::DrawSalvageSettings() {
     ImGui::Checkbox("edit safe area", &editSafeArea_);
     ImGui::SameLine();
     ImGui::TextDisabled("(open the inventory, click backpack cells; %d safe cells)", layout_.safeArea.Count());
+    ch |= ImGui::Checkbox("show the safe area and its editor only at the blacksmith's salvage tab", &layout_.safeOnlyAtAnvil);
     ch |= ImGui::Checkbox("keep ancient/primal of equipped", &R.protectEquippedAncients);
     ch |= ImGui::Checkbox("keep every ancient", &R.keepAncient);
     ImGui::SameLine();
