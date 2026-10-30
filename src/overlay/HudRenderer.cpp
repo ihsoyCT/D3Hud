@@ -904,9 +904,9 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
         bool anyOpen = false;  // a panel is showing: keep the dock to go with it
         for (int i = 0; i < kPanels; ++i) anyOpen |= panelSize_[i].x > 0.f;
         const float m = 40.0f;  // proximity margin around the dock
-        const bool near = opt.cursorX >= dockPos_.x - m && opt.cursorX <= dockPos_.x + dockSize_.x + m &&
+        const bool closeToDock = opt.cursorX >= dockPos_.x - m && opt.cursorX <= dockPos_.x + dockSize_.x + m &&
                           opt.cursorY >= dockPos_.y - m && opt.cursorY <= dockPos_.y + dockSize_.y + m;
-        if (!anyOpen && !near) return;
+        if (!anyOpen && !closeToDock) return;
     }
     ImVec2 pos, pivot;
     CornerAnchor(layout_.dockCorner, display, 12.f, &pos, &pivot);
