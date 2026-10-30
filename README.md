@@ -17,6 +17,7 @@ statistics, and an optional **auto salvage**.
 - [Quick start](#quick-start)
 - [Features](#features)
 - [Settings](#settings)
+- [Plugins](#plugins)
 - [Hotkeys](#hotkeys)
 - [Command line](#command-line)
 - [Files the program uses and creates](#files-the-program-uses-and-creates)
@@ -101,13 +102,13 @@ at any resolution). If it ever cannot, or the zoom is off, adjust it in **Settin
 
 **The HUD itself**
 - Panels (Info, Drops, Items, Actors, Settings) start as small tabs in a screen corner.
-  Hover to peek, F8 + click to pin, drag a title bar to move; positions are remembered.
-- Rebindable hotkeys, profiles (save/load whole setups), UI scale, dock options,
+  Hover to peek, F8 + click to pin, drag a title bar to move, the X in the title bar of a pinned panel closes it again; positions are remembered.
+- Text uses the Windows font Segoe UI (Tahoma or Arial if it is missing) at 16 px; "UI scale" in Settings > General makes everything larger or smaller. Rebindable hotkeys, profiles (save/load whole setups), UI scale, dock options,
   compact mode, reader autostart and on-screen diagnostics.
 
 ## Settings
 
-Open the **Settings** tab (pin it with F8 + click; it does not open on hover). The window
+Open **Settings** (the cogwheel, always the last tab of the dock; pin it with F8 + click; it does not open on hover). The window
 can be resized by dragging its bottom-right corner, and the size is remembered.
 
 | Page | What is there |
@@ -120,8 +121,30 @@ can be resized by dragging its bottom-right corner, and the size is remembered.
 | Ground labels | Which items get labels, text size, colours |
 | Auto salvage | Safe area, rules, speed options, run safety, preview colour |
 | Reader / diagnostics | Autostart the reader, publish rate, on-screen diagnostics, open the settings folder, reset everything |
+| Plugins | Every loaded plugin with its status, the time it costs per frame, and its log; plugins add their own pages and options here |
 
 Most changes are saved immediately; on the Minimap page press **Save**.
+
+## Plugins
+
+Small Lua scripts in the `plugins` folder add features without rebuilding the program. One is included:
+
+- **Time tracker** (`plugins/timetracker`) records where your play time goes and shows it as percentages
+  per area, for this session and all time. Rifts and greater rifts are detected automatically. For
+  everything else you stand in a world once, open *Settings > Time tracker* and say which area it belongs
+  to (for example *Town* or *Bounties*); the answer is remembered. The page also holds the options (rename
+  or add areas, show the split on screen). A **Time** tab in the dock shows the same split when you hover it.
+- **Health bars** (`plugins/healthbars`) draws a life bar over every champion (blue), rare and boss on the
+  screen, and lists the same bars one under the other on the left or right edge of the screen with the
+  monster's name inside each bar. Under a bar it shows the monster's affixes as boxes (border and
+  translucent fill in the affix colour, black or white text): the plugin's page has a row for each of the 30
+  affixes with a checkbox and a colour, and the options set the text size and the fill opacity. Size, order and what to show are on
+  its settings page. The reader reads the life of those three
+  kinds only, and only once it has found their data, so a bar can appear a few seconds late.
+
+Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
+read game memory, press keys, or touch files. To write one see `plugins/README.md`. Restart the overlay
+after adding or changing a plugin.
 
 ## Hotkeys
 
@@ -150,6 +173,7 @@ D3Hud.Overlay.exe [options]        no options = cover "Diablo III", manage the r
   --record <file> [--seconds N]  record the synthetic scene
   --colorkey                   fallback if DirectComposition is not available
   --selftest <frames>          run N frames and exit (smoke test)
+  --settings-page <id>         start with Settings open on that page (e.g. minimap, timetracker.timetracker)
   --help
 ```
 
@@ -163,6 +187,7 @@ D3Hud.Reader.exe --attach "Diablo III64" --publish     # live snapshots for the 
         [--sno <path>]                                 #   actor table (default: next to the exe)
 D3Hud.Reader.exe --attach "Diablo III64" --actors      # one-shot dump of drawable actors
 D3Hud.Reader.exe --attach "Diablo III64" --items       # equipped and backpack items
+D3Hud.Reader.exe --attach "Diablo III64" --affixes     # research: where do elites keep their affixes (see analysis/MONSTER_AFFIXES.md)
 D3Hud.Reader.exe --attach "Diablo III64" --ui <text>   # list UI controls whose path contains <text>
 D3Hud.Reader.exe --attach "Diablo III64" --ui-watch <text> [--seconds N]
                                                        # watch what changes in those controls
@@ -181,6 +206,7 @@ Next to the exes (the folder is relocatable, nothing is written elsewhere):
 | `sno_actors.tsv`, `items_gbid.tsv`, `scene_cells.bin` | Data tables the program needs (shipped) |
 | `d3hud.ini` | All settings, panel positions, hotkeys and the safe area (created on first save) |
 | `d3hud.<name>.ini` | Saved profiles |
+| `plugins/`, `plugins.ini` | Lua plugins (shipped) and the settings and data they keep |
 | `reader.log` | Output of the background reader |
 | `d3hud_drops.csv` | Created by *Export session to CSV* in the Drops settings |
 | `dumps\` | Created by the reader's F10 actor dump |
@@ -253,7 +279,8 @@ running exe.
 ## Project layout and further reading
 
 ```
-src/core      snapshot model (frozen ABI), replay I/O, shared-memory ring, rules (salvage, search)
+src/core      snapshot model (frozen ABI), replay I/O, shared-memory ring, rules (salvage, search), host API (HostApi.h)
+src/plugins   Lua plugin runtime (sandbox, host API binding) and the plugin settings store
 src/reader    the memory reader (process attach, actor / item / UI / scene discovery)
 src/overlay   Win32 + DirectX 11 + DirectComposition window, ImGui renderer, salvage runner
 src/tests     unit tests (ctest)
@@ -263,5 +290,5 @@ tools         Python scripts used to mine those tables (not needed at runtime)
 
 - `TESTING.md` — manual test matrix and the replay-first workflow
 - `FEATURE_IDEAS.md` — ideas and investigations
-- `PLUGIN_PLAN.md` — a plan for a plugin system
+- `plugins/README.md` — writing a Lua plugin; `PLUGIN_PLAN.md` — the design and what is still planned
 - `analysis/ENGINE_MINING.md` — how the game's data structures were found

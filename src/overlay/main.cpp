@@ -20,6 +20,7 @@
 #include "backends/imgui_impl_win32.h"
 
 #include "HudRenderer.h"
+#include "PluginHost.h"
 #include "ReplayIO.h"
 #include "SceneGen.h"
 #include "Paths.h"
@@ -62,6 +63,18 @@ static IDCompositionVisual* g_dcompVisual = nullptr;
 // selftest extras
 static bool g_hitTest = false;     // --selftest-hit: verify click-through toggling
 static bool g_visualMark = false;  // --selftest-visual: draw a big marker square
+// ImGui's built-in font is a 13 px bitmap-style font: small, and blurry when plugins draw it larger. Use a system
+// TrueType font instead (ImGui 1.92+ renders any size from it sharply); the built-in one stays as the fallback.
+static void LoadUiFont() {
+    wchar_t windir[MAX_PATH] = {};
+    if (GetWindowsDirectoryW(windir, MAX_PATH) == 0) return;
+    for (const wchar_t* name : {L"segoeui.ttf", L"tahoma.ttf", L"arial.ttf"}) {
+        const std::filesystem::path font = std::filesystem::path(windir) / L"Fonts" / name;
+        if (!std::filesystem::exists(font)) continue;
+        if (ImGui::GetIO().Fonts->AddFontFromFileTTF(Utf8(font).c_str(), 16.0f) != nullptr) return;
+    }
+}
+
 static bool g_matrix = false;      // --matrix: cycle exstyle combos for external probing
 static bool g_baseNoRedir = true;  // matrix base window type
 static int g_selftestResult = -1;
@@ -253,6 +266,7 @@ int main(int argc, char** argv) {
     const char* recordPath = nullptr;
     const char* replayPath = nullptr;
     int selftestFrames = 0;
+    const char* settingsPage = nullptr;  // --settings-page <id>: open the Settings window on that page
     double recordSeconds = 10.0;
     bool live = false;
     bool startReader = false;
@@ -269,6 +283,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--start-reader")) live = startReader = true;
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) recordSeconds = atof(argv[++i]);
         else if (!strcmp(argv[i], "--selftest") && i + 1 < argc) selftestFrames = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--settings-page") && i + 1 < argc) settingsPage = argv[++i];
         else if (!strcmp(argv[i], "--selftest-hit")) { selftestFrames = 80; g_hitTest = true; }
         else if (!strcmp(argv[i], "--selftest-visual")) { g_visualMark = true; }
         else if (!strcmp(argv[i], "--matrix")) { g_matrix = true; g_visualMark = true; selftestFrames = 20000; }
@@ -357,6 +372,7 @@ int main(int argc, char** argv) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
+    LoadUiFont();
     ImGui::StyleColorsDark();
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_device, g_ctx);
@@ -394,11 +410,14 @@ int main(int argc, char** argv) {
     DWORD lastPhaseTick = GetTickCount();
 
     HudRenderer renderer;
+    PluginHost plugins(renderer);
     {
         renderer.SetLayoutPath(ExeDir() / "d3hud.ini");
         // map prediction shapes, next to the exe like d3hud.ini (copied by the build)
         if (!renderer.LoadSceneCells(ExeDir() / "scene_cells.bin")) std::print(stderr, "no scene_cells.bin - map prediction off\n");
     }
+    plugins.LoadAll(ExeDir() / "plugins", ExeDir() / "plugins.ini");
+    if (settingsPage != nullptr && !renderer.OpenSettingsPage(settingsPage)) std::print(stderr, "no settings page '{}'\n", settingsPage);
     HudOptions opts;
     opts.showPanels = g_showPanels;
     ReaderProcess reader;  // Info panel "Start reader" (live mode); ends with the overlay
@@ -596,6 +615,7 @@ int main(int argc, char** argv) {
             salvageStatus.running = salvageRunner.Active();
             salvageStatus.status = salvageRunner.status().c_str();
         }
+        plugins.OnFrame(snap, ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
         renderer.Draw(snap, opts, fpsSmooth, sourceName);
         {
             // Typing: the overlay is WS_EX_NOACTIVATE, so keys go to the game. While a text

@@ -120,198 +120,140 @@ void MinimapLayout::ResetMarkers() {
     set(ActorKind::RiftOrbTiered, 0xFFE150, 4.5f, MarkerShape::Dot, 1.0f, false, true);  // yellow (greater rifts)
 }
 
-bool MinimapLayout::Load(const std::filesystem::path& path) {
-    File f = OpenFile(path, L"r");
-    if (f == nullptr) return false;
-    char line[128];
-    while (fgets(line, sizeof(line), f) != nullptr) {
-        char key[64];
-        float v;
-        unsigned long long cells;
-        if (sscanf(line, " safeCells = %llx", &cells) == 1) {
-            safeArea.cells = cells & ((1ull << (kBackpackCols * kBackpackRows)) - 1);
-            continue;
-        }
-        if (sscanf(line, " %63[^=]= %f", key, &v) != 2) continue;
-        if (!strcmp(key, "onGameMap")) onGameMap = v != 0.f;
-        else if (!strcmp(key, "autoMinimap")) autoMinimap = v != 0.f;
-        else if (!strcmp(key, "rightOffset")) rightOffset = v;
-        else if (!strcmp(key, "topOffset")) topOffset = v;
-        else if (!strcmp(key, "radius")) radius = v;
-        else if (!strcmp(key, "worldRadius")) worldRadius = v;
-        else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
-        else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
-        else if (!strcmp(key, "uiScale")) uiScale = std::clamp(v, 0.5f, 3.0f);
-        else if (!strncmp(key, "salvage.", 8)) {
-            const char* k = key + 8;
-            if (!strcmp(k, "rarityMask")) salvageRules.rarityMask = static_cast<uint32_t>(v) & 0x1F;
-            else if (!strcmp(k, "keepAncient")) salvageRules.keepAncient = v != 0.f;
-            else if (!strcmp(k, "keepPrimal")) salvageRules.keepPrimal = v != 0.f;
-            else if (!strcmp(k, "neverFamilies")) salvageRules.neverFamilies = static_cast<uint32_t>(v) & ((1u << kGearFamilyCount) - 1);
-            else if (!strcmp(k, "maxPerRun")) salvageRules.maxPerRun = std::max(0, static_cast<int>(v));
-            else if (!strcmp(k, "extraDelayMs")) salvageRules.extraDelayMs = std::clamp(static_cast<int>(v), 0, 2000);
-            else if (!strcmp(k, "useAll")) salvageRules.useGameSalvageAll = v != 0.f;
-            else if (!strcmp(k, "burst")) salvageRules.burst = v != 0.f;
-            else if (!strcmp(k, "confirm")) salvageConfirm = v != 0.f;
-            else if (!strcmp(k, "preview")) salvagePreview = v != 0.f;
-            else if (!strcmp(k, "safeOnlyAtAnvil")) safeOnlyAtAnvil = v != 0.f;
-            else if (!strcmp(k, "previewRgb")) salvagePreviewRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
-        }
-        else if (!strcmp(key, "readerAutostart")) readerAutostart = v != 0.f;
-        else if (!strcmp(key, "readerHz")) readerHz = std::clamp(static_cast<int>(v), 5, 240);
-        else if (!strcmp(key, "diagFps")) diagFps = v != 0.f;
-        else if (!strcmp(key, "diagReader")) diagReader = v != 0.f;
-        else if (!strcmp(key, "dockCorner")) dockCorner = std::clamp(static_cast<int>(v), 0, 3);
-        else if (!strcmp(key, "dockAlpha")) dockAlpha = std::clamp(v, 0.f, 1.f);
-        else if (!strcmp(key, "dockAutoHide")) dockAutoHide = v != 0.f;
-        else if (!strcmp(key, "panelAlpha")) panelAlpha = std::clamp(v, 0.2f, 1.f);
-        else if (!strcmp(key, "compact")) compact = v != 0.f;
-        else if (!strncmp(key, "drops.", 6)) {
-            const char* k = key + 6;
-            if (!strcmp(k, "alertPrimal")) drops.alertPrimal = v != 0.f;
-            else if (!strcmp(k, "alertAncient")) drops.alertAncient = v != 0.f;
-            else if (!strcmp(k, "sound")) drops.sound = v != 0.f;
-            else if (!strcmp(k, "flash")) drops.flash = v != 0.f;
-            else if (!strcmp(k, "maxEntries")) drops.maxEntries = std::max(0, static_cast<int>(v));
-            else if (!strcmp(k, "showRunTimer")) drops.showRunTimer = v != 0.f;
-            else if (!strcmp(k, "showRift")) drops.showRift = v != 0.f;
-            else if (!strcmp(k, "minRunSeconds")) drops.minRunSeconds = std::clamp(static_cast<int>(v), 0, 3600);
-        }
-        else if (!strncmp(key, "items.", 6)) {
-            const char* k = key + 6;
-            if (!strcmp(k, "badges")) items.badges = v != 0.f;
-            else if (!strcmp(k, "badgeScale")) items.badgeScale = std::clamp(v, 0.5f, 3.0f);
-            else if (!strcmp(k, "badgeCorner")) items.badgeCorner = std::clamp(static_cast<int>(v), 0, 3);
-            else if (!strcmp(k, "badgeAugment")) items.badgeAugment = v != 0.f;
-            else if (!strcmp(k, "colAncient")) items.colAncient = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "colPrimal")) items.colPrimal = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "hoverMode")) items.hoverMode = std::clamp(static_cast<int>(v), 0, 2);
-            else if (!strcmp(k, "hoverAlpha")) items.hoverAlpha = std::clamp(v, 0.2f, 1.f);
-            else if (!strcmp(k, "search")) items.search = v != 0.f;
-            else if (!strcmp(k, "searchRgb")) items.searchRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "markIndexed")) items.markIndexed = v != 0.f;
-            else if (!strcmp(k, "searchDim")) items.searchDim = std::clamp(v, 0.f, 1.f);
-        }
-        else if (!strncmp(key, "labels.", 7)) {
-            const char* k = key + 7;
-            if (!strcmp(k, "enabled")) labels.enabled = v != 0.f;
-            else if (!strcmp(k, "mode")) labels.mode = std::clamp(static_cast<int>(v), 0, 2);
-            else if (!strcmp(k, "showBonus")) labels.showBonus = v != 0.f;
-            else if (!strcmp(k, "scale")) labels.scale = std::clamp(v, 0.5f, 3.0f);
-            else if (!strcmp(k, "bgAlpha")) labels.bgAlpha = std::clamp(v, 0.f, 1.f);
-            else if (!strcmp(k, "colLegendary")) labels.colLegendary = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "colSet")) labels.colSet = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "colPrimal")) labels.colPrimal = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "colBonus")) labels.colBonus = static_cast<uint32_t>(v) & 0xFFFFFF;
-        }
-        else if (!strncmp(key, "hotkey.", 7)) {
-            for (int h = 0; h < kHotkeyCount; ++h)
-                if (!strcmp(key + 7, kHotkeyIds[h])) hotkeys[h] = static_cast<uint8_t>(std::clamp(v, 0.f, 254.f));
-        }
-        else if (!strcmp(key, "markerScale")) markerScale = v;
-        else if (!strcmp(key, "outline")) outline = v != 0.f;
-        else if (!strcmp(key, "bigMapMarkers")) bigMapMarkers = v != 0.f;
-        else if (!strcmp(key, "showScenes")) showScenes = v != 0.f;
-        else if (!strcmp(key, "sceneAlpha")) sceneAlpha = v;
-        else if (!strcmp(key, "sceneLabels")) sceneLabels = v != 0.f;
-        else if (!strcmp(key, "distanceLabels")) distanceLabels = v != 0.f;
-        else if (!strcmp(key, "pylonArrow")) pylonArrow = v != 0.f;
-        else if (!strcmp(key, "eliteRing")) eliteRing = v != 0.f;
-        else if (!strcmp(key, "trashLimit")) trashLimit = std::max(0, static_cast<int>(v));
-        else if (!strcmp(key, "playerRgb")) playerRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
-        else if (!strcmp(key, "playerSize")) playerSize = std::clamp(v, 2.f, 30.f);
-        else if (!strncmp(key, "kind.", 5)) {
-            // kind.<Name>.<show|color|size|shape|alpha|label|pulse> = v
-            char kname[16], what[16] = {};
-            if (sscanf(key, "kind.%15[^.].%15s", kname, what) == 2) {
-                for (int k = 0; k < kKindCount; ++k) {
-                    if (strcmp(kname, ActorKindName(static_cast<ActorKind>(k))) != 0) continue;
-                    KindStyle& ks = kinds[k];
-                    if (!strcmp(what, "show")) ks.show = v != 0.f;
-                    else if (!strcmp(what, "color")) ks.rgb = static_cast<uint32_t>(v) & 0xFFFFFF;
-                    else if (!strcmp(what, "size")) ks.size = v;
-                    else if (!strcmp(what, "shape")) ks.shape = static_cast<MarkerShape>(std::clamp(static_cast<int>(v), 0, 3));
-                    else if (!strcmp(what, "alpha")) ks.alpha = v;
-                    else if (!strcmp(what, "label")) ks.label = v != 0.f;
-                    else if (!strcmp(what, "pulse")) ks.pulse = v != 0.f;
-                    else if (!strcmp(what, "maxDist")) ks.maxDist = std::max(0.f, v);
-                    break;
-                }
-            }
-        } else {
-            static const char* kNames[MinimapLayout::kPanelCount] = {"Info", "Drops", "Items", "Actors",
-                                                                     "Settings"};
-            char pname[16], what[16] = {};
-            // panel.<Info|Drops|Items|Actors|Settings>.<pinned|hidden|x|y> = v
-            if (sscanf(key, "panel.%15[^.].%15s", pname, what) == 2) {
-                for (int id = 0; id < MinimapLayout::kPanelCount; ++id) {
-                    if (strcmp(pname, kNames[id]) != 0) continue;
-                    if (!strcmp(what, "pinned")) panelPinned[id] = v != 0.f;
-                    else if (!strcmp(what, "hidden")) panelHidden[id] = v != 0.f;
-                    else if (!strcmp(what, "x")) panelX[id] = v;
-                    else if (!strcmp(what, "y")) panelY[id] = v;
-                    else if (!strcmp(what, "w")) panelW[id] = v;
-                    else if (!strcmp(what, "h")) panelH[id] = v;
-                    break;
-                }
-            }
-        }
+static const char* const kPanelNames[MinimapLayout::kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
+
+// Every persisted setting, in the order d3hud.ini lists them. The table holds references into
+// this struct, so it is rebuilt for each Load/Save. A new setting is one line here (plus its
+// control on a settings page).
+void MinimapLayout::Describe(SettingsTable& t) {
+    constexpr uint32_t kRgbMax = 0xFFFFFF;
+    constexpr float kAnyLo = std::numeric_limits<float>::lowest(), kAnyHi = std::numeric_limits<float>::max();
+    t.Comment("D3Hud minimap layout (positions/radius = fraction of window height)");
+    t.Add("autoMinimap", autoMinimap);
+    t.Add("onGameMap", onGameMap);
+    t.Add("rightOffset", rightOffset, kAnyLo, kAnyHi, 4);
+    t.Add("topOffset", topOffset, kAnyLo, kAnyHi, 4);
+    t.Add("radius", radius, kAnyLo, kAnyHi, 4);
+    t.Add("worldRadius", worldRadius, kAnyLo, kAnyHi, 1);
+    t.Add("autoWorldRadius", autoWorldRadius, 20.f, 400.f, 1);
+    t.Add("beyondRim", beyondRim);
+    t.Comment("auto salvage: safe backpack cells (bit row*10+col), protections");
+    t.AddHex64("safeCells", safeArea.cells, (1ull << (kBackpackCols * kBackpackRows)) - 1);
+    t.Add("protectEquipped", salvageRules.protectEquippedAncients);
+    t.Comment("marker look (color = 0xRRGGBB as decimal; shape 0 dot,1 ring,2 diamond,3 filled)");
+    t.Add("markerScale", markerScale);
+    t.Add("outline", outline);
+    t.Add("bigMapMarkers", bigMapMarkers);
+    t.Add("showScenes", showScenes);
+    t.Add("sceneAlpha", sceneAlpha);
+    t.Add("sceneLabels", sceneLabels);
+    t.Add("distanceLabels", distanceLabels);
+    t.Add("pylonArrow", pylonArrow);
+    t.Add("eliteRing", eliteRing);
+    t.Add("trashLimit", trashLimit, 0, std::numeric_limits<int>::max());
+    t.Add("playerRgb", playerRgb, 0u, kRgbMax);
+    t.Add("playerSize", playerSize, 2.f, 30.f, 1);
+    for (int k = 0; k < kKindCount; ++k) {
+        const std::string p = std::string("kind.") + ActorKindName(static_cast<ActorKind>(k)) + ".";
+        KindStyle& ks = kinds[k];
+        t.Add(p + "show", ks.show);
+        t.Add(p + "color", ks.rgb, 0u, kRgbMax);
+        t.Add(p + "size", ks.size);
+        t.Add(p + "shape", ks.shape, MarkerShape::Dot, MarkerShape::DiamondFilled);
+        t.Add(p + "alpha", ks.alpha);
+        t.Add(p + "label", ks.label);
+        t.Add(p + "pulse", ks.pulse);
+        t.Add(p + "maxDist", ks.maxDist, 0.f, kAnyHi, 0);
     }
-    return true;
+    t.Comment("panels: pinned open, hidden from the dock, position (fraction of window; <0 = docked)");
+    for (int i = 0; i < kPanelCount; ++i) {
+        const std::string p = std::string("panel.") + kPanelNames[i] + ".";
+        t.Add(p + "pinned", panelPinned[i]);
+        t.Add(p + "hidden", panelHidden[i]);
+        t.Add(p + "x", panelX[i], kAnyLo, kAnyHi, 4);
+        t.Add(p + "y", panelY[i], kAnyLo, kAnyHi, 4);
+        t.Add(p + "w", panelW[i], kAnyLo, kAnyHi, 4);
+        t.Add(p + "h", panelH[i], kAnyLo, kAnyHi, 4);
+    }
+    for (const auto& entry : pluginPanels) DescribePluginPanel(t, entry.first);
+    t.Add("salvage.rarityMask", salvageRules.rarityMask, 0u, 0x1Fu);
+    t.Add("salvage.keepAncient", salvageRules.keepAncient);
+    t.Add("salvage.keepPrimal", salvageRules.keepPrimal);
+    t.Add("salvage.neverFamilies", salvageRules.neverFamilies, 0u, (1u << kGearFamilyCount) - 1);
+    t.Add("salvage.maxPerRun", salvageRules.maxPerRun, 0, std::numeric_limits<int>::max());
+    t.Add("salvage.extraDelayMs", salvageRules.extraDelayMs, 0, 2000);
+    t.Add("salvage.useAll", salvageRules.useGameSalvageAll);
+    t.Add("salvage.burst", salvageRules.burst);
+    t.Add("salvage.confirm", salvageConfirm);
+    t.Add("salvage.preview", salvagePreview);
+    t.Add("salvage.previewRgb", salvagePreviewRgb, 0u, kRgbMax);
+    t.Add("salvage.safeOnlyAtAnvil", safeOnlyAtAnvil);
+    t.Add("readerAutostart", readerAutostart);
+    t.Add("readerHz", readerHz, 5, 240);
+    t.Add("diagFps", diagFps);
+    t.Add("diagReader", diagReader);
+    t.Add("uiScale", uiScale, 0.5f, 3.0f);
+    t.Add("dockCorner", dockCorner, 0, 3);
+    t.Add("dockAlpha", dockAlpha, 0.f, 1.f);
+    t.Add("dockAutoHide", dockAutoHide);
+    t.Add("panelAlpha", panelAlpha, 0.2f, 1.f);
+    t.Add("compact", compact);
+    for (int h = 0; h < kHotkeyCount; ++h) t.Add(std::string("hotkey.") + kHotkeyIds[h], hotkeys[h], uint8_t{0}, uint8_t{254}, 0);
+    t.Add("drops.alertPrimal", drops.alertPrimal);
+    t.Add("drops.alertAncient", drops.alertAncient);
+    t.Add("drops.sound", drops.sound);
+    t.Add("drops.flash", drops.flash);
+    t.Add("drops.maxEntries", drops.maxEntries, 0, std::numeric_limits<int>::max());
+    t.Add("drops.showRunTimer", drops.showRunTimer);
+    t.Add("drops.minRunSeconds", drops.minRunSeconds, 0, 3600);
+    t.Add("drops.showRift", drops.showRift);
+    t.Add("items.badges", items.badges);
+    t.Add("items.badgeScale", items.badgeScale, 0.5f, 3.0f);
+    t.Add("items.badgeCorner", items.badgeCorner, 0, 3);
+    t.Add("items.badgeAugment", items.badgeAugment);
+    t.Add("items.colAncient", items.colAncient, 0u, kRgbMax);
+    t.Add("items.colPrimal", items.colPrimal, 0u, kRgbMax);
+    t.Add("items.hoverMode", items.hoverMode, 0, 2);
+    t.Add("items.hoverAlpha", items.hoverAlpha, 0.2f, 1.f);
+    t.Add("items.search", items.search);
+    t.Add("items.searchRgb", items.searchRgb, 0u, kRgbMax);
+    t.Add("items.searchDim", items.searchDim, 0.f, 1.f);
+    t.Add("items.markIndexed", items.markIndexed);
+    t.Add("labels.enabled", labels.enabled);
+    t.Add("labels.mode", labels.mode, 0, 2);
+    t.Add("labels.showBonus", labels.showBonus);
+    t.Add("labels.scale", labels.scale, 0.5f, 3.0f);
+    t.Add("labels.bgAlpha", labels.bgAlpha, 0.f, 1.f);
+    t.Add("labels.colLegendary", labels.colLegendary, 0u, kRgbMax);
+    t.Add("labels.colSet", labels.colSet, 0u, kRgbMax);
+    t.Add("labels.colPrimal", labels.colPrimal, 0u, kRgbMax);
+    t.Add("labels.colBonus", labels.colBonus, 0u, kRgbMax);
+}
+
+// ini keys of a plugin panel: pluginpanel.<id>.<pinned|hidden|x|y|w|h>
+void MinimapLayout::DescribePluginPanel(SettingsTable& t, const std::string& id) {
+    constexpr float lo = std::numeric_limits<float>::lowest(), hi = std::numeric_limits<float>::max();
+    PluginPanelState& st = pluginPanels[id];
+    const std::string p = "pluginpanel." + id + ".";
+    t.Add(p + "pinned", st.pinned);
+    t.Add(p + "hidden", st.hidden);
+    t.Add(p + "x", st.x, lo, hi, 4);
+    t.Add(p + "y", st.y, lo, hi, 4);
+    t.Add(p + "w", st.w, lo, hi, 4);
+    t.Add(p + "h", st.h, lo, hi, 4);
+}
+
+bool MinimapLayout::Load(const std::filesystem::path& path) {
+    SettingsTable t;
+    Describe(t);
+    return t.Load(path);
 }
 
 bool MinimapLayout::Save(const std::filesystem::path& path) const {
-    File f = OpenFile(path, L"w");
-    if (f == nullptr) return false;
-    std::print(f, "# D3Hud minimap layout (positions/radius = fraction of window height)\n");
-    std::print(f, "autoMinimap={}\n", autoMinimap ? 1 : 0);
-    std::print(f, "onGameMap={}\nrightOffset={:.4f}\ntopOffset={:.4f}\nradius={:.4f}\nworldRadius={:.1f}\nbeyondRim={}\n",
-            onGameMap ? 1 : 0, rightOffset, topOffset, radius, worldRadius, beyondRim ? 1 : 0);
-    std::print(f, "# auto salvage: safe backpack cells (bit row*10+col), protections\n");
-    std::print(f, "safeCells={:x}\nprotectEquipped={}\n",
-               static_cast<unsigned long long>(safeArea.cells),
-               salvageRules.protectEquippedAncients ? 1 : 0);
-    std::print(f, "# marker look (color = 0xRRGGBB as decimal; shape 0 dot,1 ring,2 diamond,3 filled)\n");
-    std::print(f, "markerScale={:.2f}\noutline={}\nbigMapMarkers={}\nshowScenes={}\nsceneAlpha={:.2f}\nsceneLabels={}\n",
-               markerScale, outline ? 1 : 0, bigMapMarkers ? 1 : 0, showScenes ? 1 : 0, sceneAlpha, sceneLabels ? 1 : 0);
-    std::print(f, "distanceLabels={}\npylonArrow={}\neliteRing={}\ntrashLimit={}\nplayerRgb={}\nplayerSize={:.1f}\n",
-               distanceLabels ? 1 : 0, pylonArrow ? 1 : 0, eliteRing ? 1 : 0, trashLimit, playerRgb, playerSize);
-    for (int k = 0; k < kKindCount; ++k) {
-        const KindStyle& ks = kinds[k];
-        std::print(f, "kind.{0}.show={1}\nkind.{0}.color={2}\nkind.{0}.size={3:.2f}\nkind.{0}.shape={4}\n"
-                      "kind.{0}.alpha={5:.2f}\nkind.{0}.label={6}\nkind.{0}.pulse={7}\nkind.{0}.maxDist={8:.0f}\n",
-                   ActorKindName(static_cast<ActorKind>(k)), ks.show ? 1 : 0, ks.rgb, ks.size,
-                   static_cast<int>(ks.shape), ks.alpha, ks.label ? 1 : 0, ks.pulse ? 1 : 0, ks.maxDist);
-    }
-    static const char* kNames[kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
-    std::print(f, "# panels: pinned open, hidden from the dock, position (fraction of window; <0 = docked)\n");
-    for (int i = 0; i < kPanelCount; ++i)
-        std::print(f, "panel.{0}.pinned={1}\npanel.{0}.hidden={2}\npanel.{0}.x={3:.4f}\npanel.{0}.y={4:.4f}\n"
-                      "panel.{0}.w={5:.4f}\npanel.{0}.h={6:.4f}\n",
-                   kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i], panelW[i], panelH[i]);
-    std::print(f, "salvage.rarityMask={}\nsalvage.keepAncient={}\nsalvage.keepPrimal={}\nsalvage.neverFamilies={}\nsalvage.maxPerRun={}\nsalvage.extraDelayMs={}\n",
-               salvageRules.rarityMask, salvageRules.keepAncient ? 1 : 0, salvageRules.keepPrimal ? 1 : 0,
-               salvageRules.neverFamilies, salvageRules.maxPerRun, salvageRules.extraDelayMs);
-    std::print(f, "salvage.useAll={}\nsalvage.burst={}\n", salvageRules.useGameSalvageAll ? 1 : 0, salvageRules.burst ? 1 : 0);
-    std::print(f, "salvage.confirm={}\nsalvage.preview={}\nsalvage.previewRgb={}\nsalvage.safeOnlyAtAnvil={}\n", salvageConfirm ? 1 : 0, salvagePreview ? 1 : 0, salvagePreviewRgb, safeOnlyAtAnvil ? 1 : 0);
-    std::print(f, "readerAutostart={}\nreaderHz={}\ndiagFps={}\ndiagReader={}\n",
-               readerAutostart ? 1 : 0, readerHz, diagFps ? 1 : 0, diagReader ? 1 : 0);
-    std::print(f, "uiScale={:.2f}\ndockCorner={}\ndockAlpha={:.2f}\ndockAutoHide={}\npanelAlpha={:.2f}\ncompact={}\n",
-               uiScale, dockCorner, dockAlpha, dockAutoHide ? 1 : 0, panelAlpha, compact ? 1 : 0);
-    for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
-    std::print(f, "drops.alertPrimal={}\ndrops.alertAncient={}\ndrops.sound={}\ndrops.flash={}\ndrops.maxEntries={}\n",
-               drops.alertPrimal ? 1 : 0, drops.alertAncient ? 1 : 0, drops.sound ? 1 : 0, drops.flash ? 1 : 0, drops.maxEntries);
-    std::print(f, "drops.showRunTimer={}\ndrops.minRunSeconds={}\ndrops.showRift={}\n", drops.showRunTimer ? 1 : 0, drops.minRunSeconds, drops.showRift ? 1 : 0);
-    std::print(f, "items.badges={}\nitems.badgeScale={:.2f}\nitems.badgeCorner={}\nitems.badgeAugment={}\n",
-               items.badges ? 1 : 0, items.badgeScale, items.badgeCorner, items.badgeAugment ? 1 : 0);
-    std::print(f, "items.colAncient={}\nitems.colPrimal={}\nitems.hoverMode={}\nitems.hoverAlpha={:.2f}\n",
-               items.colAncient, items.colPrimal, items.hoverMode, items.hoverAlpha);
-    std::print(f, "items.search={}\nitems.searchRgb={}\nitems.searchDim={:.2f}\nitems.markIndexed={}\n", items.search ? 1 : 0, items.searchRgb, items.searchDim, items.markIndexed ? 1 : 0);
-    std::print(f, "labels.enabled={}\nlabels.mode={}\nlabels.showBonus={}\nlabels.scale={:.2f}\nlabels.bgAlpha={:.2f}\n",
-               labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
-    std::print(f, "labels.colLegendary={}\nlabels.colSet={}\nlabels.colPrimal={}\nlabels.colBonus={}\n",
-               labels.colLegendary, labels.colSet, labels.colPrimal, labels.colBonus);
-    return true;
+    SettingsTable t;
+    // Describe binds fields by reference but Save only reads them.
+    const_cast<MinimapLayout*>(this)->Describe(t);
+    return t.Save(path);
 }
 
 // Writes d3hud.ini; the status line in Settings says when that failed.
@@ -472,7 +414,8 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
         cx = io.DisplaySize.x - radiusPx - 24.0f;
         cy = io.DisplaySize.y - radiusPx - 24.0f;
     }
-    const float unitsPerPx = layout_.worldRadius / std::max(radiusPx, 1.0f);
+    activeWorldRadius_ = minimapFound_ ? layout_.autoWorldRadius : layout_.worldRadius;
+    const float unitsPerPx = activeWorldRadius_ / std::max(radiusPx, 1.0f);
     const ImVec2 c(cx, cy);
     const Vec2 center = {cx, cy};
     // background layer: under the panels, over nothing else (the window is transparent)
@@ -497,7 +440,7 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
     };
     DrawScenes(snap, dl, toPx, [&](Vec2 w, float slack) {
         const float dx = w.x - snap.playerPos.x, dy = w.y - snap.playerPos.y;
-        const float r = layout_.worldRadius + slack;
+        const float r = activeWorldRadius_ + slack;
         return dx * dx + dy * dy <= r * r;
     });
 
@@ -556,7 +499,7 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
             const float d = std::hypot(a.world.x - snap.playerPos.x, a.world.y - snap.playerPos.y);
             if (d < bestDist) { bestDist = d; best = &a; }
         }
-        if (best != nullptr && bestDist > layout_.worldRadius) {
+        if (best != nullptr && bestDist > activeWorldRadius_) {
             Vec2 px;
             WorldToMinimap(best->world, snap.playerPos, unitsPerPx, center, 1e9f, &px, nullptr, opt.mapOrientation);
             ImVec2 dir(px.x - cx, px.y - cy);
@@ -608,7 +551,8 @@ void HudRenderer::DrawMinimapSettings() {
     ImGui::SliderFloat("from top edge", &layout_.topOffset, 0.0f, 0.5f, "%.3f");
     ImGui::SliderFloat("radius", &layout_.radius, 0.03f, 0.4f, "%.3f");
     ImGui::EndDisabled();
-    ImGui::SliderFloat("zoom (world units to rim)", &layout_.worldRadius, 20.0f, 400.0f, "%.0f");
+    ImGui::SliderFloat("zoom (world units to rim)", minimapFound_ ? &layout_.autoWorldRadius : &layout_.worldRadius, 20.0f,
+                       400.0f, "%.0f");
 
     ImGui::SeparatorText("Markers");
     ImGui::SliderFloat("marker size", &layout_.markerScale, 0.5f, 3.0f, "x%.2f");
@@ -699,6 +643,7 @@ void HudRenderer::DrawMinimapSettings() {
         layout_.topOffset = d.topOffset;
         layout_.radius = d.radius;
         layout_.worldRadius = d.worldRadius;
+        layout_.autoWorldRadius = d.autoWorldRadius;
         layout_.beyondRim = d.beyondRim;
         layoutStatus_ = "placement reset (not saved)";
     }
@@ -881,20 +826,32 @@ static void CornerAnchor(int corner, ImVec2 display, float inset, ImVec2* pos, I
     *pivot = ImVec2(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f);
 }
 
-bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize) {
+HudRenderer::PanelView HudRenderer::ViewOf(PanelId id) {
     const int i = static_cast<int>(id);
+    return {&layout_.panelPinned[i], &layout_.panelX[i], &layout_.panelY[i], &layout_.panelW[i], &layout_.panelH[i],
+            &panelPos_[i], &panelSize_[i], &panelHoverUntil_[i], &panelResizable_[i], &panelMoved_[i],
+            id != PanelId::Settings};
+}
+
+HudRenderer::PanelView HudRenderer::ViewOf(PluginPanel& p) {
+    MinimapLayout::PluginPanelState& st = St(p);
+    return {&st.pinned, &st.x, &st.y, &st.w, &st.h, &p.pos, &p.size, &p.hoverUntil, &p.resizable,
+            &p.moved, true};
+}
+
+bool HudRenderer::PanelOpenView(const PanelView& v, const HudOptions& opt, const char* title, ImVec2 defaultSize) {
     const ImGuiIO& io = ImGui::GetIO();
     const ImVec2 cur(opt.cursorX, opt.cursorY);
     // hovered: cursor inside last frame's window rect or the dock tab
-    const bool inRect = opt.cursorX >= 0.f && panelSize_[i].x > 0.f &&
-                        cur.x >= panelPos_[i].x - 4 && cur.x <= panelPos_[i].x + panelSize_[i].x + 4 &&
-                        cur.y >= panelPos_[i].y - 4 && cur.y <= panelPos_[i].y + panelSize_[i].y + 4;
-    if (inRect) panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;  // linger
+    const bool inRect = opt.cursorX >= 0.f && (*v.size).x > 0.f &&
+                        cur.x >= (*v.pos).x - 4 && cur.x <= (*v.pos).x + (*v.size).x + 4 &&
+                        cur.y >= (*v.pos).y - 4 && cur.y <= (*v.pos).y + (*v.size).y + 4;
+    if (inRect) (*v.hoverUntil) = (float)ImGui::GetTime() + 0.30f;  // linger
     // Settings is an editor, not a peek: it opens only when pinned (F8 + click on its tab)
-    const bool peek = id != PanelId::Settings && ImGui::GetTime() < panelHoverUntil_[i];
-    const bool expanded = layout_.panelPinned[i] || peek;
+    const bool peek = v.peekable && ImGui::GetTime() < (*v.hoverUntil);
+    const bool expanded = *v.pinned || peek;
     if (!expanded) {
-        panelSize_[i] = ImVec2(0.f, 0.f);  // no stale rect: a collapsed panel has no hover area
+        (*v.size) = ImVec2(0.f, 0.f);  // no stale rect: a collapsed panel has no hover area
         return false;
     }
     // docked panels open above the dock bar; moved panels keep their position.
@@ -903,8 +860,8 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
     const ImGuiWindow* moving = ImGui::GetCurrentContext()->MovingWindow;
     const bool beingMoved = moving != nullptr && std::strcmp(moving->Name, title) == 0;
     if (!beingMoved) {
-        if (layout_.panelX[i] >= 0.f)
-            ImGui::SetNextWindowPos(ImVec2(layout_.panelX[i] * display.x, layout_.panelY[i] * display.y),
+        if ((*v.x) >= 0.f)
+            ImGui::SetNextWindowPos(ImVec2((*v.x) * display.x, (*v.y) * display.y),
                                     ImGuiCond_Always);
         else {
             ImVec2 pos, pivot;
@@ -914,10 +871,10 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
     }
     ImGui::SetNextWindowBgAlpha(layout_.panelAlpha);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-    panelResizable_[i] = defaultSize.x > 0.f;
-    if (panelResizable_[i]) {
-        const ImVec2 size = layout_.panelW[i] > 0.f
-                                ? ImVec2(layout_.panelW[i] * display.x, layout_.panelH[i] * display.y)
+    (*v.resizable) = defaultSize.x > 0.f;
+    if ((*v.resizable)) {
+        const ImVec2 size = (*v.w) > 0.f
+                                ? ImVec2((*v.w) * display.x, (*v.h) * display.y)
                                 : defaultSize;
         ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSizeConstraints(ImVec2(420.f, 280.f), ImVec2(display.x, display.y));
@@ -925,22 +882,33 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
         flags |= ImGuiWindowFlags_AlwaysAutoResize;
     }
     if (!opt.inputInteractive) flags |= ImGuiWindowFlags_NoInputs;  // hover = view-only
-    if (!ImGui::Begin(title, nullptr, flags)) {
+    bool keepOpen = true;
+    const bool wasPinned = *v.pinned;
+    const bool visible = ImGui::Begin(title, wasPinned ? &keepOpen : nullptr, flags);  // a pinned panel has an X
+    if (wasPinned && !keepOpen) {  // closed with the X: unpin and collapse now, no hover peek on the spot it was in
+        ImGui::End();
+        *v.pinned = false;
+        *v.hoverUntil = 0.f;
+        *v.size = ImVec2(0.f, 0.f);
+        SaveLayout();
+        return false;
+    }
+    if (!visible) {
         ImGui::End();
         return false;
     }
     if (opt.inputInteractive) {
-        ImGui::PushStyleColor(ImGuiCol_Text, layout_.panelPinned[i] ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f)
+        ImGui::PushStyleColor(ImGuiCol_Text, *v.pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f)
                                                                     : ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        if (ImGui::SmallButton(layout_.panelPinned[i] ? "pinned" : "pin")) {
-            layout_.panelPinned[i] = !layout_.panelPinned[i];
+        if (ImGui::SmallButton(*v.pinned ? "pinned" : "pin")) {
+            *v.pinned = !*v.pinned;
             SaveLayout();
         }
         ImGui::PopStyleColor();
-        if (layout_.panelX[i] >= 0.f) {
+        if ((*v.x) >= 0.f) {
             ImGui::SameLine();
             if (ImGui::SmallButton("dock")) {  // back to the bottom-right corner
-                layout_.panelX[i] = layout_.panelY[i] = -1.f;
+                (*v.x) = (*v.y) = -1.f;
                 SaveLayout();
             }
         }
@@ -949,20 +917,19 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
     return true;
 }
 
-void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
+void HudRenderer::PanelEndView(const PanelView& v, bool wasOpen) {
     if (!wasOpen) return;
-    const int i = static_cast<int>(id);
     ImGuiWindow* win = ImGui::GetCurrentWindow();  // before End(): that pops it
-    panelPos_[i] = win->Rect().Min;
-    panelSize_[i] = win->Rect().GetSize();
+    (*v.pos) = win->Rect().Min;
+    (*v.size) = win->Rect().GetSize();
     const bool moving = ImGui::GetCurrentContext()->MovingWindow == win;
     ImGui::End();
-    if (panelResizable_[i] && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {  // resize finished
+    if ((*v.resizable) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {  // resize finished
         const ImVec2 display = ImGui::GetIO().DisplaySize;
-        const float w = panelSize_[i].x / display.x, h = panelSize_[i].y / display.y;
-        if (std::abs(w - layout_.panelW[i]) > 0.002f || std::abs(h - layout_.panelH[i]) > 0.002f) {
-            layout_.panelW[i] = w;
-            layout_.panelH[i] = h;
+        const float w = (*v.size).x / display.x, h = (*v.size).y / display.y;
+        if (std::abs(w - (*v.w)) > 0.002f || std::abs(h - (*v.h)) > 0.002f) {
+            (*v.w) = w;
+            (*v.h) = h;
             SaveLayout();
         }
     }
@@ -970,11 +937,11 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
     // next frame (PanelOpen) is where the panel was dropped; write the file on release.
     if (moving) {
         const ImVec2 display = ImGui::GetIO().DisplaySize;
-        layout_.panelX[i] = panelPos_[i].x / display.x;
-        layout_.panelY[i] = panelPos_[i].y / display.y;
-        panelMoved_[i] = true;
-    } else if (panelMoved_[i]) {
-        panelMoved_[i] = false;
+        (*v.x) = (*v.pos).x / display.x;
+        (*v.y) = (*v.pos).y / display.y;
+        (*v.moved) = true;
+    } else if ((*v.moved)) {
+        (*v.moved) = false;
         SaveLayout();
     }
 }
@@ -985,6 +952,7 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
     if (layout_.dockAutoHide && dockSize_.x > 0.f && !opt.inputInteractive) {
         bool anyOpen = false;  // a panel is showing: keep the dock to go with it
         for (int i = 0; i < kPanels; ++i) anyOpen |= panelSize_[i].x > 0.f;
+        for (const PluginPanel& p : pluginPanels_) anyOpen |= p.size.x > 0.f;
         const float m = 40.0f;  // proximity margin around the dock
         const bool closeToDock = opt.cursorX >= dockPos_.x - m && opt.cursorX <= dockPos_.x + dockSize_.x + m &&
                           opt.cursorY >= dockPos_.y - m && opt.cursorY <= dockPos_.y + dockSize_.y + m;
@@ -1002,7 +970,7 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
         bool first = true;
         for (int i = 0; i < MinimapLayout::kPanelCount; ++i) {
-            if (layout_.panelHidden[i]) continue;
+            if (layout_.panelHidden[i] || i == static_cast<int>(PanelId::Settings)) continue;  // Settings: last, below
             const bool pinned = layout_.panelPinned[i];
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
@@ -1017,6 +985,45 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
             const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
             if (opt.cursorX >= lo.x && opt.cursorX <= hi.x && opt.cursorY >= lo.y && opt.cursorY <= hi.y)
                 panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;
+        }
+        for (PluginPanel& p : pluginPanels_) {
+            if (St(p).hidden) continue;
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  St(p).pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
+            if (!first) ImGui::SameLine();
+            first = false;
+            if (ImGui::Button(p.label.c_str())) {
+                St(p).pinned = !St(p).pinned;
+                SaveLayout();
+            }
+            ImGui::PopStyleColor();
+            const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+            if (opt.cursorX >= lo.x && opt.cursorX <= hi.x && opt.cursorY >= lo.y && opt.cursorY <= hi.y)
+                p.hoverUntil = static_cast<float>(ImGui::GetTime()) + 0.30f;
+        }
+        {  // Settings, always the rightmost tab: a cogwheel (the UI font has no such glyph, so it is drawn)
+            constexpr int kSettings = static_cast<int>(PanelId::Settings);
+            const bool pinned = layout_.panelPinned[kSettings];
+            const float side = ImGui::GetFrameHeight();
+            if (!first) ImGui::SameLine();
+            if (ImGui::Button("##dock_settings", ImVec2(side, side))) {
+                layout_.panelPinned[kSettings] = !pinned;
+                SaveLayout();
+            }
+            const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+            const ImVec2 c((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+            const float r = side * 0.27f, tooth = side * 0.14f;
+            const ImU32 col = ImGui::GetColorU32(pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            for (int k = 0; k < 8; ++k) {
+                const float a = static_cast<float>(k) * 0.7853982f;  // pi / 4
+                const ImVec2 dir(std::cos(a), std::sin(a));
+                dl->AddLine(ImVec2(c.x + dir.x * r, c.y + dir.y * r), ImVec2(c.x + dir.x * (r + tooth), c.y + dir.y * (r + tooth)),
+                            col, std::max(2.0f, side * 0.15f));
+            }
+            dl->AddCircle(c, r, col, 20, std::max(1.5f, side * 0.1f));
+            dl->AddCircle(c, r * 0.4f, col, 12, std::max(1.0f, side * 0.07f));
+            if (opt.inputInteractive && ImGui::IsItemHovered()) ImGui::SetTooltip("Settings");
         }
         ImGui::PopStyleColor();
         dockPos_ = ImGui::GetWindowPos();
@@ -2034,68 +2041,100 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     PanelScope panel(*this, PanelId::Settings, opt, "Settings",
                      ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f)));
     if (!panel) return;
-    // entries: the four panel pages (PanelId order) sit together; the rest are feature pages
-    enum Entry { kGeneral, kHotkeys, kProfiles, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kReader, kEntryCount };
-    static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Profiles", "Info", "Drops", "Items", "Actors",
-                                                "Minimap", "Ground labels", "Auto salvage", "Reader / diagnostics"};
     ImGui::BeginChild("##settings_list", ImVec2(150.0f * layout_.uiScale, 0.0f), true);
-    for (int i = 0; i < kEntryCount; ++i)
-        if (ImGui::Selectable(kEntries[i], settingsTab_ == i)) settingsTab_ = i;
+    const std::string* group = nullptr;
+    for (int i = 0; i < static_cast<int>(settingsPages_.size()); ++i) {
+        const SettingsPage& p = settingsPages_[i];
+        if (group == nullptr || *group != p.group) {
+            if (group != nullptr) ImGui::Spacing();
+            ImGui::TextDisabled("%s", p.group.c_str());
+            group = &p.group;
+        }
+        if (ImGui::Selectable(p.title.c_str(), settingsTab_ == i)) settingsTab_ = i;
+    }
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("##settings_detail", ImVec2(0.0f, 0.0f), true);  // fills the window
-    if (settingsTab_ != kHotkeys) captureHotkey_ = -1;
-    ImGui::TextUnformatted(kEntries[settingsTab_]);
+    settingsTab_ = std::clamp(settingsTab_, 0, static_cast<int>(settingsPages_.size()) - 1);
+    const SettingsPage& page = settingsPages_[settingsTab_];
+    if (page.id != "hotkeys") captureHotkey_ = -1;
+    ImGui::TextUnformatted(page.title.c_str());
     ImGui::Separator();
-    if (settingsTab_ == kGeneral) {
-        ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) SaveLayout();
-        ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
-        ImGui::SeparatorText("Dock");
-        bool ch = ImGui::Combo("corner", &layout_.dockCorner, "Bottom right\0Bottom left\0Top right\0Top left\0");
-        ch |= ImGui::Checkbox("auto-hide (show near the cursor or while a panel is open)", &layout_.dockAutoHide);
-        ImGui::SliderFloat("dock opacity", &layout_.dockAlpha, 0.0f, 1.0f, "%.2f");
-        ch |= ImGui::IsItemDeactivatedAfterEdit();
-        ImGui::SeparatorText("Panels");
-        ImGui::SliderFloat("panel opacity", &layout_.panelAlpha, 0.2f, 1.0f, "%.2f");
-        ch |= ImGui::IsItemDeactivatedAfterEdit();
-        ch |= ImGui::Checkbox("compact (tighter padding)", &layout_.compact);
-        if (ch) SaveLayout();
-    } else if (settingsTab_ == kHotkeys) {
-        DrawHotkeySettings();
-    } else if (settingsTab_ == kProfiles) {
-        DrawProfileSettings();
-    } else if (settingsTab_ >= kInfo && settingsTab_ <= kActors) {
-        const int i = settingsTab_ - kInfo;
-        bool changed = false;
-        bool shown = !layout_.panelHidden[i];
-        changed |= ImGui::Checkbox("show in dock", &shown);
-        layout_.panelHidden[i] = !shown;
-        changed |= ImGui::Checkbox("keep open (pinned)", &layout_.panelPinned[i]);
-        if (ImGui::Button("reset position")) {
-            layout_.panelX[i] = layout_.panelY[i] = -1.f;
-            changed = true;
-        }
-        ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
-        if (changed) SaveLayout();
-        if (settingsTab_ == kDrops) {
-            ImGui::SeparatorText("Drop log and alerts");
-            DrawDropSettings();
-        }
-        if (settingsTab_ == kItems) {
-            ImGui::SeparatorText("Inventory overlays");
-            DrawItemSettings();
-        }
-    } else if (settingsTab_ == kMinimap) {
-        DrawMinimapSettings();
-    } else if (settingsTab_ == kReader) {
-        DrawReaderSettings();
-    } else if (settingsTab_ == kLabels) {
-        DrawLabelSettings();
-    } else {
-        DrawSalvageSettings();
-    }
+    if (page.draw) page.draw();
     ImGui::EndChild();
+}
+
+void HudRenderer::DrawGeneralSettings() {
+    ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
+    if (ImGui::IsItemDeactivatedAfterEdit()) SaveLayout();
+    ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
+    ImGui::SeparatorText("Dock");
+    bool ch = ImGui::Combo("corner", &layout_.dockCorner, "Bottom right\0Bottom left\0Top right\0Top left\0");
+    ch |= ImGui::Checkbox("auto-hide (show near the cursor or while a panel is open)", &layout_.dockAutoHide);
+    ImGui::SliderFloat("dock opacity", &layout_.dockAlpha, 0.0f, 1.0f, "%.2f");
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SeparatorText("Panels");
+    ImGui::SliderFloat("panel opacity", &layout_.panelAlpha, 0.2f, 1.0f, "%.2f");
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    ch |= ImGui::Checkbox("compact (tighter padding)", &layout_.compact);
+    if (ch) SaveLayout();
+}
+
+void HudRenderer::DrawPanelSettings(int i) {
+    bool changed = false;
+    bool shown = !layout_.panelHidden[i];
+    changed |= ImGui::Checkbox("show in dock", &shown);
+    layout_.panelHidden[i] = !shown;
+    changed |= ImGui::Checkbox("keep open (pinned)", &layout_.panelPinned[i]);
+    if (ImGui::Button("reset position")) {
+        layout_.panelX[i] = layout_.panelY[i] = -1.f;
+        changed = true;
+    }
+    ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
+    if (changed) SaveLayout();
+}
+
+HudRenderer::HudRenderer() { RegisterBuiltinSettingsPages(); }
+
+void HudRenderer::AddSettingsPage(SettingsPage page) {
+    const auto at = std::upper_bound(settingsPages_.begin(), settingsPages_.end(), page,
+                                     [](const SettingsPage& a, const SettingsPage& b) { return a.order < b.order; });
+    settingsPages_.insert(at, std::move(page));
+}
+
+bool HudRenderer::OpenSettingsPage(const std::string& id) {
+    const auto it = std::ranges::find(settingsPages_, id, &SettingsPage::id);
+    if (it == settingsPages_.end()) return false;
+    settingsTab_ = static_cast<int>(it - settingsPages_.begin());
+    layout_.panelPinned[static_cast<int>(PanelId::Settings)] = true;
+    return true;
+}
+
+// The built-in pages, in list order; plugin pages go through the same AddSettingsPage.
+void HudRenderer::RegisterBuiltinSettingsPages() {
+    int order = 0;
+    auto add = [&](const char* id, const char* title, const char* group, std::function<void()> draw) {
+        AddSettingsPage({id, title, group, order += 10, std::move(draw)});
+    };
+    add("general", "General", "Interface", [this] { DrawGeneralSettings(); });
+    add("hotkeys", "Hotkeys", "Interface", [this] { DrawHotkeySettings(); });
+    add("profiles", "Profiles", "Interface", [this] { DrawProfileSettings(); });
+    add("panel.info", "Info", "Panels", [this] { DrawPanelSettings(static_cast<int>(PanelId::Info)); });
+    add("panel.drops", "Drops", "Panels", [this] {
+        DrawPanelSettings(static_cast<int>(PanelId::Drops));
+        ImGui::SeparatorText("Drop log and alerts");
+        DrawDropSettings();
+    });
+    add("panel.items", "Items", "Panels", [this] {
+        DrawPanelSettings(static_cast<int>(PanelId::Items));
+        ImGui::SeparatorText("Inventory overlays");
+        DrawItemSettings();
+    });
+    add("panel.actors", "Actors", "Panels", [this] { DrawPanelSettings(static_cast<int>(PanelId::Actors)); });
+    add("minimap", "Minimap", "Features", [this] { DrawMinimapSettings(); });
+    add("labels", "Ground labels", "Features", [this] { DrawLabelSettings(); });
+    add("salvage", "Auto salvage", "Features", [this] { DrawSalvageSettings(); });
+    add("reader", "Reader / diagnostics", "Features", [this] { DrawReaderSettings(); });
 }
 
 // While the game shows the tooltip of an UNIDENTIFIED item: a compact card left
@@ -2139,6 +2178,43 @@ void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& o
     ImGui::End();
 }
 
+void HudRenderer::DrawPluginPanel(PluginPanel& p, const HudOptions& opt) {
+    PanelScope panel(*this, p, opt);
+    if (!panel) return;
+    if (p.draw) p.draw();
+}
+
+void HudRenderer::AddPluginPanel(std::string id, std::string title, std::function<void()> draw, ImVec2 defaultSize) {
+    PluginPanel& p = pluginPanels_.emplace_back();
+    p.label = title + "##" + id;
+    p.id = std::move(id);
+    p.title = std::move(title);
+    p.draw = std::move(draw);
+    p.defaultSize = defaultSize;
+    (void)St(p);  // creates the entry the table below binds to
+    SettingsTable t;  // what an earlier session saved: the layout file was read before the plugin registered
+    layout_.DescribePluginPanel(t, p.id);
+    (void)t.Load(layoutPath_);  // no file yet is fine
+}
+
+void HudRenderer::DrawPluginPanelSettings(const std::string& id) {
+    for (PluginPanel& p : pluginPanels_) {
+        if (p.id != id) continue;
+        bool changed = false;
+        bool shown = !St(p).hidden;
+        changed |= ImGui::Checkbox("show in dock", &shown);
+        St(p).hidden = !shown;
+        changed |= ImGui::Checkbox("keep open (pinned)", &St(p).pinned);
+        if (ImGui::Button("reset position")) {
+            St(p).x = St(p).y = -1.f;
+            changed = true;
+        }
+        ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins. Drag the title bar (F8) to move.");
+        if (changed) SaveLayout();
+        return;
+    }
+}
+
 void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName) {
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleMain = layout_.uiScale;
@@ -2155,6 +2231,10 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     DrawRunTimer(snap);
     if (!opt.showPanels)
         for (ImVec2& s : panelSize_) s = ImVec2(0.f, 0.f);  // F9 off: nothing to hover
+    if (!opt.showPanels)
+        for (PluginPanel& p : pluginPanels_) p.size = ImVec2(0.f, 0.f);
+    for (PluginPanel& p : pluginPanels_)
+        if (St(p).hidden) p.size = ImVec2(0.f, 0.f);
     for (int i = 0; i < kPanels; ++i)
         if (layout_.panelHidden[i]) panelSize_[i] = ImVec2(0.f, 0.f);  // hidden in Settings
     if (opt.showPanels) {
@@ -2164,6 +2244,8 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
         if (visible(PanelId::Drops)) DrawDropsPanel(snap, opt);
         if (visible(PanelId::Items)) DrawSalvagePanel(snap, opt);
         if (visible(PanelId::Actors)) DrawActorPanel(snap, opt);
+        for (PluginPanel& p : pluginPanels_)
+            if (!St(p).hidden) DrawPluginPanel(p, opt);
         DrawSettings(snap, opt);  // always reachable
     }
     if (opt.showMinimap) DrawMinimap(snap, opt);

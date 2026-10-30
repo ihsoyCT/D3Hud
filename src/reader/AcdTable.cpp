@@ -1,5 +1,7 @@
 #include "AcdTable.h"
 
+#include "MonsterAffixes.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -124,6 +126,31 @@ bool AcdTable::ReadItem(const Process& proc, uint32_t acdId, AcdItemRecord* out)
         if (DecodeAcdItem(rec, acdId & 0xFFFF, out) && out->acd == acdId) return true;
     }
     return false;
+}
+
+bool AcdTable::ReadRaw(const Process& proc, uint32_t acdId, uint8_t* out) const {
+    std::vector<uint64_t> bases;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        bases = bases_;
+    }
+    const uint64_t off = static_cast<uint64_t>(acdId & 0xFFFF) * kAcdStride;
+    for (uint64_t base : bases) {
+        if (!proc.Read(base + off, out, kAcdStride)) continue;
+        uint32_t id;
+        memcpy(&id, out, 4);
+        if (id == acdId) return true;
+    }
+    return false;
+}
+
+bool AcdTable::ReadAffixMask(const Process& proc, uint32_t acdId, uint32_t* mask) const {
+    uint8_t rec[kAcdStride];
+    if (!ReadRaw(proc, acdId, rec)) return false;
+    uint32_t words[kAcdStride / 4];
+    memcpy(words, rec, sizeof(words));
+    *mask = AffixMaskFromAcdWords(words, kAcdStride / 4);
+    return true;
 }
 
 bool AcdTable::ReadPlaced(const Process& proc, std::vector<AcdItemRecord>* out) const {

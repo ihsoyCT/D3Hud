@@ -26,9 +26,9 @@ Used pylons/shrines are hidden via Gizmo_State (464) / Gizmo_Has_Been_Operated
 
 ## Smaller follow-ups
 
-- Elite affixes (Mortar, Frozen, ...) next to champion/rare dots - affix
-  actors (`x1_monsteraffix_*`) exist near the pack; per-monster affixes are
-  probably in the ACD/attribute layer.
+- Elite affixes (Mortar, Frozen, ...) next to champion/rare dots and under the health bars. The 30 affixes
+  are catalogued in `analysis/MONSTER_AFFIXES.md` / `src/core/MonsterAffixes.h`; where a monster's own list
+  lives is still to be measured with `D3Hud.Reader.exe --attach "Diablo III64.exe" --affixes` next to elites.
 - Validate the player heading arrow in-game (quaternion at +0xA0).
 - Dead monsters are detected by the cleared acd link (+0x88 == -1); if a
   live monster ever goes missing, F10-dump it - +0x2E0 / +0x16C are backups.
@@ -81,3 +81,43 @@ rects. The progress value itself is not located yet. To find it, start a rift an
 
 while killing monsters. The summary at the end lists the fields that changed; the one that only grows
 with the progress is the value (or the marker rect moves with it). Then publish it in UiLayout.
+
+## TurboHUD plugin review (2026-10-31): what to port to our plugin system
+
+TurboHUD 2.6.10 ships 110 plugin sources (`plugins/Default`, grouped by Actors, BuffLists, Decorators, Inventory,
+Items, Monsters, Players, SkillBars, ...). Facts and ideas only: nothing is copied, plugins are written fresh
+against our API. What decides a port is the data the reader publishes: actors (position, kind, internal name, life
+and affixes of elites, ground item rarity), backpack/equipment items with grid cells, UI state (inventory, stash,
+rift progress and timer), the player position and an area id.
+
+**Port next (the data exists)**
+
+| TurboHUD plugin | Our plugin | What it needs |
+|---|---|---|
+| MonsterPackPlugin | Elite pack finder: groups elites into packs, an arrow at the screen edge to the nearest pack with its distance, its affixes (priority-ordered, TurboHUD ranks Juggernaut, Arcane, Desecrator, Frozen, Molten first), how much of the pack is left | actors + affixes + life (have it), edge arrow helper in `draw` |
+| GoblinPlugin | Treasure goblin finder: names `treasuregoblin_*`, the Gelatinous splitters, the Treasure Fiend minions; label and edge arrow, optional sound | actor names (have it); a `d3hud.beep` host function for the sound |
+| InventoryFreeSpacePlugin | Free backpack space: free cells and free 2-high slots, shown when the inventory is open | backpack items with grid cells and heights (have it) |
+| DangerousMonsterPlugin | A watch list of monster names to flag on the screen | actor names (internal names, so the list matches fragments) |
+| Globe / Chest / Portal / Rack / CursedEvent plugins | In-world markers and edge arrows for globes, chests, portals | actors of those kinds (have it; cursed events/racks would need classifying) |
+
+**Needs reader work first**
+
+- ExplosiveMonsterPlugin (Corpulent, Fast Mummy corpses): the reader drops dead monsters, so it would have to publish those few kinds.
+- InventoryMaterialCount, BloodShard, KanaiCubedItems: stack sizes are not in `ItemSnapshot`.
+- MonsterRiftProgressionColoring: needs a table monster -> rift progress value (game data, not in memory).
+- TopExperienceStatistics (XP per hour, paragon): experience counters are not read.
+- AttributeLabelList and EliteMonsterSkill: arbitrary attributes; a monster's group is readable, the player's is not found yet.
+
+**Big projects (research needed, high value)**
+
+BuffLists (cheat death, Convention of Elements, buff timers), SkillBars, PlayerSkill, CooldownSoundPlayer and
+SkillRangeHelper all need the player's powers, buffs and cooldowns, which the reader does not read at all.
+
+**Low value here:** Pickup / multiplayer XP range circles (an attribute and multiplayer), OtherPlayers, HeadStone and
+Banner (multiplayer), StashPreview and StashUsedSpace (the stash is only visible one tab at a time; the overlay's own
+stash cache covers search).
+
+**What the port needs from the platform:** a few drawing helpers in `plugins/lib/draw.lua` (an arrow at the screen
+edge toward a world position, a circle on the ground made of projected points, a label with a distance), and for
+the goblin sound a `d3hud.beep`. TurboHUD's "decorator" idea (a bundle of ground circle + label + map marker per
+thing) maps to these.

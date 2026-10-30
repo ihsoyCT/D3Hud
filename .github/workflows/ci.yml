@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           cmake --install build --config Release --prefix dist
-          for f in D3Hud.Overlay.exe D3Hud.Reader.exe sno_actors.tsv items_gbid.tsv scene_cells.bin README.md; do
+          for f in D3Hud.Overlay.exe D3Hud.Reader.exe sno_actors.tsv items_gbid.tsv scene_cells.bin README.md plugins/timetracker/main.lua plugins/timetracker/plugin.lua plugins/healthbars/main.lua plugins/healthbars/plugin.lua plugins/lib/draw.lua plugins/lib/fmt.lua plugins/lib/store.lua plugins/README.md licenses/lua-LICENSE.txt; do
             test -f "dist/$f" || { echo "missing in install: $f"; exit 1; }
           done
 

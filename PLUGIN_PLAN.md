@@ -1,6 +1,23 @@
 # Plugin system plan
 
-Status: planned, not started. Written 2026-10-30.
+Status: in progress. Written 2026-10-30, reviewed the same day.
+
+Decisions after review: plugins are written by the owner only (light sandbox), Lua only (the DLL track
+stays parked), Lua 5.4 vendored as plain C in `third_party/lua`, and `input.click` is left out of the
+first API version. A Lua `salvage_verdict` can only make decisions more conservative: "junk" is honoured
+only for items `IsSalvageCandidate`/`CanSalvageAllOfQuality` already allow, enforced in C++.
+
+Progress: step 0b part 1 done: `src/core/Settings.h` (`SettingsTable`) replaces the hand-written
+`MinimapLayout::Load`/`Save`; the built-ins register through `MinimapLayout::Describe`.
+Milestones 2-4 done (the goal of the plugin PR): `src/core/HostApi.h` (plain C), the sandboxed Lua runtime
+(`src/plugins/`), the overlay host (`PluginHost`) and the first plugin, `plugins/timetracker` (time per area). Deviations
+from the plan: the manifest is `plugin.lua` (a table, run with no globals) instead of `plugin.json`, to avoid a
+JSON parser; plugin settings live in `plugins.ini` (separate from `d3hud.ini`); hot rects, plugin hotkeys,
+circles/quads, the `drop` event and the salvage policy hook are in the header but not provided yet. Plugin dock
+panels, rect/line drawing and shared Lua libraries (`plugins/lib`, `d3hud.require`) are provided; `plugins/healthbars` is the second plugin.
+
+Step 0b part 2 done: the Settings window lists `SettingsPage` entries (`AddSettingsPage`); the built-in pages are
+registered the same way, grouped Interface / Panels / Features.
 
 **Recommendation:** define one small, versioned host API and put Lua on top of
 it first. DLL plugins come later as a second consumer of the same API. What
@@ -23,7 +40,7 @@ or trusted native work.
 
 ## Step 0: refactor first
 
-`HudRenderer.cpp` does everything (~1000 lines). Before any scripting, split it
+`HudRenderer.cpp` does everything (~2200 lines). Before any scripting, split it
 into built-in "features" behind one interface: Minimap, Drops, Items, Actors,
 Info, Salvage, ItemBadges, GroundLabels. Each has `OnSnapshot`, `Draw`,
 `Settings`, `Load`/`Save`. The built-ins become the first plugins, so the
@@ -121,11 +138,11 @@ and DLLs both get it.
 
 ## Milestones
 
-1. Split HudRenderer into features, no behaviour change; add the settings
-   page registry and typed store, and move the built-in pages onto them.
-2. Write the host API header; bind it to the built-ins.
-3. Lua runtime, loader, sandbox, manifest.
-4. Port Drops and the marker styles to Lua as the proof.
+1. Typed settings store (`SettingsTable`) and settings page registry (both done), then split
+   HudRenderer into features, no behaviour change.
+2. Write the host API header (done).
+3. Lua runtime, loader, sandbox, manifest (done).
+4. A first plugin as the proof (done: time tracker). Later: port Drops and the marker styles to Lua.
 5. Move salvage rules to a Lua policy hook.
 6. Plugin manager UI and hot reload.
 7. DLL loader.

@@ -92,8 +92,9 @@ bool ClassifyActor(const std::string& snoKind, const std::string& name, bool has
         for (const char* skip : {"Generic_Proxy", "Hireling", "_pet_", "Follower", "MonsterAffix",
                                  "Voiceover", "PortalSpawner"})
             if (Contains(name, skip)) return false;
-        *out = (Contains(name, "Boss") || Contains(name, "Unique")) ? ActorKind::Boss
-                                                                    : ActorKind::Trash;
+        // town vendors are named A2_UniqueVendor_*: "Unique" there is not a unique monster
+        const bool vendor = Contains(name, "Vendor");
+        *out = !vendor && (Contains(name, "Boss") || Contains(name, "Unique")) ? ActorKind::Boss : ActorKind::Trash;
         return true;
     }
     if (snoKind == "Gizmo") {

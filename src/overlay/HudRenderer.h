@@ -2,13 +2,17 @@
 // snapshots from any source, owns no state beyond options.
 #pragma once
 
+#include <deque>
 #include <filesystem>
+#include <map>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "Salvage.h"
 #include "SceneCells.h"
+#include "Settings.h"
 #include "Snapshot.h"
 #include "imgui.h"
 
@@ -79,7 +83,11 @@ struct MinimapLayout {
     float rightOffset = 0.168f;  // centre distance from the right edge / window height (16:9 measured)
     float topOffset = 0.192f;    // centre distance from the top edge / window height
     float radius = 0.125f;       // / window height
-    float worldRadius = 156.0f;  // world units from centre to rim
+    float worldRadius = 156.0f;  // world units from centre to rim of the manual placement below
+    // Zoom while the game's own minimap circle is followed (autoMinimap): world units from its centre to
+    // its rim. Separate from worldRadius because the two circles differ in size: a zoom calibrated against
+    // one is wrong for the other. 150 = measured against the game's minimap (radius 0.125 of the screen height).
+    float autoWorldRadius = 150.0f;
     bool beyondRim = true;       // also draw actors outside the circle (faded)
     // marker look
     static constexpr int kKindCount = static_cast<int>(ActorKind::RiftOrbTiered) + 1;
@@ -130,6 +138,16 @@ struct MinimapLayout {
     static constexpr int kHotkeyCount = kHkPanelFirst + kPanelCount;
     uint8_t hotkeys[kHotkeyCount] = {0x77, 0x78, 0x23, 0x76, 0, 0, 0, 0, 0};  // F8 F9 END F7
 
+    // Binds every persisted field to its ini key (see HudRenderer.cpp); Load and Save are built on it.
+    void Describe(SettingsTable& table);
+    // Plugin dock panels: their placement lives in the same ini (pluginpanel.<id>.*). Plugins register
+    // after the file was read, so HudRenderer::AddPluginPanel loads just that panel's keys.
+    struct PluginPanelState {
+        bool pinned = false, hidden = false;
+        float x = -1.f, y = -1.f, w = 0.f, h = 0.f;  // x < 0 = docked
+    };
+    std::map<std::string, PluginPanelState> pluginPanels;
+    void DescribePluginPanel(SettingsTable& table, const std::string& id);
     [[nodiscard]] bool Load(const std::filesystem::path& path);
     [[nodiscard]] bool Save(const std::filesystem::path& path) const;
 };
@@ -183,8 +201,27 @@ struct HudOptions {
     bool mouseLive = false;  // the overlay receives mouse input right now (F8, or over a hot rect)
 };
 
+// One page of the Settings window. The built-in pages are registered like any other, so
+// plugins can add theirs later: the host owns the window, the list and the persistence.
+struct SettingsPage {
+    std::string id;     // stable key, e.g. "minimap" or "<plugin>.options"
+    std::string title;  // shown in the list and as the page heading
+    std::string group;  // list section heading; pages of one group sit together
+    int order = 0;      // sort key within the list (stable)
+    std::function<void()> draw;
+};
+
 class HudRenderer {
 public:
+    HudRenderer();
+    void AddSettingsPage(SettingsPage page);
+    // A dock panel owned by a plugin: a tab in the dock, hover peek, pin, drag and a remembered position,
+    // exactly like the built-in panels. `id` is unique ("<plugin>.<panel>"); `defaultSize` > 0 = resizable.
+    void AddPluginPanel(std::string id, std::string title, std::function<void()> draw, ImVec2 defaultSize);
+    // "show in dock / keep open / reset position" for one plugin panel (the plugin's Settings page).
+    void DrawPluginPanelSettings(const std::string& id);
+    // Shows the Settings window pinned open on the page with this id (nothing is saved); false if unknown.
+    bool OpenSettingsPage(const std::string& id);
     void Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName);
     // Loads the layout from `path` (defaults if missing); the calibration panel saves there.
     void SetLayoutPath(const std::filesystem::path& path);
@@ -203,28 +240,59 @@ public:
 private:
     // Panel framework: returns true when the panel should draw its body.
     // `defaultSize` > 0 makes the panel user-resizable (size remembered).
-    bool PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize = ImVec2(0.f, 0.f));
-    void PanelEnd(PanelId id, bool wasOpen);
-    // An open panel for the length of a scope: PanelEnd runs on every way out (early returns included).
+    // The state of one panel, wherever it lives: built-in panels keep it in layout_ and the arrays
+    // below, plugin panels in layout_.pluginPanels and their PluginPanel.
+    struct PanelView {
+        bool* pinned;
+        float *x, *y, *w, *h;  // saved position / size (fractions of the window); x < 0 = docked
+        ImVec2 *pos, *size;    // last frame's window rect (size.x == 0: collapsed, no hover area)
+        float* hoverUntil;     // linger after the cursor leaves
+        bool *resizable, *moved;
+        bool peekable;         // opens on hover (Settings only opens when pinned)
+    };
+    struct PluginPanel {
+        std::string id, title, label;  // label = title##id, the ImGui window name
+        std::function<void()> draw;
+        ImVec2 defaultSize;
+        ImVec2 pos, size;
+        float hoverUntil = 0.f;
+        bool resizable = false, moved = false;
+    };
+    PanelView ViewOf(PanelId id);
+    PanelView ViewOf(PluginPanel& p);
+    // Looked up by id each time: "reset everything" replaces layout_, which would leave a stored pointer dangling.
+    MinimapLayout::PluginPanelState& St(const PluginPanel& p) { return layout_.pluginPanels[p.id]; }
+    // Panel framework: returns true when the panel should draw its body.
+    // `defaultSize` > 0 makes the panel user-resizable (size remembered).
+    bool PanelOpenView(const PanelView& v, const HudOptions& opt, const char* title, ImVec2 defaultSize);
+    void PanelEndView(const PanelView& v, bool wasOpen);
+    // An open panel for the length of a scope: PanelEndView runs on every way out (early returns included).
     //   PanelScope panel(*this, PanelId::Items, opt, "Items");
     //   if (!panel) return;   // collapsed: nothing to draw
     class PanelScope {
     public:
         PanelScope(HudRenderer& r, PanelId id, const HudOptions& opt, const char* title,
                    ImVec2 defaultSize = ImVec2(0.f, 0.f))
-            : r_(r), id_(id), open_(r.PanelOpen(id, opt, title, defaultSize)) {}
-        ~PanelScope() { r_.PanelEnd(id_, open_); }
+            : r_(r), view_(r.ViewOf(id)), open_(r.PanelOpenView(view_, opt, title, defaultSize)) {}
+        PanelScope(HudRenderer& r, PluginPanel& p, const HudOptions& opt)
+            : r_(r), view_(r.ViewOf(p)), open_(r.PanelOpenView(view_, opt, p.label.c_str(), p.defaultSize)) {}
+        ~PanelScope() { r_.PanelEndView(view_, open_); }
         PanelScope(const PanelScope&) = delete;
         PanelScope& operator=(const PanelScope&) = delete;
         explicit operator bool() const { return open_; }
 
     private:
         HudRenderer& r_;
-        PanelId id_;
+        PanelView view_;
         bool open_;
     };
+    std::deque<PluginPanel> pluginPanels_;
+    void DrawPluginPanel(PluginPanel& p, const HudOptions& opt);
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
+    void RegisterBuiltinSettingsPages();
+    void DrawGeneralSettings();
+    void DrawPanelSettings(int panel);  // the shared "show in dock / pinned / reset position" part
     void SaveLayout();  // layout_.Save + status line
     void DrawMinimapSettings();
     bool minimapFound_ = false;  // last frame: the game's minimap control was used for placement
@@ -280,7 +348,9 @@ private:
     float panelHoverUntil_[kPanels] = {};  // linger after the cursor leaves
     bool panelResizable_[kPanels] = {};
     bool panelMoved_[kPanels] = {};        // title-bar drag in progress; saved on release
-    int settingsTab_ = 0;
+    int settingsTab_ = 0;  // index into settingsPages_
+    std::vector<SettingsPage> settingsPages_;
+    float activeWorldRadius_ = 156.0f;  // the zoom the minimap used last frame
     ImVec2 dockPos_ = {}, dockSize_ = {};  // last frame's dock rect (auto-hide keeps testing it)
 
     void DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt);

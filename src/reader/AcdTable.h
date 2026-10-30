@@ -85,6 +85,12 @@ public:
     // false if no known block holds it.
     bool ReadItem(const Process& proc, uint32_t acdId, AcdItemRecord* out) const;
 
+    // The raw record (kAcdStride bytes) of an acd id, for research probes; false if no known block holds it.
+    bool ReadRaw(const Process& proc, uint32_t acdId, uint8_t* out) const;
+
+    // Affixes of an elite: bit i = kMonsterAffixes[i] (MonsterAffixes.h); false if the record is not found.
+    bool ReadAffixMask(const Process& proc, uint32_t acdId, uint32_t* mask) const;
+
     // Every live ACD record in the known blocks that has a placement (location
     // >= 0); the caller filters by SNO kind. Reads ~4 MB per block - call ~1 Hz.
     bool ReadPlaced(const Process& proc, std::vector<AcdItemRecord>* out) const;

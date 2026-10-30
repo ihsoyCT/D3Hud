@@ -20,6 +20,11 @@
 #include "Salvage.h"
 #include "SceneCells.h"
 #include "SceneTable.h"
+#include "HostApi.h"
+#include "MonsterAffixes.h"
+#include "LuaPlugin.h"
+#include "PluginSettings.h"
+#include "Settings.h"
 #include "SnapshotInterp.h"
 #include "SnoTable.h"
 
@@ -248,6 +253,9 @@ static void TestClassifyActor() {
     CHECK(ClassifyActor("Monster", "X1_LR_Boss_sniperAngel", true, kAlive, &k) && k == ActorKind::Boss);
     CHECK(ClassifyActor("Monster", "Goatman_Ranged_A", true, kAlive, &k) && k == ActorKind::Trash);
     CHECK(!ClassifyActor("Monster", "Skeleton_A", false, kDead, &k));  // corpse
+    // town vendors contain "Unique" in their name but are not unique monsters
+    CHECK(ClassifyActor("Monster", "A2_UniqueVendor_Miner_InTown_01", true, kAlive, &k) && k == ActorKind::Trash);
+    CHECK(ClassifyActor("Monster", "Skeleton_Unique_Foo", true, kAlive, &k) && k == ActorKind::Boss);
     // rift progress orbs: their own kinds, with or without an ACD; the flippy effects are not actors we show
     CHECK(ClassifyActor("Item", "p1_normal_rifts_Orb", false, kAlive, &k) && k == ActorKind::RiftOrb);
     CHECK(ClassifyActor("Item", "Challenge_Rifts_Orb", true, kAlive, &k) && k == ActorKind::RiftOrb);
@@ -433,6 +441,639 @@ static void TestSalvageRules() {
     CHECK(IsSalvageCandidate(g, safe, r2, nullptr, 0));  // only boots are protected
     CHECK(GearFamily("Helm_Necromancer") == GearFamily("Helm") && GearFamily("Ring") != GearFamily("Amulet"));
     CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
+}
+
+extern "C" int HostApiCCheck(void);
+
+// The C API mirrors a few engine enums by number; plugins depend on those values.
+static void TestMonsterAffixes() {
+    static_assert(kMonsterAffixCount == 30, "the game's MonsterAffixes table has 30 entries");
+    for (size_t i = 0; i < kMonsterAffixCount; ++i) {
+        const MonsterAffixInfo& a = kMonsterAffixes[i];
+        CHECK(a.gbid != 0 && a.key[0] != '\0' && a.name[0] != '\0');
+        CHECK(FindMonsterAffix(a.gbid) == &a);
+        for (size_t j = 0; j < i; ++j) CHECK(kMonsterAffixes[j].gbid != a.gbid && strcmp(kMonsterAffixes[j].key, a.key) != 0);
+    }
+    CHECK(FindMonsterAffix(1799201764) != nullptr && strcmp(FindMonsterAffix(1799201764)->name, "Health Link") == 0);
+    CHECK(FindMonsterAffix(0) == nullptr && FindMonsterAffix(12345) == nullptr);
+}
+
+static void TestAffixMask() {
+    // an ACD record of a champion as measured live: the list starts at +0x1E4 (an elite marker that is not one of the
+    // 30, then four affixes, then empty slots)
+    uint32_t words[0x3C0 / 4] = {};
+    words[0x1E4 / 4] = 0x371E75AA;
+    words[0x1E8 / 4] = 1905614711;  // Orbiter
+    words[0x1EC / 4] = 3855260060u;  // Fire Chains
+    words[0x1F0 / 4] = 2206426855u;  // Knockback
+    words[0x1F4 / 4] = 4131130388u;  // Frozen
+    words[0x1F8 / 4] = words[0x1FC / 4] = words[0x200 / 4] = 0xFFFFFFFFu;
+    const uint32_t mask = AffixMaskFromAcdWords(words, std::size(words));
+    const uint32_t expected = (1u << FindMonsterAffixIndex(1905614711)) | (1u << FindMonsterAffixIndex(3855260060u)) |
+                              (1u << FindMonsterAffixIndex(2206426855u)) | (1u << FindMonsterAffixIndex(4131130388u));
+    CHECK(mask == expected);
+    CHECK(AffixMaskFromAcdWords(words, 4) == 0);  // a record too short to hold the list
+    words[0x1E8 / 4] = 0;
+    CHECK(AffixMaskFromAcdWords(words, std::size(words)) != expected);
+    // ids elsewhere in the record do not count
+    uint32_t other[0x3C0 / 4] = {};
+    other[0x100 / 4] = 1905614711;
+    CHECK(AffixMaskFromAcdWords(other, std::size(other)) == 0);
+    CHECK(FindMonsterAffixIndex(0xFFFFFFFFu) == -1 && FindMonsterAffixIndex(3775118) == 0);
+}
+
+static void TestHostApi() {
+    static_assert(D3H_ACTOR_PLAYER == static_cast<int>(ActorKind::Player));
+    static_assert(D3H_ACTOR_PORTAL == static_cast<int>(ActorKind::Portal));
+    static_assert(D3H_ACTOR_RIFT_ORB_TIERED == static_cast<int>(ActorKind::RiftOrbTiered));
+    static_assert(D3H_RARITY_LEGENDARY == static_cast<int>(ItemRarity::Legendary));
+    static_assert(D3H_RARITY_SET == static_cast<int>(ItemRarity::Set));
+    static_assert(D3H_VERDICT_JUNK == static_cast<int>(SalvageVerdict::Junk));
+    static_assert(D3H_VERDICT_CHECK == static_cast<int>(SalvageVerdict::Check));
+    static_assert(D3H_NAME_LEN == kNameLen);
+    static_assert(D3H_FLAG_ANCIENT == kItemFlagAncient && D3H_FLAG_PRIMAL == kItemFlagPrimal &&
+                  D3H_FLAG_BONUS == kItemFlagBonus && D3H_FLAG_UNIDENTIFIED == kItemFlagUnidentified &&
+                  D3H_FLAG_USED == kActorFlagUsed);
+    CHECK(HostApiCCheck() == D3H_API_VERSION);  // the header compiles as C and D3H_HOST_HAS works
+
+    // an older host without the last function is detected
+    d3h_host old{};
+    old.size = static_cast<uint32_t>(offsetof(d3h_host, set_salvage_policy));
+    CHECK(D3H_HOST_HAS(&old, register_hotkey) && !D3H_HOST_HAS(&old, set_salvage_policy));
+}
+
+static void TestSettingsTable() {
+    enum class Shape : uint8_t { A, B, C };
+    bool on = true;
+    int n = 5;
+    float f = 1.5f;
+    uint32_t rgb = 0x102030;
+    uint64_t mask = 0;
+    Shape shape = Shape::A;
+    SettingsTable t;
+    t.Comment("first section");
+    t.Add("on", on);
+    t.Add("n", n, 0, 10);
+    t.Add("f", f, 0.f, 2.f, 3);
+    t.Add("rgb", rgb, 0u, 0xFFFFFFu);
+    t.AddHex64("mask", mask, 0xFFull);
+    t.Add("shape", shape, Shape::A, Shape::C);
+    t.Alias("oldOn", "on");
+    CHECK(t.size() == 6);
+
+    // text round trip
+    const std::string saved = t.SaveText();
+    CHECK(saved.starts_with("# first section\non=1\n"));
+    on = false; n = 0; f = 0.f; rgb = 0; mask = 0; shape = Shape::C;
+    CHECK(t.LoadText(saved) == 6);
+    CHECK(on && n == 5 && f == 1.5f && rgb == 0x102030 && shape == Shape::A);
+
+    // clamping, spaces, comments, CRLF, unknown keys, junk values, aliases, hex masks
+    CHECK(t.LoadText("# n=3\r\n n = 99 \r\nf=-4\nmissing=1\nshape=text\nrgb=1e30\nmask=1ff\noldOn=0\nnoequals\n") == 5);
+    CHECK(n == 10 && f == 0.f && rgb == 0xFFFFFFu && mask == 0xFF && !on && shape == Shape::A);
+    CHECK(t.LoadText("shape=7") == 1 && shape == Shape::C);
+    CHECK(!t.Has("oldOn") || t.Has("on"));
+
+    // file round trip, unicode folder
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / L"d3hud_settings_é日";
+    fs::create_directories(dir);
+    n = 7;
+    CHECK(t.Save(dir / L"s.ini"));
+    n = 0;
+    CHECK(t.Load(dir / L"s.ini") && n == 7);
+    CHECK(!t.Load(dir / L"missing.ini"));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// ---- plugins: settings store, Lua sandbox, the time tracker plugin ----------------------------------
+
+namespace fake {
+struct Sub { d3h_event_fn fn; void* user; };
+struct Page { std::string id, title, group; d3h_draw_fn draw; void* user; };
+struct State {
+    PluginSettings settings;
+    std::vector<std::pair<int32_t, Sub>> subs;
+    std::vector<Page> pages;
+    std::vector<std::string> logs, drawn, lines;
+    std::vector<d3h_actor> actors;
+    std::vector<d3h_rect> rects;
+    std::vector<Page> panels;
+    size_t checkboxes = 0, swatches = 0;  // widgets a page drew
+    d3h_frame frame{};
+    int comboPick = 0;  // 0 = leave the combo alone, else the 1-based index to choose
+    void Reset() { *this = State(); frame.size = sizeof(frame); frame.rift_timer_fraction = -1.f; frame.hovered_item = -1; }
+};
+State g;
+
+std::string Key(const char* k) { return *CurrentPluginName() + "." + k; }
+
+void Log(int32_t, const char* m) { g.logs.emplace_back(m); }
+void GetFrame(d3h_frame* out) {
+    *out = g.frame;
+    out->actor_count = static_cast<uint32_t>(g.actors.size());
+}
+d3h_bool GetActor(uint32_t i, d3h_actor* out) {
+    if (i >= g.actors.size()) return 0;
+    *out = g.actors[i];
+    return 1;
+}
+d3h_bool WorldToScreen(d3h_vec2 w, float, d3h_vec2* out) {
+    if (w.x < 0) return 0;  // "off screen"
+    *out = w;
+    return 1;
+}
+void DrawRect(int32_t, d3h_rect r, d3h_color, d3h_bool, float) { g.rects.push_back(r); }
+d3h_vec2 TextSize(const char* t, float scale) { return {7.f * scale * static_cast<float>(strlen(t)), 13.f * scale}; }
+d3h_bool RegisterPanel(const d3h_panel_desc* d) {
+    g.panels.push_back({d->id, d->title, "", d->draw, d->user});
+    return 1;
+}
+void Subscribe(int32_t type, d3h_event_fn fn, void* user) { g.subs.push_back({type, {fn, user}}); }
+void DrawText(int32_t, d3h_vec2, d3h_color, const char* t, float) { g.drawn.emplace_back(t); }
+d3h_bool RegisterPage(const d3h_page_desc* d) {
+    g.pages.push_back({d->id, d->title, d->group, d->draw, d->user});
+    return 1;
+}
+d3h_bool Define(const d3h_setting_desc* d) { return g.settings.Define(*CurrentPluginName(), *d); }
+d3h_bool GetBool(const char* k, d3h_bool* o) { double v; if (!g.settings.GetNumber(Key(k), v)) return 0; *o = v != 0; return 1; }
+d3h_bool GetInt(const char* k, int32_t* o) { double v; if (!g.settings.GetNumber(Key(k), v)) return 0; *o = static_cast<int32_t>(v); return 1; }
+d3h_bool GetFloat(const char* k, float* o) { double v; if (!g.settings.GetNumber(Key(k), v)) return 0; *o = static_cast<float>(v); return 1; }
+d3h_bool GetColor(const char* k, d3h_color* o) { double v; if (!g.settings.GetNumber(Key(k), v)) return 0; *o = static_cast<d3h_color>(v); return 1; }
+d3h_bool GetString(const char* k, char* o, size_t n) {
+    std::string v;
+    if (!g.settings.GetString(Key(k), v) || n == 0) return 0;
+    strncpy_s(o, n, v.c_str(), _TRUNCATE);
+    return 1;
+}
+d3h_bool SetValue(const char* k, double v) { (void)g.settings.SetNumber(Key(k), v); return 1; }
+d3h_bool SetString(const char* k, const char* v) { (void)g.settings.SetString(Key(k), v); return 1; }
+
+d3h_host MakeHost() {
+    d3h_host h{};
+    h.size = sizeof(h);
+    h.api_version = D3H_API_VERSION;
+    h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.subscribe = Subscribe; h.draw_text = DrawText;
+    h.world_to_screen = WorldToScreen; h.draw_rect = DrawRect; h.register_panel = RegisterPanel;
+    h.text_size = TextSize;
+    h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
+    h.get_float = GetFloat; h.get_color = GetColor; h.get_string = GetString; h.set_value = SetValue; h.set_string = SetString;
+    return h;
+}
+
+// A ui that records the text and answers the combo with g.comboPick.
+void UText(const char* t) { g.lines.emplace_back(t); }
+void UNone() {}
+d3h_bool UCombo(const char*, int32_t* idx, const char*) {
+    if (g.comboPick == 0) return 0;
+    *idx = g.comboPick - 1;
+    return 1;
+}
+d3h_bool UInput(const char*, char*, size_t) { return 0; }
+d3h_bool UButton(const char*) { return 0; }
+d3h_bool UCheckbox(const char*, d3h_bool*) { ++g.checkboxes; return 0; }
+d3h_bool UColor(const char*, d3h_color*) { ++g.swatches; return 0; }
+d3h_ui MakeUi() {
+    d3h_ui u{};
+    u.size = sizeof(u);
+    u.text = UText; u.text_disabled = UText; u.separator = UNone; u.separator_text = UText;
+    u.same_line = UNone; u.spacing = UNone; u.button = UButton; u.checkbox = UCheckbox; u.combo = UCombo;
+    u.input_text = UInput; u.color_edit = UColor;
+    return u;
+}
+
+void Fire(int32_t type, int32_t index = -1, int64_t value = 0, const char* text = nullptr) {
+    d3h_event ev{sizeof(ev), type, index, value, text};
+    for (const auto& s : std::vector<std::pair<int32_t, Sub>>(g.subs))
+        if (s.first == type) s.second.fn(&ev, s.second.user);
+}
+void DrawPages() {
+    const d3h_ui ui = MakeUi();
+    for (const Page& p : g.pages) p.draw(&ui, p.user);
+}
+void DrawPanels() {
+    const d3h_ui ui = MakeUi();
+    for (const Page& p : g.panels) p.draw(&ui, p.user);
+}
+d3h_actor Actor(int32_t kind, float x, float hp, const char* name, uint32_t affixes = 0) {
+    d3h_actor a{};
+    a.affix_mask = affixes;
+    a.size = sizeof(a);
+    a.kind = kind;
+    a.pos = {x, 5.f};
+    a.hp_fraction = hp;
+    a.hp_current = hp > 0 ? hp * 1000.f : 0.f;
+    a.hp_max = hp >= 0 ? 1000.f : 0.f;
+    strncpy_s(a.name, sizeof(a.name), name, _TRUNCATE);
+    return a;
+}
+}  // namespace fake
+
+static std::filesystem::path WritePlugin(const std::filesystem::path& root, const char* folder, const std::string& mainLua,
+                                         const char* manifest = "return { name = 'testplugin', version = '1', api = 1 }") {
+    namespace fs = std::filesystem;
+    const fs::path dir = root / folder;
+    fs::create_directories(dir);
+    File m = OpenFile(dir / L"plugin.lua", L"wb");
+    fwrite(manifest, 1, strlen(manifest), m);
+    File s = OpenFile(dir / L"main.lua", L"wb");
+    fwrite(mainLua.data(), 1, mainLua.size(), s);
+    return dir;
+}
+
+static void TestPluginSettings() {
+    PluginSettings s;
+    d3h_setting_desc d{};
+    d.size = sizeof(d);
+    d.key = "level"; d.type = D3H_SETTING_INT; d.min = 1; d.max = 5; d.def = 3;
+    CHECK(s.Define("p", d));
+    double v = 0;
+    CHECK(s.GetNumber("p.level", v) && v == 3);
+    CHECK(s.SetNumber("p.level", 99) && s.GetNumber("p.level", v) && v == 5);  // clamped
+    CHECK(!s.SetNumber("p.unknown", 1) && !s.GetNumber("q.level", v));
+    d.key = "name"; d.type = D3H_SETTING_STRING; d.def_string = "x";
+    CHECK(s.Define("p", d));
+    CHECK(s.SetString("p.name", "line1\nline2\\end"));
+
+    // a value stored before the plugin defines the key survives and is applied (within the limits)
+    PluginSettings t;
+    t.LoadText(s.SaveText() + "p.later=7\n");
+    d.key = "level"; d.type = D3H_SETTING_INT;
+    CHECK(t.Define("p", d) && t.GetNumber("p.level", v) && v == 5);
+    d.key = "name"; d.type = D3H_SETTING_STRING;
+    CHECK(t.Define("p", d));
+    std::string str;
+    CHECK(t.GetString("p.name", str) && str == "line1\nline2\\end");
+    d.key = "later"; d.type = D3H_SETTING_FLOAT; d.min = 0; d.max = 10; d.def = 1;
+    CHECK(t.Define("p", d) && t.GetNumber("p.later", v) && v == 7);
+    d.type = D3H_SETTING_BOOL;
+    CHECK(!t.Define("p", d));  // same key, other type
+    CHECK(t.Of("p").size() == 3);
+}
+
+static void TestLuaSandbox() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_é";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto load = [&](const char* folder, const std::string& code, const char* manifest = nullptr) {
+        const fs::path dir = manifest ? WritePlugin(root, folder, code, manifest) : WritePlugin(root, folder, code);
+        err.clear();
+        return LuaPlugin::Load(dir, host, err);
+    };
+
+    CHECK(load("ok", "assert(os == nil and io == nil and require == nil and dofile == nil and loadfile == nil and load == nil "
+                     "and debug == nil and package == nil and collectgarbage == nil and print == nil)\n"
+                     "assert(string.dump == nil and d3hud.api == 1)\n"
+                     "assert(string.format('%d', 3) == '3' and math.floor(2.5) == 2 and #table.concat({'a','b'}) == 2)") != nullptr);
+    CHECK(err.empty());
+
+    CHECK(load("syntax", "this is not lua") == nullptr && !err.empty());
+    CHECK(load("loop", "while true do end") == nullptr && err.find("instructions") != std::string::npos);
+    CHECK(load("memory", "local t = {} for i = 1, 1e7 do t[i] = string.rep('x', 4096) .. i end") == nullptr);
+    CHECK(load("global", "x = 1\nassert(x == 1)") != nullptr);  // globals live in the plugin's own environment
+    CHECK(load("badname", "", "return { name = '../evil', api = 1 }") == nullptr);
+    CHECK(load("badapi", "", "return { name = 'x', api = 99 }") == nullptr && err.find("api") != std::string::npos);
+    CHECK(load("manifestglobals", "", "return { name = os.getenv('PATH'), api = 1 }") == nullptr);
+    CHECK(load("nomanifest", "", "this is not a table") == nullptr);
+    (void)WritePlugin(root, "nomain", "");
+    fs::remove(root / L"nomain" / L"main.lua");
+    CHECK(LuaPlugin::Load(root / L"nomain", host, err) == nullptr && err.find("main.lua") != std::string::npos);
+
+    // errors are counted, logged with the plugin's name, and switch the plugin off after kMaxErrors
+    fake::g.Reset();
+    auto bad = load("bad", "d3hud.on('frame', function() error('boom') end)");
+    CHECK(bad != nullptr);
+    for (int i = 0; i < LuaPlugin::kMaxErrors + 3; ++i) fake::Fire(D3H_EVENT_FRAME);
+    CHECK(bad->disabled() && bad->errorCount() == LuaPlugin::kMaxErrors);
+    CHECK(!fake::g.logs.empty() && fake::g.logs[0].find("[testplugin]") == 0 && fake::g.logs[0].find("boom") != std::string::npos);
+
+    // time spent in plugin code is measured per frame and published once per window
+    fake::g.Reset();
+    auto busy = load("busy", "d3hud.on('frame', function() local n = 0 for i = 1, 300000 do n = n + i end end)");
+    CHECK(busy != nullptr && busy->timing().avgUs == 0.0);
+    auto clock = std::chrono::steady_clock::now();
+    for (int i = 0; i < 5; ++i) {
+        fake::Fire(D3H_EVENT_FRAME);
+        busy->EndFrame(clock + std::chrono::milliseconds(i * 10));  // 40 ms: still inside the first window
+    }
+    CHECK(busy->timing().avgUs == 0.0);  // nothing published yet, so a display does not flicker
+    fake::Fire(D3H_EVENT_FRAME);
+    busy->EndFrame(clock + std::chrono::milliseconds(600));
+    CHECK(busy->timing().avgUs > 0.0 && busy->timing().peakUs >= busy->timing().avgUs);
+    CHECK(busy->timing().calls == 1.0);
+    const double published = busy->timing().avgUs;
+    fake::Fire(D3H_EVENT_FRAME);
+    busy->EndFrame(clock + std::chrono::milliseconds(700));
+    CHECK(busy->timing().avgUs == published);  // unchanged until the next window ends
+
+    // events carry their data; settings round trip through the host
+    fake::g.Reset();
+    auto ok = load("events", "d3hud.setting{ key = 'n', type = 'int', default = 2, min = 0, max = 9 }\n"
+                             "d3hud.setting{ key = 'c', type = 'choice', default = 2, choices = {'a','b','c'} }\n"
+                             "d3hud.on('world_change', function(ev) d3hud.set('n', ev.value) end)\n"
+                             "d3hud.on('hotkey', function(ev) d3hud.set('c', 3); d3hud.log(ev.text .. d3hud.get('c') .. d3hud.get('n')) end)");
+    CHECK(ok != nullptr);
+    double v = 0;
+    CHECK(fake::g.settings.GetNumber("testplugin.c", v) && v == 1);  // Lua default 2 is index 1
+    fake::Fire(D3H_EVENT_WORLD_CHANGE, -1, 42);
+    CHECK(fake::g.settings.GetNumber("testplugin.n", v) && v == 9);  // clamped by the host
+    fake::Fire(D3H_EVENT_HOTKEY, -1, 0, "go");
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "go39");
+
+    // d3hud.actors(): everything the snapshot knows, with names and the distance to the player
+    fake::g.Reset();
+    fake::g.frame.player_pos = {0.f, 5.f};
+    fake::g.actors = {fake::Actor(D3H_ACTOR_RARE, 30.f, 0.25f, "Skeleton_Rare"), fake::Actor(D3H_ACTOR_TRASH, 4.f, -1.f, "Zombie")};
+    auto lister = load("lister", "d3hud.on('frame', function()\n"
+                                 "  local all = d3hud.actors()\n"
+                                 "  local r = all[1]\n"
+                                 "  d3hud.log(#all .. ' ' .. r.kind_name .. ' ' .. r.name .. ' ' .. r.dist .. ' ' .. r.hp .. ' ' .. r.hp_current .. '/' .. r.hp_max .. ' ' .. all[2].hp .. ' ' .. d3hud.actor(2).name .. ' ' .. tostring((d3hud.actor(3))))\n"
+                                 "end)");
+    CHECK(lister != nullptr);
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "2 rare Skeleton_Rare 30.0 0.25 250.0/1000.0 -1.0 Zombie nil");
+
+    // affixes: keys and names in the order of d3hud.affixes
+    fake::g.Reset();
+    fake::g.actors = {fake::Actor(D3H_ACTOR_CHAMPION, 10.f, 0.5f, "Champ",
+                                  (1u << FindMonsterAffixIndex(4131130388u)) | (1u << FindMonsterAffixIndex(106438735)))};
+    auto affixes = load("affixes", "d3hud.on('frame', function()\n"
+                                   "  local a = d3hud.actor(1)\n"
+                                   "  d3hud.log(#d3hud.affixes .. ' ' .. d3hud.affixes[2].key .. ' ' .. #a.affixes .. ' ' .. a.affixes[1] .. ' ' .. a.affix_names[2])\n"
+                                   "end)");
+    CHECK(affixes != nullptr);
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "30 molten 2 molten Frozen");
+    fs::remove_all(root, ec);
+}
+
+// Runs plugins/timetracker against the fake host: classification, percentages, persistence.
+static void TestTimeTracker() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"timetracker", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "timetracker: %s\n", err.c_str());
+        return;
+    }
+    CHECK(p->manifest().name == "timetracker" && fake::g.pages.size() == 1 && fake::g.panels.size() == 1);
+
+    auto tick = [&](double ms, uint32_t world, uint32_t uiFlags = 0) {
+        fake::g.frame.time_ms = ms;
+        fake::g.frame.world_sno = world;
+        fake::g.frame.ui_flags = uiFlags;
+        fake::Fire(D3H_EVENT_SNAPSHOT);
+    };
+    // 10 s in an unassigned world, then assign it to Town and stay 20 s, 30 s in a rift, a stall that is not
+    // counted, 10 s in a greater rift
+    double t = 0;
+    for (int i = 0; i <= 10; ++i, t += 1000) tick(t, 1000);
+    fake::g.comboPick = 1;  // "Town" is the first area
+    fake::DrawPages();
+    fake::g.comboPick = 0;
+    for (int i = 0; i < 20; ++i, t += 1000) tick(t, 1000);
+    for (int i = 0; i < 30; ++i, t += 1000) tick(t, 2000, D3H_UI_RIFT);
+    t += 20000;
+    tick(t, 2000);  // after the stall only the reference time moves
+    for (int i = 0; i < 10; ++i) {
+        t += 1000;
+        tick(t, 2000, D3H_UI_RIFT | D3H_UI_GREATER_RIFT);
+    }
+
+    std::string totals;
+    CHECK(fake::g.settings.GetString("timetracker.totals", totals));
+    CHECK(totals.find("Town=") != std::string::npos && totals.find("Rift=") != std::string::npos);  // saved every 30 s
+
+    fake::g.lines.clear();
+    fake::DrawPages();
+    std::string page;
+    for (const std::string& l : fake::g.lines) page += l + "\n";
+    CHECK(page.find("This session") != std::string::npos && page.find("All time") != std::string::npos);
+    CHECK(page.find("Town") != std::string::npos && page.find("Greater Rift") != std::string::npos);
+    // session: Other 10 s, Town 20 s, Rift 30 s, Greater Rift 10 s, together 70 s
+    CHECK(page.find("42.9%") != std::string::npos);  // Rift 30 / 70
+    CHECK(page.find("total 0:01:10") != std::string::npos);
+    CHECK(!p->disabled());
+
+    // the dock panel shows the same split
+    fake::g.lines.clear();
+    fake::DrawPanels();
+    page.clear();
+    for (const std::string& l : fake::g.lines) page += l + "\n";
+    CHECK(page.find("This session") != std::string::npos && page.find("42.9%") != std::string::npos);
+
+    // the totals survive a restart: a new plugin instance reads them from the stored setting
+    fake::g.subs.clear();
+    fake::g.pages.clear();
+    fake::g.panels.clear();
+    p.reset();
+    p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"timetracker", host, err);
+    CHECK(p != nullptr);
+    fake::g.lines.clear();
+    fake::DrawPages();
+    page.clear();
+    for (const std::string& l : fake::g.lines) page += l + "\n";
+    CHECK(page.find("nothing recorded yet") != std::string::npos);  // this session is empty again ...
+    CHECK(page.find("Town") != std::string::npos);                  // ... but the all-time table is not
+}
+
+// The shared Lua libraries (plugins/lib): d3hud.require, and the standard way to draw.
+static void TestLuaLibraries() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_libs_\u00e9";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    fs::copy(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"lib", root / L"lib", fs::copy_options::recursive, ec);
+    CHECK(!ec);
+    {
+        File f = OpenFile(root / L"lib" / L"selfref.lua", L"wb");
+        const char* src = "return d3hud.require('selfref')";
+        fwrite(src, 1, strlen(src), f);
+    }
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto load = [&](const char* folder, const std::string& code) {
+        const fs::path dir = WritePlugin(root, folder, code);
+        err.clear();
+        return LuaPlugin::Load(dir, host, err);
+    };
+
+    // pure helpers
+    auto pure = load("pure", R"lua(
+local draw, fmt, store = d3hud.require("draw"), d3hud.require("fmt"), d3hud.require("store")
+assert(draw.contrast(0xFFC040, 112) == draw.WHITE, "amber on a translucent fill: white text")
+assert(draw.contrast(0xFFFFFF, 255) == draw.BLACK, "a solid white fill: black text")
+assert(draw.contrast(0x000000, 112) == draw.WHITE)
+assert(draw.argb(0x102030, 0x80) == 0x80102030 and draw.argb(0x102030) == 0xFF102030)
+assert(fmt.hms(3725) == "1:02:05" and fmt.pct(0.427) == "43%")
+assert(fmt.pretty("x1_Fallen_Champion") == "Fallen Champion" and fmt.pretty("FallenHound") == "Fallen Hound")
+assert(store.pack_map({ b = 2, a = 1 }) == "a=1;b=2")
+assert(store.unpack_map("a=1;b=2", { number = true }).b == 2 and store.unpack_map("a=x;b=y").a == "x")
+assert(store.pack_map({ k = 1.5 }, { sep = ",", format = function(v) return string.format("%.1f", v) end }) == "k=1.5")
+local m = store.unpack_map("molten=1,frozen=2", { sep = ",", number = true })
+assert(m.molten == 1 and m.frozen == 2)
+local l = store.unpack_list("a,b,c")
+assert(#l == 3 and store.pack_list(l) == "a,b,c" and #store.unpack_list("") == 0)
+assert(d3hud.require("draw") == draw, "a library is loaded once")
+assert(not pcall(d3hud.require, "../evil") and not pcall(d3hud.require, "C:/x") and not pcall(d3hud.require, "nosuchlib"))
+assert(not pcall(d3hud.require, "selfref"), "a library that requires itself is an error, not an endless loop")
+)lua");
+    CHECK(pure != nullptr);
+    if (pure == nullptr) fprintf(stderr, "libs: %s\n", err.c_str());
+
+    // tags: a translucent fill and a border in the colour, black / white text; what does not fit is left out
+    fake::g.Reset();
+    auto tags = load("tags", R"lua(
+local draw = d3hud.require("draw")
+d3hud.on("frame", function()
+    draw.tag(10, 10, "Molten", 0xFF6A3D, 1)
+    local w, h = draw.tags(100, 50, { {text = "AAAA", color = 0xFF0000}, {text = "BBBB", color = 0x00FF00}, {text = "CCCC", color = 0x0000FF} }, 1, 80)
+    d3hud.log(w .. " " .. h)
+end)
+)lua");
+    CHECK(tags != nullptr);
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(!tags->disabled());
+    // Molten: fill + border; two of the three AAAA/BBBB/CCCC tags fit into 80 px: two rects and one text each
+    CHECK(fake::g.rects.size() == 2 + 2 * 2);
+    CHECK(fake::g.drawn.size() == 3 && fake::g.drawn[0] == "Molten" && fake::g.drawn[1] == "AAAA" && fake::g.drawn[2] == "BBBB");
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "71.0 19.0");  // 34 + 3 + 34 wide, 13 + 6 tall
+    fs::remove_all(root, ec);
+}
+
+// plugins/healthbars: bars for champions, rares and bosses that are on screen and alive
+static void TestHealthBars() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"healthbars", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "healthbars: %s\n", err.c_str());
+        return;
+    }
+    fake::g.frame.screen_w = 1920.f;
+    fake::g.frame.screen_h = 1080.f;
+    fake::g.actors = {fake::Actor(D3H_ACTOR_CHAMPION, 100.f, 0.5f, "Champion"),
+                      fake::Actor(D3H_ACTOR_RARE, 200.f, 1.0f, "Rare"),
+                      fake::Actor(D3H_ACTOR_BOSS, 300.f, -1.f, "Boss, life not read"),
+                      fake::Actor(D3H_ACTOR_TRASH, 400.f, 1.0f, "Trash"),
+                      fake::Actor(D3H_ACTOR_RARE, 500.f, 0.f, "Dead rare"),
+                      fake::Actor(D3H_ACTOR_CHAMPION, -50.f, 0.7f, "Off screen")};
+    CHECK(fake::g.settings.SetNumber("healthbars.list", 0));  // the bars over the monsters first
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(!p->disabled());
+    // two bars (border, background, fill each) and their percentages (each drawn twice: shadow and text)
+    CHECK(fake::g.rects.size() == 6);
+    CHECK(fake::g.drawn.size() == 4 && fake::g.drawn[0] == "50%" && fake::g.drawn[2] == "100%");
+    if (fake::g.rects.size() == 6) {
+        const d3h_rect fill = fake::g.rects[2];  // the champion's: half of the 80 px bar
+        CHECK(std::fabs((fill.x1 - fill.x0) - 40.f) < 0.01f);
+    }
+
+    // the size option scales the bar: twice as large, so the half-filled bar is 80 px (160 * 0.5) wide
+    CHECK(fake::g.settings.SetNumber("healthbars.over_scale", 2));
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    if (fake::g.rects.size() == 6) {
+        const d3h_rect fill = fake::g.rects[2];
+        CHECK(std::fabs((fill.x1 - fill.x0) - 80.f) < 0.01f);
+    } else {
+        CHECK(false);
+    }
+    CHECK(fake::g.settings.SetNumber("healthbars.over_scale", 1));
+
+    // options: no champions, no percentages; the boss's life is read now
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::g.actors[2].hp_fraction = 0.9f;
+    CHECK(fake::g.settings.SetNumber("healthbars.champion", 0) && fake::g.settings.SetNumber("healthbars.percent", 0));
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.rects.size() == 6 && fake::g.drawn.empty());  // rare and boss
+
+    // the list on the side: a box, then one bar per elite with its name and percentage inside, nearest first
+    CHECK(fake::g.settings.SetNumber("healthbars.over", 0) && fake::g.settings.SetNumber("healthbars.list", 1) &&
+          fake::g.settings.SetNumber("healthbars.champion", 1));
+    fake::g.actors[0].name[0] = 'x';
+    strncpy_s(fake::g.actors[0].name, sizeof(fake::g.actors[0].name), "x1_Fallen_Champion", _TRUNCATE);
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(!p->disabled());
+    CHECK(fake::g.rects.size() == 1 + 3 * 3);  // box + champion, rare, boss
+    // per row: percentage (shadow, text) then name (shadow, text); the first row is the champion, 100 units away
+    CHECK(fake::g.drawn.size() == 12);
+    if (fake::g.drawn.size() == 12) {
+        CHECK(fake::g.drawn[0] == "50%" && fake::g.drawn[2] == "Fallen Champion");  // prettified name
+        CHECK(fake::g.drawn[8] == "90%" && fake::g.drawn[10] == "Boss, life not read");
+    }
+    // the box and the bars sit on the left (default) side, inside the screen
+    CHECK(fake::g.rects[0].x0 >= 0.f && fake::g.rects[0].x1 < 400.f);
+
+    // right side, lowest life first, no box
+    CHECK(fake::g.settings.SetNumber("healthbars.list_side", 1) && fake::g.settings.SetNumber("healthbars.list_sort", 1) &&
+          fake::g.settings.SetNumber("healthbars.list_box", 0));
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.rects.size() == 9 && fake::g.rects[0].x0 > 1920.f / 2);
+    CHECK(fake::g.drawn.size() == 12 && fake::g.drawn[0] == "50%");  // champion has the lowest life (0.5)
+
+    // a name too long for the bar is cut short
+    strncpy_s(fake::g.actors[0].name, sizeof(fake::g.actors[0].name), "AVeryLongMonsterNameThatCannotFitInTheBar", _TRUNCATE);
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    bool cut = false;
+    for (const std::string& d : fake::g.drawn) cut |= d.size() > 2 && d.ends_with("..");
+    CHECK(cut);
+
+    // affixes under the bars: only the ticked ones the monster has, in the game's order
+    fake::g.actors = {fake::Actor(D3H_ACTOR_CHAMPION, 100.f, 0.5f, "Champion",
+                                  (1u << FindMonsterAffixIndex(4131130388u)) | (1u << FindMonsterAffixIndex(106438735)) |
+                                      (1u << FindMonsterAffixIndex(1905614711)))};  // frozen, molten, orbiter
+    (void)fake::g.settings.SetNumber("healthbars.champion", 1);  // some of these already have the value
+    (void)fake::g.settings.SetNumber("healthbars.over", 1);
+    (void)fake::g.settings.SetNumber("healthbars.list", 0);
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    bool molten = false, frozen = false, orbiter = false;
+    for (const std::string& d : fake::g.drawn) {  // each affix has its own colour, so each is drawn on its own
+        molten |= d == "Molten";
+        frozen |= d == "Frozen";
+        orbiter |= d.find("Orbiter") != std::string::npos;  // not ticked by default
+    }
+    CHECK(molten && frozen && !orbiter);
+    CHECK(fake::g.rects.size() >= 4);  // each tag: a translucent fill and a border
+    CHECK(fake::g.settings.SetNumber("healthbars.affixes_show", 0));
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    bool anyMolten = false;
+    for (const std::string& d : fake::g.drawn) anyMolten |= d.find("Molten") != std::string::npos;
+    CHECK(!anyMolten);
+    CHECK(!p->disabled());
+
+    // the page: ticking an affix is remembered in the hidden setting
+    CHECK(fake::g.settings.SetNumber("healthbars.affixes_show", 1));
+    CHECK(fake::g.pages.size() == 1);
+    std::string keys;
+    CHECK(fake::g.settings.GetString("healthbars.affix_keys", keys) && keys.find("molten") != std::string::npos);
+
+    // the page shows all 30 affixes with a checkbox and a colour swatch each
+    fake::g.checkboxes = fake::g.swatches = 0;
+    fake::DrawPages();
+    CHECK(fake::g.checkboxes == 30 && fake::g.swatches == 30);
 }
 
 static void TestPaths() {
@@ -767,6 +1408,15 @@ int main() {
     TestSalvageAll();
     TestRiftTimer();
     TestPaths();
+    TestSettingsTable();
+    TestHostApi();
+    TestMonsterAffixes();
+    TestAffixMask();
+    TestPluginSettings();
+    TestLuaSandbox();
+    TestTimeTracker();
+    TestLuaLibraries();
+    TestHealthBars();
     TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();

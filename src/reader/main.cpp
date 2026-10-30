@@ -14,6 +14,7 @@
 #include <timeapi.h>
 
 #include <algorithm>
+#include <bit>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -29,6 +30,7 @@
 #include "AcdTable.h"
 #include "ActorList.h"
 #include "AttribTable.h"
+#include "MonsterAffixes.h"
 #include "BasesCache.h"
 #include "SceneTable.h"
 #include "AobScanner.h"
@@ -227,9 +229,28 @@ static bool GizmoUsed(const Process& proc, const AcdTable* acds, const AttribTab
     return (st != 0xFFFFFFFF && st != 0) || (op != 0xFFFFFFFF && op != 0);
 }
 
+// Current and maximum life of a monster from its attribute group (floats stored as u32). False when the
+// group is not located yet or the monster has no life attribute; the values are then left alone.
+// *missingGroup receives the attribute group id when no known block holds it (the caller adds it to the
+// next attribute block scan).
+static bool MonsterHp(const Process& proc, const AcdTable* acds, const AttribTable* attribs, const RawActor& a,
+                      float* cur, float* max, uint32_t* missingGroup = nullptr) {
+    AcdItemRecord r;
+    uint32_t c = 0, m = 0;
+    if (acds == nullptr || attribs == nullptr || !a.hasAcd() || !acds->ReadItem(proc, a.acd, &r)) return false;
+    const AttribTable::Result res = attribs->Get(proc, r.attribGroup, kAttrHitpointsCur, &c);
+    if (res == AttribTable::Result::Unresolved && missingGroup != nullptr) *missingGroup = r.attribGroup;
+    if (res != AttribTable::Result::Found) return false;
+    if (attribs->Get(proc, r.attribGroup, kAttrHitpointsMaxTotal, &m) != AttribTable::Result::Found) return false;
+    memcpy(cur, &c, sizeof(float));
+    memcpy(max, &m, sizeof(float));
+    return std::isfinite(*cur) && std::isfinite(*max) && *max > 0.f;
+}
+
 static int FillActors(const Process& proc, const AcdTable* acds, const AttribTable* attribs,
                       const std::vector<RawActor>& raw, const SnoTable& sno, Vec2 hint,
-                      WorldSnapshot* snap, RawActor* player, bool* havePlayer) {
+                      WorldSnapshot* snap, RawActor* player, bool* havePlayer,
+                      std::vector<uint32_t>* hpMissingGroups = nullptr) {
     *havePlayer = false;
     float best = 1e30f;
     int unresolvedCount = 0;
@@ -257,6 +278,19 @@ static int FillActors(const Process& proc, const AcdTable* acds, const AttribTab
         s.kind = kind;
         strncpy_s(s.name, info->name.c_str(), _TRUNCATE);
         s.itemFlags = 0;
+        s.currentHp = s.maxHp = 0.f;  // 0 = unknown (only elites and bosses are read)
+        s.affixMask = 0;
+        s.affixCount = 0;
+        if (kind == ActorKind::Champion || kind == ActorKind::Rare || kind == ActorKind::Boss) {
+            uint32_t missing = 0;
+            (void)MonsterHp(proc, acds, attribs, a, &s.currentHp, &s.maxHp, &missing);  // unreadable: stays unknown
+            if (missing != 0 && hpMissingGroups != nullptr) hpMissingGroups->push_back(missing);
+            uint32_t affixes = 0;
+            if (acds != nullptr && a.hasAcd() && acds->ReadAffixMask(proc, a.acd, &affixes)) {
+                s.affixMask = affixes;
+                s.affixCount = static_cast<uint8_t>(std::popcount(affixes));
+            }
+        }
         if ((kind == ActorKind::Pylon || kind == ActorKind::Shrine) && GizmoUsed(proc, acds, attribs, a))
             s.itemFlags = kActorFlagUsed;
     }
@@ -384,13 +418,83 @@ static int DumpActors(const Process& proc, const std::filesystem::path& snoPath)
         std::print("  [{:4}] {:<10} {:<45} pos=({:8.2f}, {:8.2f}, {:6.2f}){}\n", a.slot, ActorKindName(kind),
                info->name.c_str(), a.x, a.z, a.y, unresolved ? "  (acd not found)" : "");
     }
+    // attribute blocks, found through the groups of the actors whose attributes the dump shows
+    AttribTable attribs;
+    std::vector<uint32_t> groups;
+    for (const RawActor& a : raw) {
+        const SnoInfo* info = sno.Find(a.sno);
+        ActorKind kind;
+        uint32_t quality;
+        bool unresolved;
+        AcdItemRecord r;
+        if (!ClassifyWithQuality(proc, &acds, info, a, &kind, &quality, &unresolved) || !a.hasAcd()) continue;
+        const bool wanted = kind == ActorKind::Player || kind == ActorKind::Champion || kind == ActorKind::Rare ||
+                            kind == ActorKind::Boss || kind == ActorKind::Pylon || kind == ActorKind::Shrine;
+        if (wanted && acds.ReadItem(proc, a.acd, &r)) groups.push_back(r.attribGroup);
+    }
+    attribs.Discover(proc, groups, true);
     Vec2 player = {};
     WorldSnapshot snap;
     RawActor p;
     bool havePlayer = false;
-    FillActors(proc, &acds, nullptr, raw, sno, player, &snap, &p, &havePlayer);
+    FillActors(proc, &acds, &attribs, raw, sno, player, &snap, &p, &havePlayer);
     if (havePlayer) player = {p.x, p.z};
-    WriteActorDump(proc, &acds, nullptr, raw, sno, player, base);
+    WriteActorDump(proc, &acds, &attribs, raw, sno, player, base);
+    return 0;
+}
+
+// Research probe (--affixes): for every champion / rare / boss in view, scan its ACD record for the
+// GBIDs of the known monster affixes (MonsterAffixes.h) and say at which offsets they sit. The affix
+// list of a monster is not decoded yet; run this next to elites and read the offsets. The raw record of
+// each elite is also written to dumps/acd_<id>.bin for offline comparison.
+static int ProbeAffixes(const Process& proc, const std::filesystem::path& snoPath) {
+    SnoTable sno;
+    if (!LoadSno(snoPath, &sno)) return 1;
+    uint64_t base = 0;
+    int votes = 0;
+    if (!ActorList::FindBase(proc, &base, &votes, true)) {
+        std::print(stderr, "actor array not found (in menus? try again in-world)\n");
+        return 1;
+    }
+    ActorList list;
+    list.setBase(base);
+    std::vector<RawActor> raw;
+    if (!list.Read(proc, &raw)) std::print(stderr, "warning: the actor list is not readable\n");
+    const std::unordered_set<uint32_t> snoIds = sno.Ids();
+    AcdTable acds;
+    acds.Discover(proc, raw, &snoIds, false);
+    std::filesystem::create_directories(ExeDir() / "dumps");
+    int elites = 0, withAffixes = 0;
+    for (const RawActor& a : raw) {
+        const SnoInfo* info = sno.Find(a.sno);
+        ActorKind kind;
+        uint32_t quality;
+        bool unresolved;
+        if (!ClassifyWithQuality(proc, &acds, info, a, &kind, &quality, &unresolved)) continue;
+        if (kind != ActorKind::Champion && kind != ActorKind::Rare && kind != ActorKind::Boss) continue;
+        ++elites;
+        std::vector<uint8_t> rec(kAcdStride);
+        if (!a.hasAcd() || !acds.ReadRaw(proc, a.acd, rec.data())) {
+            std::print("{:<8} {:<40} acd {:08X}: record not found\n", ActorKindName(kind), info->name, a.acd);
+            continue;
+        }
+        std::print("{:<8} {:<40} acd {:08X} quality {}\n", ActorKindName(kind), info->name, a.acd, quality);
+        bool any = false;
+        for (uint32_t off = 0; off + 4 <= kAcdStride; off += 4) {
+            uint32_t w;
+            memcpy(&w, rec.data() + off, 4);
+            if (const MonsterAffixInfo* af = FindMonsterAffix(w)) {
+                std::print("    +0x{:03X}  {} ({})\n", off, af->name, w);
+                any = true;
+            }
+        }
+        withAffixes += any;
+        if (!any) std::print("    no known affix id in the record\n");
+        const std::filesystem::path out = ExeDir() / "dumps" / std::format("acd_{:08X}.bin", a.acd);
+        if (File f = OpenFile(out, L"wb")) fwrite(rec.data(), 1, rec.size(), f);
+    }
+    std::print("{} elites in view, {} with affix ids found in their ACD record\n", elites, withAffixes);
+    if (elites == 0) std::print("stand near a champion pack or rare and run this again\n");
     return 0;
 }
 
@@ -454,6 +558,12 @@ static void WriteActorDump(const Process& proc, const AcdTable* acds, const Attr
             snprintf(gtext, sizeof(gtext), "%d/%d%s", static_cast<int>(st), static_cast<int>(op), used ? " used" : "");
         }
         shown += drawn;
+        if (drawn && (kind == ActorKind::Champion || kind == ActorKind::Rare || kind == ActorKind::Boss)) {
+            // elites and bosses: Hitpoints_Cur / Hitpoints_Max_Total go into the gizmo column
+            float cur = 0.f, max = 0.f;
+            if (MonsterHp(proc, acds, attribs, a, &cur, &max)) snprintf(gtext, sizeof(gtext), "hp %.0f/%.0f", cur, max);
+            else snprintf(gtext, sizeof(gtext), "hp ?");
+        }
         static const char kHex[] = "0123456789abcdef";
         if (proc.Read(base + static_cast<uint64_t>(a.slot) * kActorStride, rec.data(), rec.size())) {
             for (size_t i = 0; i < rec.size(); ++i) {
@@ -752,6 +862,17 @@ static void CurrentWorldScenes(const std::vector<SceneRecord>& all, Vec2 player,
             out->push_back({s.sno, s.x0, s.y0, s.x1, s.y1});
 }
 
+// A stable id for the kind of place the player is in. The game's world ids are per instance (every
+// rift and bounty zone gets a new one) and the world SNO has not been found in memory, so use what
+// is constant per place: the lowest SNO among the scenes of the current world (a town always loads the
+// same scene tiles). 0 = unknown. Stored in WorldSnapshot::worldSnoId.
+static uint32_t AreaKey(const std::vector<SceneSnapshot>& scenes) {
+    uint32_t key = 0;
+    for (const SceneSnapshot& s : scenes)
+        if (s.sno != 0 && (key == 0 || s.sno < key)) key = s.sno;
+    return key;
+}
+
 // Live loop: actor list when available (all dots + player), else the
 // standing-cluster player tracker (player only). F10 writes a debug dump.
 static double g_publishHz = 60.0;  // --hz
@@ -861,6 +982,8 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
     std::vector<ItemSnapshot> inventory, stash;
     std::unordered_map<uint32_t, ItemSnapshot> groundCache;  // acd id -> described ground item
     std::vector<uint32_t> itemGroups;  // attribute group ids of the current inventory + stash
+    std::vector<uint32_t> hpGroups;    // elites whose life attribute is in no known block yet
+    ULONGLONG hpScanAt = 0;
     // map prediction: scene shapes (file) + the scenes in memory (found in the background)
     SceneCells sceneCells;
     if (sceneCells.Load(snoPath.parent_path() / "scene_cells.bin"))
@@ -869,6 +992,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         std::print(stderr, "cannot load scene_cells.bin - no map prediction\n");
     std::vector<SceneRecord> sceneRecords;
     std::vector<SceneSnapshot> worldScenes;
+    uint32_t areaKey = 0;  // see AreaKey: kept while the player is in no known scene
     AcdScanJob acdJob{&proc, &acds,     &attribs, &snoIds, &sceneTable, &sceneCells,
                  {},  {},         false,    false,   {},          &actors,
                  &gameUi,     cachePath, false};
@@ -907,6 +1031,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         }
         acdJob.snapshot = actorsToo ? raw : std::vector<RawActor>{};
         acdJob.groupIds = itemGroups;
+        acdJob.groupIds.insert(acdJob.groupIds.end(), hpGroups.begin(), hpGroups.end());
         acdJob.scanScenes = scenesToo && sceneCells.sceneCount() > 0;
         acdJob.scanUi = false;
         acdJob.player = lastPlayer;
@@ -962,11 +1087,16 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
             if (readOk) {
                 LARGE_INTEGER fillStart;
                 QueryPerformanceCounter(&fillStart);
+                hpGroups.clear();
                 const int unresolved =
-                    FillActors(proc, &acds, &attribs, raw, sno, lastPlayer, &snap, &player, &havePlayer);
+                    FillActors(proc, &acds, &attribs, raw, sno, lastPlayer, &snap, &player, &havePlayer, &hpGroups);
                 statFill += msSince(fillStart);
                 statUnresolved = unresolved;
                 const ULONGLONG now = GetTickCount64();
+                if (!hpGroups.empty() && !acdJob.busy && now - hpScanAt > 5000) {  // find the blocks of new elites' groups
+                    hpScanAt = now;
+                    startScan(false, false);
+                }
                 if (unresolved == 0) {
                     unresolvedSince = 0;
                 } else if (unresolvedSince == 0) {
@@ -1036,6 +1166,8 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                     startScan(false, true);
                 }
             }
+            if (const uint32_t key = AreaKey(worldScenes); key != 0) areaKey = key;
+            snap.worldSnoId = areaKey;
             snap.sceneCount = static_cast<uint32_t>(worldScenes.size());
             std::copy(worldScenes.begin(), worldScenes.end(), snap.scenes);
             snap.itemCount = static_cast<uint16_t>(inventory.size());
@@ -1213,6 +1345,7 @@ int main(int argc, char** argv) {
     bool dumpActors = false;
     bool dumpItems = false;
     bool dumpScenes = false;
+    bool probeAffixes = false;
     const char* uiFilter = nullptr;
     const char* uiWatch = nullptr;  // --ui-watch <substring>
     double publishSeconds = 0;  // 0 = forever
@@ -1227,6 +1360,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--actors")) dumpActors = true;
         else if (!strcmp(argv[i], "--items")) dumpItems = true;
         else if (!strcmp(argv[i], "--scenes")) dumpScenes = true;
+        else if (!strcmp(argv[i], "--affixes")) probeAffixes = true;
         else if (!strcmp(argv[i], "--ui") && i + 1 < argc) uiFilter = argv[++i];
         else if (!strcmp(argv[i], "--ui-watch") && i + 1 < argc) uiWatch = argv[++i];
         else if (!strcmp(argv[i], "--sno") && i + 1 < argc) snoPath = argv[++i];
@@ -1288,6 +1422,7 @@ int main(int argc, char** argv) {
         if (dumpActors) return DumpActors(*proc, sno);
         if (dumpItems) return DumpItems(*proc, sno);
         if (dumpScenes) return DumpScenes(*proc, sno);
+        if (probeAffixes) return ProbeAffixes(*proc, sno);
         if (uiWatch != nullptr) {
             // --ui-watch <substring> [--seconds N]: poll the memory of the matching UI controls
             // and report which 4-byte fields change (and how often). A value that only ever
