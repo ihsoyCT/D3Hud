@@ -205,6 +205,24 @@ private:
     // `defaultSize` > 0 makes the panel user-resizable (size remembered).
     bool PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize = ImVec2(0.f, 0.f));
     void PanelEnd(PanelId id, bool wasOpen);
+    // An open panel for the length of a scope: PanelEnd runs on every way out (early returns included).
+    //   PanelScope panel(*this, PanelId::Items, opt, "Items");
+    //   if (!panel) return;   // collapsed: nothing to draw
+    class PanelScope {
+    public:
+        PanelScope(HudRenderer& r, PanelId id, const HudOptions& opt, const char* title,
+                   ImVec2 defaultSize = ImVec2(0.f, 0.f))
+            : r_(r), id_(id), open_(r.PanelOpen(id, opt, title, defaultSize)) {}
+        ~PanelScope() { r_.PanelEnd(id_, open_); }
+        PanelScope(const PanelScope&) = delete;
+        PanelScope& operator=(const PanelScope&) = delete;
+        explicit operator bool() const { return open_; }
+
+    private:
+        HudRenderer& r_;
+        PanelId id_;
+        bool open_;
+    };
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
     void SaveLayout();  // layout_.Save + status line

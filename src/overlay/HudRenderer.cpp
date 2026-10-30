@@ -712,7 +712,8 @@ void HudRenderer::DrawMinimapSettings() {
 
 // Debug view: every actor the minimap receives this frame, nearest first.
 void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& opt) {
-    if (!PanelOpen(PanelId::Actors, opt, "Actors (minimap source)")) return;
+    PanelScope panel(*this, PanelId::Actors, opt, "Actors (minimap source)");
+    if (!panel) return;
 
     int perKind[static_cast<int>(ActorKind::RiftOrbTiered) + 1] = {};
     std::vector<std::pair<float, uint16_t>> order;
@@ -771,11 +772,11 @@ void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& op
         }
         ImGui::EndTable();
     }
-    PanelEnd(PanelId::Actors, true);
 }
 
 void HudRenderer::DrawSalvagePanel(const WorldSnapshot& snap, const HudOptions& opt) {
-    if (!PanelOpen(PanelId::Items, opt, "Items")) return;
+    PanelScope panel(*this, PanelId::Items, opt, "Items");
+    if (!panel) return;
     // live items carry a location; synthetic ones (M0 fake data) do not
     const bool live = snap.itemCount > 0 && snap.items[0].location != kItemLocationUnknown;
     ImGui::Text("%u items %s", snap.itemCount,
@@ -854,7 +855,6 @@ void HudRenderer::DrawSalvagePanel(const WorldSnapshot& snap, const HudOptions& 
         }
         ImGui::EndTable();
     }
-    PanelEnd(PanelId::Items, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1028,7 +1028,8 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
 
 void HudRenderer::DrawInfo(const WorldSnapshot& snap, const HudOptions& opt, double fps,
                            const char* sourceName) {
-    if (!PanelOpen(PanelId::Info, opt, "Info")) return;
+    PanelScope panel(*this, PanelId::Info, opt, "Info");
+    if (!panel) return;
     ImGui::Text("D3Hud M0 | source: %s", sourceName);
     ImGui::Text("frame %llu  %.0f fps", static_cast<unsigned long long>(snap.frameIndex), fps);
     ImGui::Text("actors %u  items %u", snap.actorCount, snap.itemCount);
@@ -1063,7 +1064,6 @@ void HudRenderer::DrawInfo(const WorldSnapshot& snap, const HudOptions& opt, dou
         ImGui::Text("%s map orientation | %s click-through | %s panels | %s quit", k[MinimapLayout::kHkMapOrientation],
                     k[MinimapLayout::kHkClickThrough], k[MinimapLayout::kHkPanels], k[MinimapLayout::kHkQuit]);
     }
-    PanelEnd(PanelId::Info, true);
 }
 
 // Labels above legendary/set/bonus items lying in the world, like the game's own
@@ -1276,7 +1276,8 @@ bool HudRenderer::ExportDropsCsv(const std::filesystem::path& path) const {
 // The drop log, newest first: still on the ground, picked up (now in the
 // backpack/equipped) or gone (out of range, salvaged, despawned).
 void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& opt) {
-    if (!PanelOpen(PanelId::Drops, opt, "Drops")) return;
+    PanelScope panel(*this, PanelId::Drops, opt, "Drops");
+    if (!panel) return;
     {
         const double now = ImGui::GetTime(), secs = now - sessionStartT_;
         char ses[24], run[24];
@@ -1376,7 +1377,6 @@ void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& op
             ImGui::EndTable();
         }
     }
-    PanelEnd(PanelId::Drops, true);
 }
 
 // "A" (ancient) / "P" (primal), with the augment rank in front ("125A"), in the
@@ -2031,9 +2031,9 @@ void HudRenderer::DrawLabelSettings() {
 
 void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    if (!PanelOpen(PanelId::Settings, opt, "Settings",
-                   ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f))))
-        return;
+    PanelScope panel(*this, PanelId::Settings, opt, "Settings",
+                     ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f)));
+    if (!panel) return;
     // entries: the four panel pages (PanelId order) sit together; the rest are feature pages
     enum Entry { kGeneral, kHotkeys, kProfiles, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kReader, kEntryCount };
     static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Profiles", "Info", "Drops", "Items", "Actors",
@@ -2096,7 +2096,6 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         DrawSalvageSettings();
     }
     ImGui::EndChild();
-    PanelEnd(PanelId::Settings, true);
 }
 
 // While the game shows the tooltip of an UNIDENTIFIED item: a compact card left
