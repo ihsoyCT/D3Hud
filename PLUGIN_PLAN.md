@@ -29,6 +29,29 @@ Info, Salvage, ItemBadges, GroundLabels. Each has `OnSnapshot`, `Draw`,
 `Settings`, `Load`/`Save`. The built-ins become the first plugins, so the
 interface is exercised before any script uses it.
 
+## Step 0b: settings registry and typed store (same step as the split)
+
+Today the Settings window is a hard-coded list of pages and `MinimapLayout`
+has hand-written ini `Load`/`Save`. Plugins cannot hook into that, so
+abstract it first, and make the built-in features use it:
+
+- **Settings pages are a registry.** The built-ins (Minimap, Auto salvage,
+  Hotkeys, Ground labels, ...) are registered pages exactly like plugin pages.
+  A page has an id, title, group, order and either a schema (auto-rendered) or
+  a `draw()` callback using the curated widget set. Plugins get their own tab
+  or group in the left list; the host owns the two-column window, resizing,
+  scale and persistence of the window itself.
+- **Typed settings store.** Values keyed `plugin.key` with a schema (type,
+  default, range). Replaces the hand-written Load/Save; each plugin gets its
+  own section in `d3hud.ini`. Profiles, "reset everything" and "open settings
+  folder" then cover plugins automatically.
+- **Extras plugins can register:** hotkeys (shown in the Hotkeys tab,
+  namespaced so plugins cannot clash), `on_setting_changed` events, a per-plugin
+  "reset to defaults", and a settings version so a plugin can migrate old
+  values.
+- The host does all saving; plugins never write files (capability-gated like
+  the rest of the API).
+
 ## Step 1: the host API
 
 The core of the design. A plain-C struct of function pointers plus POD snapshot
@@ -55,9 +78,11 @@ and DLLs both get it.
 - `ui.hot_rect(...)`: a region where the overlay takes clicks without F8, as
   the salvage button does.
 
-**Settings**
-- `settings.define{key, type, default, min, max}`: the host renders these in the
-  Settings panel and saves them per plugin. Plugins never touch files.
+**Settings** (see Step 0b)
+- `settings.define{key, type, default, min, max}`: auto-rendered in the plugin's
+  settings page and saved per plugin. Plugins never touch files.
+- `settings.page{title, group, draw=fn}`: a custom page for anything the schema
+  cannot express (tables, previews, key capture).
 
 **Policy hooks** (the core calls them for user-customisable rules)
 - Main example: `salvage_verdict(item) -> keep | junk | check`.
@@ -96,7 +121,8 @@ and DLLs both get it.
 
 ## Milestones
 
-1. Split HudRenderer into features, no behaviour change.
+1. Split HudRenderer into features, no behaviour change; add the settings
+   page registry and typed store, and move the built-in pages onto them.
 2. Write the host API header; bind it to the built-ins.
 3. Lua runtime, loader, sandbox, manifest.
 4. Port Drops and the marker styles to Lua as the proof.
