@@ -651,7 +651,9 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
                         cur.x >= panelPos_[i].x - 4 && cur.x <= panelPos_[i].x + panelSize_[i].x + 4 &&
                         cur.y >= panelPos_[i].y - 4 && cur.y <= panelPos_[i].y + panelSize_[i].y + 4;
     if (inRect) panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;  // linger
-    const bool expanded = layout_.panelPinned[i] || ImGui::GetTime() < panelHoverUntil_[i];
+    // Settings is an editor, not a peek: it opens only when pinned (F8 + click on its tab)
+    const bool peek = id != PanelId::Settings && ImGui::GetTime() < panelHoverUntil_[i];
+    const bool expanded = layout_.panelPinned[i] || peek;
     if (!expanded) {
         panelSize_[i] = ImVec2(0.f, 0.f);  // no stale rect: a collapsed panel has no hover area
         return false;
