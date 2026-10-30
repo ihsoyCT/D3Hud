@@ -1,6 +1,7 @@
 #include "HudRenderer.h"
 
 #include <algorithm>
+#include <bit>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -1703,10 +1704,13 @@ void HudRenderer::DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& o
 // dimmed, in the stash tab and backpack that are on screen. Other tabs with matches
 // are listed. Typing works through the overlay's keyboard hand-off (main.cpp).
 void HudRenderer::UpdateStashCache(const WorldSnapshot& snap) {
-    if (!snap.ui.stashOpen || snap.ui.stashTab < 0) {
+    if (!snap.ui.stashOpen) {
         lastStashTab_ = -1;
         return;
     }
+    if (snap.ui.stashPage >= 0 && snap.ui.stashPage < 4 && snap.ui.stashTabMask != 0)
+        pageTabCount_[snap.ui.stashPage] = std::popcount(static_cast<unsigned>(snap.ui.stashTabMask));
+    if (snap.ui.stashTab < 0) return;  // no tab selected for a moment (button animation): keep the state
     const double now = ImGui::GetTime();
     const int tab = std::min(63, static_cast<int>(snap.ui.stashTab));
     if (tab != lastStashTab_) {
@@ -1723,8 +1727,9 @@ void HudRenderer::UpdateStashCache(const WorldSnapshot& snap) {
             stashSeen_[t] = true;
         }
     // an empty open tab is empty only once it has been shown for a moment (the reader may still be loading)
-    if (stashCache_[tab].empty() ? !stashSeen_[tab] && now - stashTabSince_ > 1.5
-                                 : now - stashTabSince_ > 1.5 && snap.itemCount > 0) {
+    constexpr double kDwell = 0.6;  // shown this long with no items reported: the tab is empty
+    if (stashCache_[tab].empty() ? !stashSeen_[tab] && now - stashTabSince_ > kDwell
+                                 : now - stashTabSince_ > kDwell && snap.itemCount > 0) {
         bool live = false;
         for (uint16_t i = 0; i < snap.itemCount && !live; ++i)
             live = snap.items[i].location == kItemLocationStash && snap.items[i].gridY / kStashRowsPerTab == tab;
@@ -1785,10 +1790,11 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
     // box is limited to the pitch between buttons.
     if (snap.ui.stashOpen) {
         auto screen = [&](const UiRect& ui) { return UiToScreen(ui, display.x, display.y); };
-        auto pitch = [&](const UiRect* rects, int n, bool horizontal) {
+        auto pitch = [&](const UiRect* rects, int n, unsigned mask, bool horizontal) {
             float c[8], best = 0.0f;
             int m = 0;
             for (int i = 0; i < n; ++i) {
+                if (((mask >> i) & 1) == 0) continue;  // button does not exist
                 const UiRect r = screen(rects[i]);
                 if (r.x1 - r.x0 >= 4.0f && r.y1 - r.y0 >= 4.0f) c[m++] = horizontal ? (r.x0 + r.x1) * 0.5f : (r.y0 + r.y1) * 0.5f;
             }
@@ -1796,7 +1802,8 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
             for (int i = 1; i < m; ++i) best = (best == 0.0f) ? c[i] - c[i - 1] : std::min(best, c[i] - c[i - 1]);
             return best;
         };
-        const float pitchX = pitch(snap.ui.stashPageRect, 4, true), pitchY = pitch(snap.ui.stashTabRect, 5, false);
+        const float pitchX = pitch(snap.ui.stashPageRect, 4, snap.ui.stashPageMask, true);
+        const float pitchY = pitch(snap.ui.stashTabRect, 5, snap.ui.stashTabMask, false);
         auto box = [&](const UiRect& ui, float px, float py, float inset, ImVec2* a, ImVec2* b) {
             const UiRect r = screen(ui);
             if (r.x1 - r.x0 < 4.0f || r.y1 - r.y0 < 4.0f) return false;  // control not laid out
@@ -1823,14 +1830,17 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
         };
         const int shownPage = snap.ui.stashPage >= 0 ? snap.ui.stashPage : (snap.ui.stashTab >= 0 ? snap.ui.stashTab / 5 : 0);
         for (int pg = 0; pg < 4; ++pg) {
+            if (((snap.ui.stashPageMask >> pg) & 1) == 0) continue;  // page not owned
+            const int tabs = pageTabCount_[pg] > 0 ? pageTabCount_[pg] : 5;  // unknown until the page was shown
             int seen = 0, matches = 0;
             for (int t = 0; t < 5; ++t) {
                 seen += stashSeen_[pg * 5 + t] ? 1 : 0;
                 matches += perTab[pg * 5 + t];
             }
-            mark(snap.ui.stashPageRect[pg], pitchX, 0.0f, seen == 0 ? 0.35f : seen < 5 ? 0.15f : 0.0f, matches);
+            mark(snap.ui.stashPageRect[pg], pitchX, 0.0f, seen == 0 ? 0.35f : seen < tabs ? 0.15f : 0.0f, matches);
         }
         for (int t = 0; t < 5; ++t) {
+            if (((snap.ui.stashTabMask >> t) & 1) == 0) continue;  // this page has fewer tabs
             const int g = shownPage * 5 + t;
             mark(snap.ui.stashTabRect[t], 0.0f, pitchY, g < 64 && !stashSeen_[g] ? 0.35f : 0.0f, g < 64 ? perTab[g] : 0);
         }

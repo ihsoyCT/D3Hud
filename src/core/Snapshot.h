@@ -11,7 +11,7 @@
 
 namespace d3hud {
 
-constexpr uint32_t kSnapshotVersion = 7;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects
+constexpr uint32_t kSnapshotVersion = 8;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist
 constexpr int kMaxScenes = 512;  // scenes of the current world (a rift has ~100-250)
 constexpr int kMaxActors = 256;
 constexpr int kMaxItems = 256;  // inventory + equipped + the visible stash tab (70)
@@ -176,6 +176,8 @@ struct UiLayout {
     UiRect stashTabRect[5];   // the stash tab buttons of the selected page
     UiRect stashPageRect[4];  // the stash page buttons (chests at the top)
     int8_t stashPage = -1;    // selected page, -1 unknown
+    uint8_t stashTabMask = 0;   // bit t: tab button t of the shown page exists (pages have 1..5 tabs)
+    uint8_t stashPageMask = 0;  // bit p: page button p exists (the account owns that page)
 };
 
 // The rift progress bar's marker slides along the bar: its left edge is the bar's left edge at

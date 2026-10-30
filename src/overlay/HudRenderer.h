@@ -216,6 +216,7 @@ private:
     void UpdateStashCache(const WorldSnapshot& snap);
     std::vector<ItemSnapshot> stashCache_[64];
     bool stashSeen_[64] = {};
+    int pageTabCount_[4] = {};  // tabs a page has, learned while the page is shown (0 = unknown)
     int lastStashTab_ = -1;
     double stashTabSince_ = 0.0;
     char searchQuery_[64] = {};
