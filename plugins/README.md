@@ -13,7 +13,9 @@ current one is 1). The overlay loads every folder at start; **restart the overla
 `timetracker/` (time per area: page, options, dock panel) and `healthbars/` (draws on the screen from
 `actors()`) are complete examples.
 
-The Plugins page in Settings lists every plugin, whether it runs, its errors and its log lines.
+The Plugins page in Settings lists every plugin, whether it runs, its errors, its log lines and what it costs:
+microseconds spent in its code per drawn frame (average and peak, event handlers and page / panel drawing
+included), so a slow plugin is easy to spot.
 `D3Hud.Overlay.exe --settings-page timetracker.timetracker` opens Settings on one page (ids are
 `<plugin>.<page id>`, and `<plugin>.settings` for the automatic options page).
 

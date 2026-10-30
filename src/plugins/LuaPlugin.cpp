@@ -1,6 +1,7 @@
 #include "LuaPlugin.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iterator>
 #include <cstdio>
@@ -537,11 +538,23 @@ void LuaPlugin::Fail(const std::string& msg) {
     host_.log(D3H_LOG_ERROR, line.c_str());
 }
 
+void LuaPlugin::EndFrame() {
+    timing_.lastUs = accumUs_;
+    timing_.calls = accumCalls_;
+    timing_.avgUs += (accumUs_ - timing_.avgUs) * 0.02;  // ~50 frames
+    timing_.peakUs = std::max(accumUs_, timing_.peakUs * 0.98);
+    accumUs_ = 0;
+    accumCalls_ = 0;
+}
+
 bool LuaPlugin::Run(int nargs, int nresults) {
     const PluginScope scope(&manifest_.name);
+    const auto started = std::chrono::steady_clock::now();
     lua_sethook(L_, BudgetHook, LUA_MASKCOUNT, kInstructionBudget);
     const int rc = lua_pcall(L_, nargs, nresults, 0);
     lua_sethook(L_, nullptr, 0, 0);
+    accumUs_ += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+    ++accumCalls_;
     if (rc == LUA_OK) return true;
     Fail(lua_isstring(L_, -1) ? lua_tostring(L_, -1) : "(error object)");
     lua_pop(L_, 1);
@@ -741,6 +754,8 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
     }
     lua_pop(L, 1);  // env
     p->errors_ = 0;
+    p->accumUs_ = 0;  // loading is not per-frame cost
+    p->accumCalls_ = 0;
     return p;
 }
 

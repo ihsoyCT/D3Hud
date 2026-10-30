@@ -50,6 +50,17 @@ public:
     [[nodiscard]] int errorCount() const { return errors_; }
     [[nodiscard]] const std::string& lastError() const { return lastError_; }
 
+    // Time spent inside the plugin's code (events, page and panel draws), per drawn frame.
+    struct Timing {
+        double lastUs = 0;  // the previous frame
+        double avgUs = 0;   // smoothed over roughly the last second
+        double peakUs = 0;  // worst recent frame, decaying
+        double calls = 0;   // calls into the plugin in the previous frame
+    };
+    // Closes the books of one drawn frame; the host calls it once per frame.
+    void EndFrame();
+    [[nodiscard]] const Timing& timing() const { return timing_; }
+
 private:
     struct PageCtx {
         LuaPlugin* plugin;
@@ -71,6 +82,9 @@ private:
     std::unique_ptr<LuaHeap> heap_;
     PluginManifest manifest_;
     int errors_ = 0;
+    Timing timing_;
+    double accumUs_ = 0;
+    int accumCalls_ = 0;
     std::string lastError_;
     int handlersRef_ = 0;  // registry table: event type -> array of Lua functions
     int uiRef_ = 0;        // registry: the `ui` table handed to page draw functions

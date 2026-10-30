@@ -437,6 +437,13 @@ void PluginHost::DrawSettingsOf(const std::string& plugin) {
 void PluginHost::DrawPluginsPage() {
     ImGui::TextDisabled("Lua plugins from the plugins folder next to the exe. See PLUGIN_PLAN.md and plugins/ for examples.");
     if (plugins_.empty()) ImGui::TextUnformatted("No plugins found.");
+    double totalUs = 0;
+    for (const Entry& e : plugins_)
+        if (e.plugin != nullptr) totalUs += e.plugin->timing().avgUs;
+    if (!plugins_.empty()) {
+        ImGui::Text("Time in plugin code: %.0f us per frame (%.2f%% of a 60 fps frame)", totalUs, totalUs / 166.67);
+        ImGui::TextDisabled("Per drawn frame, averaged over about a second. Includes event handlers and page / panel drawing.");
+    }
     for (const Entry& e : plugins_) {
         ImGui::SeparatorText(e.version.empty() ? e.name.c_str() : std::format("{} {}", e.name, e.version).c_str());
         if (e.plugin == nullptr) {
@@ -449,6 +456,11 @@ void PluginHost::DrawPluginsPage() {
                                e.plugin->lastError().c_str());
         } else {
             ImGui::TextUnformatted("running");
+        }
+        if (e.plugin != nullptr) {
+            const LuaPlugin::Timing& t = e.plugin->timing();
+            ImGui::Text("%.0f us per frame (peak %.0f us, %.1f calls per frame, %.2f%% of a 60 fps frame)", t.avgUs, t.peakUs,
+                        t.calls, t.avgUs / 166.67);
         }
     }
     if (!log_.empty()) {
@@ -464,6 +476,8 @@ void PluginHost::Fire(int32_t type, int32_t index, int64_t value, const char* te
 }
 
 void PluginHost::OnFrame(const WorldSnapshot& snap, float screenW, float screenH) {
+    for (const Entry& e : plugins_)
+        if (e.plugin != nullptr) e.plugin->EndFrame();  // the previous frame's calls, page draws included
     snap_ = &snap;
     screenW_ = screenW;
     screenH_ = screenH;

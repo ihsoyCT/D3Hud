@@ -707,6 +707,17 @@ static void TestLuaSandbox() {
     CHECK(bad->disabled() && bad->errorCount() == LuaPlugin::kMaxErrors);
     CHECK(!fake::g.logs.empty() && fake::g.logs[0].find("[testplugin]") == 0 && fake::g.logs[0].find("boom") != std::string::npos);
 
+    // time spent in plugin code is measured per frame
+    fake::g.Reset();
+    auto busy = load("busy", "d3hud.on('frame', function() local n = 0 for i = 1, 300000 do n = n + i end end)");
+    CHECK(busy != nullptr && busy->timing().avgUs == 0.0);
+    for (int i = 0; i < 5; ++i) {
+        fake::Fire(D3H_EVENT_FRAME);
+        busy->EndFrame();
+    }
+    CHECK(busy->timing().lastUs > 0.0 && busy->timing().avgUs > 0.0 && busy->timing().peakUs >= busy->timing().lastUs);
+    CHECK(busy->timing().calls == 1.0);
+
     // events carry their data; settings round trip through the host
     fake::g.Reset();
     auto ok = load("events", "d3hud.setting{ key = 'n', type = 'int', default = 2, min = 0, max = 9 }\n"

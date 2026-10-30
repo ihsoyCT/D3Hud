@@ -121,7 +121,7 @@ can be resized by dragging its bottom-right corner, and the size is remembered.
 | Ground labels | Which items get labels, text size, colours |
 | Auto salvage | Safe area, rules, speed options, run safety, preview colour |
 | Reader / diagnostics | Autostart the reader, publish rate, on-screen diagnostics, open the settings folder, reset everything |
-| Plugins | Every loaded plugin with its status and log; plugins add their own pages and options here |
+| Plugins | Every loaded plugin with its status, the time it costs per frame, and its log; plugins add their own pages and options here |
 
 Most changes are saved immediately; on the Minimap page press **Save**.
 
