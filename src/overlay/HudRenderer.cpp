@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <print>
 #include <vector>
 
@@ -1295,6 +1296,63 @@ void HudRenderer::DrawHotkeySettings() {
     }
 }
 
+// Settings > Profiles: whole setups (layout, markers, labels, hotkeys, safe area) as
+// d3hud.<name>.ini files next to d3hud.ini.
+void HudRenderer::DrawProfileSettings() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::path(layoutPath_).parent_path();
+    auto pathOf = [&](const std::string& name) { return (dir / ("d3hud." + name + ".ini")).string(); };
+    if (profilesDirty_) {
+        profilesDirty_ = false;
+        profiles_.clear();
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(dir, ec)) {
+            const std::string fn = e.path().filename().string();  // d3hud.<name>.ini
+            if (fn.size() > 10 && fn.rfind("d3hud.", 0) == 0 && fn.compare(fn.size() - 4, 4, ".ini") == 0)
+                profiles_.push_back(fn.substr(6, fn.size() - 10));
+        }
+        std::sort(profiles_.begin(), profiles_.end());
+    }
+    ImGui::TextDisabled("A profile stores everything in d3hud.ini: panel layout, markers, labels, hotkeys, safe area.");
+    ImGui::SetNextItemWidth(200.0f * layout_.uiScale);
+    ImGui::InputText("##profile_name", profileName_, sizeof(profileName_));
+    ImGui::SameLine();
+    if (ImGui::Button("Save current as profile")) {
+        std::string name;
+        for (const char* c = profileName_; *c != '\0'; ++c)
+            if (isalnum(static_cast<unsigned char>(*c)) || *c == '-' || *c == '_') name += *c;
+        if (!name.empty()) {
+            layoutStatus_ = layout_.Save(pathOf(name).c_str()) ? "profile saved" : "profile save failed";
+            profilesDirty_ = true;
+        }
+    }
+    ImGui::Separator();
+    if (profiles_.empty()) ImGui::TextDisabled("no profiles yet");
+    std::string toDelete;
+    for (const std::string& name : profiles_) {
+        ImGui::PushID(name.c_str());
+        ImGui::TextUnformatted(name.c_str());
+        ImGui::SameLine(220.0f * layout_.uiScale);
+        if (ImGui::SmallButton("Load")) {
+            MinimapLayout fresh;
+            if (fresh.Load(pathOf(name).c_str())) {
+                layout_ = fresh;
+                hotkeysDirty_ = true;
+                layoutStatus_ = layout_.Save(layoutPath_) ? "profile loaded" : "profile loaded (save failed)";
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Delete")) toDelete = name;
+        ImGui::PopID();
+    }
+    if (!toDelete.empty()) {
+        std::error_code ec;
+        fs::remove(pathOf(toDelete), ec);
+        profilesDirty_ = true;
+    }
+    ImGui::TextDisabled("%s", layoutStatus_);
+}
+
 // Settings > Ground labels.
 void HudRenderer::DrawLabelSettings() {
     LabelStyle& L = layout_.labels;
@@ -1330,8 +1388,8 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
                    ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f))))
         return;
     // entries: the four panel pages (PanelId order) sit together; the rest are feature pages
-    enum Entry { kGeneral, kHotkeys, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kEntryCount };
-    static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Info", "Drops", "Items", "Actors",
+    enum Entry { kGeneral, kHotkeys, kProfiles, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kEntryCount };
+    static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Profiles", "Info", "Drops", "Items", "Actors",
                                                 "Minimap", "Ground labels", "Auto salvage"};
     ImGui::BeginChild("##settings_list", ImVec2(150.0f * layout_.uiScale, 0.0f), true);
     for (int i = 0; i < kEntryCount; ++i)
@@ -1358,6 +1416,8 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
     } else if (settingsTab_ == kHotkeys) {
         DrawHotkeySettings();
+    } else if (settingsTab_ == kProfiles) {
+        DrawProfileSettings();
     } else if (settingsTab_ >= kInfo && settingsTab_ <= kActors) {
         const int i = settingsTab_ - kInfo;
         bool changed = false;

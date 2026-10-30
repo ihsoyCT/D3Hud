@@ -2,6 +2,7 @@
 // snapshots from any source, owns no state beyond options.
 #pragma once
 
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -164,6 +165,10 @@ private:
     void DrawMinimapSettings();
     void DrawHotkeySettings();
     void DrawLabelSettings();
+    void DrawProfileSettings();
+    std::vector<std::string> profiles_;  // names of d3hud.<name>.ini next to d3hud.ini
+    bool profilesDirty_ = true;
+    char profileName_[32] = {};
     bool hotkeysDirty_ = true;
     bool captureReady_ = false;  // no key held since the capture began
     int captureHotkey_ = -1;  // hotkey action waiting for a key press, or -1
