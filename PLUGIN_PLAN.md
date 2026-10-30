@@ -9,6 +9,8 @@ only for items `IsSalvageCandidate`/`CanSalvageAllOfQuality` already allow, enfo
 
 Progress: step 0b part 1 done: `src/core/Settings.h` (`SettingsTable`) replaces the hand-written
 `MinimapLayout::Load`/`Save`; the built-ins register through `MinimapLayout::Describe`.
+Step 0b part 2 done: the Settings window lists `SettingsPage` entries (`AddSettingsPage`); the built-in pages are
+registered the same way, grouped Interface / Panels / Features.
 
 **Recommendation:** define one small, versioned host API and put Lua on top of
 it first. DLL plugins come later as a second consumer of the same API. What
@@ -129,8 +131,8 @@ and DLLs both get it.
 
 ## Milestones
 
-1. Typed settings store (`SettingsTable`, done), then split HudRenderer into
-   features with a settings page registry, no behaviour change.
+1. Typed settings store (`SettingsTable`) and settings page registry (both done), then split
+   HudRenderer into features, no behaviour change.
 2. Write the host API header; bind it to the built-ins.
 3. Lua runtime, loader, sandbox, manifest.
 4. Port Drops and the marker styles to Lua as the proof.
