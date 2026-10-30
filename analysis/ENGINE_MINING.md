@@ -277,3 +277,11 @@ slides along the bar: its left edge (rect x0, +0x498) goes from the bar left edg
 edge (100%), monotonically, ~115 updates over 75 s. progress = (marker.x0 - bar.x0) / (bar.x1 - bar.x0).
 Found with `D3Hud.Reader --ui-watch rift_progress`. Only the greater-rift container was seen moving;
 the other container is read the same way but is untested.
+
+## Greater rift timer (UI geometry, measured live)
+
+Same containers as the rift progress: `greater_rift_container.rift_timer_progress_bar` (rect 1505..1827,
+553..585) and `rift_timer_marker`. The marker slides along the bar at 0.358 UI units/s (25 units in 70 s),
+i.e. a 322 unit bar in ~900 s = the 15 minute limit. elapsed = (marker.x0 - bar.x0) / (bar.x1 - bar.x0) * 900 s.
+Before the rift UI is laid out and after it ends the marker rect holds garbage (x0 ~ 454060, later 4470..156000),
+so values outside the bar (+-3%) are rejected. Found with `--ui-watch rift_timer`.
