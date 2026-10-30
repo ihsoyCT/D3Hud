@@ -52,7 +52,7 @@ struct ItemStyle {
     float hoverAlpha = 0.88f;
     bool search = true;          // search box over the stash; matches get highlighted
     uint32_t searchRgb = 0xFFE633;
-    bool markIndexed = true;    // red outline on the stash tabs/pages the search has seen
+    bool markIndexed = true;    // red fill on the stash tabs/pages the search has NOT seen yet
     float searchDim = 0.6f;     // darkening of items that do not match
 };
 

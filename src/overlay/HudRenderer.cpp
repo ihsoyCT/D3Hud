@@ -186,6 +186,7 @@ bool MinimapLayout::Load(const char* path) {
             else if (!strcmp(k, "hoverAlpha")) items.hoverAlpha = std::clamp(v, 0.2f, 1.f);
             else if (!strcmp(k, "search")) items.search = v != 0.f;
             else if (!strcmp(k, "searchRgb")) items.searchRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
+            else if (!strcmp(k, "markIndexed")) items.markIndexed = v != 0.f;
             else if (!strcmp(k, "searchDim")) items.searchDim = std::clamp(v, 0.f, 1.f);
         }
         else if (!strncmp(key, "labels.", 7)) {
@@ -301,7 +302,7 @@ bool MinimapLayout::Save(const char* path) const {
                items.badges ? 1 : 0, items.badgeScale, items.badgeCorner, items.badgeAugment ? 1 : 0);
     std::print(f, "items.colAncient={}\nitems.colPrimal={}\nitems.hoverMode={}\nitems.hoverAlpha={:.2f}\n",
                items.colAncient, items.colPrimal, items.hoverMode, items.hoverAlpha);
-    std::print(f, "items.search={}\nitems.searchRgb={}\nitems.searchDim={:.2f}\n", items.search ? 1 : 0, items.searchRgb, items.searchDim);
+    std::print(f, "items.search={}\nitems.searchRgb={}\nitems.searchDim={:.2f}\nitems.markIndexed={}\n", items.search ? 1 : 0, items.searchRgb, items.searchDim, items.markIndexed ? 1 : 0);
     std::print(f, "labels.enabled={}\nlabels.mode={}\nlabels.showBonus={}\nlabels.scale={:.2f}\nlabels.bgAlpha={:.2f}\n",
                labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
     std::print(f, "labels.colLegendary={}\nlabels.colSet={}\nlabels.colPrimal={}\nlabels.colBonus={}\n",
@@ -1779,9 +1780,9 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
         }
     }
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    // Stash buttons: red = the search has indexed it (a page: all five tabs, faint when only some),
-    // yellow + count = matches. The game's button rects overlap their neighbours, so each box is
-    // limited to the pitch between buttons.
+    // Stash buttons: red fill = not indexed yet (a page: none of its five tabs seen; fainter when only
+    // some were), yellow + count = matches. The game's button rects overlap their neighbours, so each
+    // box is limited to the pitch between buttons.
     if (snap.ui.stashOpen) {
         auto screen = [&](const UiRect& ui) { return UiToScreen(ui, display.x, display.y); };
         auto pitch = [&](const UiRect* rects, int n, bool horizontal) {
@@ -1806,10 +1807,10 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
             *b = ImVec2(cx + w, cy + h);
             return w > 1.0f && h > 1.0f;
         };
-        const ImU32 red = IM_COL32(230, 50, 50, 255), redFaint = IM_COL32(230, 50, 50, 120);
-        auto mark = [&](const UiRect& ui, float px, float py, ImU32 indexedCol, bool indexed, int count) {
+        auto mark = [&](const UiRect& ui, float px, float py, float unindexed, int count) {
             ImVec2 a, b;
-            if (indexed && S.markIndexed && box(ui, px, py, 4.0f, &a, &b)) dl->AddRect(a, b, indexedCol, 0.f, 0, 2.0f);
+            if (unindexed > 0.0f && S.markIndexed && box(ui, px, py, 2.0f, &a, &b))
+                dl->AddRectFilled(a, b, IM_COL32(230, 50, 50, static_cast<int>(unindexed * 255.f)));
             if (count > 0 && box(ui, px, py, 1.0f, &a, &b)) {
                 dl->AddRect(a, b, outline, 0.f, 0, 3.0f);
                 char n[16];
@@ -1827,11 +1828,11 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
                 seen += stashSeen_[pg * 5 + t] ? 1 : 0;
                 matches += perTab[pg * 5 + t];
             }
-            mark(snap.ui.stashPageRect[pg], pitchX, 0.0f, seen == 5 ? red : redFaint, seen > 0, matches);
+            mark(snap.ui.stashPageRect[pg], pitchX, 0.0f, seen == 0 ? 0.35f : seen < 5 ? 0.15f : 0.0f, matches);
         }
         for (int t = 0; t < 5; ++t) {
             const int g = shownPage * 5 + t;
-            mark(snap.ui.stashTabRect[t], 0.0f, pitchY, red, g < 64 && stashSeen_[g], g < 64 ? perTab[g] : 0);
+            mark(snap.ui.stashTabRect[t], 0.0f, pitchY, g < 64 && !stashSeen_[g] ? 0.35f : 0.0f, g < 64 ? perTab[g] : 0);
         }
     }
     if (!active) return;
@@ -1907,6 +1908,7 @@ void HudRenderer::DrawItemSettings() {
             ch = true;
         }
     }
+    ch |= ImGui::Checkbox("tint stash tabs and pages the search has not seen yet in red", &S.markIndexed);
     ImGui::SliderFloat("dim items that do not match", &S.searchDim, 0.0f, 0.9f, "%.2f");
     ch |= ImGui::IsItemDeactivatedAfterEdit();
     {
