@@ -982,6 +982,19 @@ static void TestHealthBars() {
         CHECK(std::fabs((fill.x1 - fill.x0) - 40.f) < 0.01f);
     }
 
+    // the size option scales the bar: twice as large, so the half-filled bar is 80 px (160 * 0.5) wide
+    CHECK(fake::g.settings.SetNumber("healthbars.over_scale", 2));
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    if (fake::g.rects.size() == 6) {
+        const d3h_rect fill = fake::g.rects[2];
+        CHECK(std::fabs((fill.x1 - fill.x0) - 80.f) < 0.01f);
+    } else {
+        CHECK(false);
+    }
+    CHECK(fake::g.settings.SetNumber("healthbars.over_scale", 1));
+
     // options: no champions, no percentages; the boss's life is read now
     fake::g.rects.clear();
     fake::g.drawn.clear();

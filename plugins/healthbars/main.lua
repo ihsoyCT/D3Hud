@@ -32,6 +32,7 @@ d3hud.setting{ key = "affix_colors", type = "string", default = "", hidden = tru
 
 -- over the monsters
 d3hud.setting{ key = "over", type = "bool", default = true, label = "Bars over the monsters" }
+d3hud.setting{ key = "over_scale", type = "float", default = 1.0, min = 0.5, max = 3.0, label = "Size (scales bar, text and affixes)" }
 d3hud.setting{ key = "width", type = "int", default = 80, min = 30, max = 300, label = "Bar width (px)" }
 d3hud.setting{ key = "height", type = "int", default = 8, min = 3, max = 30, label = "Bar height (px)" }
 d3hud.setting{ key = "lift", type = "float", default = 8, min = 0, max = 25, label = "Height above the ground (game units)",
@@ -40,6 +41,7 @@ d3hud.setting{ key = "percent", type = "bool", default = true, label = "Show the
 
 -- the list on the side of the screen
 d3hud.setting{ key = "list", type = "bool", default = true, label = "List of bars on the side of the screen" }
+d3hud.setting{ key = "list_scale", type = "float", default = 1.0, min = 0.5, max = 3.0, label = "Size (scales bars, text and affixes)" }
 d3hud.setting{ key = "list_side", type = "choice", default = 1, choices = { "Left", "Right" }, label = "Side" }
 d3hud.setting{ key = "list_y", type = "int", default = 25, min = 0, max = 90, label = "Distance from the top (% of the screen)" }
 d3hud.setting{ key = "list_width", type = "int", default = 230, min = 100, max = 500, label = "Bar width (px)" }
@@ -106,12 +108,13 @@ local SORTS = {
 
 local function draw_list(f, elites, tag_opts)
     local rows = d3hud.get("list_rows")
-    local w, h = d3hud.get("list_width"), d3hud.get("list_row")
+    local ls = d3hud.get("list_scale")
+    local w, h = d3hud.get("list_width") * ls, d3hud.get("list_row") * ls
     table.sort(elites, SORTS[d3hud.get("list_sort")])
     local shown = math.min(#elites, rows)
     if shown == 0 then return end
-    local gap, pad = 4, 6
-    local ascale = d3hud.get("affix_scale")
+    local gap, pad = 4 * ls, 6 * ls
+    local ascale = d3hud.get("affix_scale") * ls
     local _, tagh = draw.tag_size("Ag", ascale, tag_opts)  -- one line of affix tags under a bar
     local total = -gap
     for i = 1, shown do total = total + h + gap + (elites[i].tags and tagh + 2 or 0) end
@@ -179,16 +182,17 @@ d3hud.on("frame", function()
     if #elites == 0 then return end
 
     if over then
-        local w, h = d3hud.get("width"), d3hud.get("height")
+        local os = d3hud.get("over_scale")
+        local w, h = d3hud.get("width") * os, d3hud.get("height") * os
         local percent = d3hud.get("percent")
-        local ascale = d3hud.get("affix_scale")
+        local ascale = d3hud.get("affix_scale") * os
         local centred = { alpha = tag_opts.alpha, anchor = "center" }
         for _, a in ipairs(elites) do
             if a.sx then
                 local x0, y0 = a.sx - w / 2, a.sy - h / 2
                 draw.bar(x0, y0, w, h, a.hp, a.color)
-                if percent then draw.shadowed(x0 + w + 4, y0 - 2, draw.WHITE, fmt.pct(a.hp), 0.8) end
-                if a.tags then draw.tags(a.sx, y0 + h + 3, a.tags, ascale, math.max(w, 200), centred) end  -- under the bar
+                if percent then draw.shadowed(x0 + w + 4 * os, y0 - 2 * os, draw.WHITE, fmt.pct(a.hp), 0.8 * os) end
+                if a.tags then draw.tags(a.sx, y0 + h + 3 * os, a.tags, ascale, math.max(w, 200 * os), centred) end  -- under the bar
             end
         end
     end
