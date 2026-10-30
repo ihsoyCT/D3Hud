@@ -511,6 +511,7 @@ int main(int argc, char** argv) {
         opts.mapOrientation = g_mapOrientation;
         g_hotkeysSuspended = renderer.capturingHotkey() || g_textFocus;
         if (renderer.TakeHotkeysDirty()) RegisterHotkeys(renderer.hotkeys());
+        opts.hotCount = 0;  // refilled by Draw
         opts.panelToggleMask = g_panelToggleMask;
         g_panelToggleMask = 0;
         {
@@ -571,13 +572,11 @@ int main(int argc, char** argv) {
         {
             // the anvil's salvage button works without F8: the overlay takes input only
             // while the cursor is over it, and goes back to click-through right after
-            auto inRect = [&](float x0, float y0, float x1, float y1) {
-                return x0 >= 0.f && opts.cursorX >= x0 && opts.cursorX <= x1 && opts.cursorY >= y0 &&
-                       opts.cursorY <= y1;
-            };
-            const bool inBtn =
-                inRect(opts.salvageButtonX0, opts.salvageButtonY0, opts.salvageButtonX1, opts.salvageButtonY1) ||
-                inRect(opts.editAreaX0, opts.editAreaY0, opts.editAreaX1, opts.editAreaY1);
+            bool inBtn = false;
+            for (int i = 0; i < opts.hotCount; ++i) {
+                const HudOptions::HotRect& h = opts.hot[i];
+                inBtn |= opts.cursorX >= h.x0 && opts.cursorX <= h.x1 && opts.cursorY >= h.y0 && opts.cursorY <= h.y1;
+            }
             if (inBtn && g_clickThrough && !salvageRunner.Active()) {
                 SetClickThrough(g_hwnd, false);
                 g_hotButton = true;

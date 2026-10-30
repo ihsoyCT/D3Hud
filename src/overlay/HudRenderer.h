@@ -50,6 +50,9 @@ struct ItemStyle {
     uint32_t colAncient = 0xFFAF32, colPrimal = 0xFF4646;  // 0xRRGGBB
     int hoverMode = 0;          // card for: 0 unidentified items only, 1 every item, 2 off
     float hoverAlpha = 0.88f;
+    bool search = true;          // search box over the stash; matches get highlighted
+    uint32_t searchRgb = 0xFFE633;
+    float searchDim = 0.6f;     // darkening of items that do not match
 };
 
 // The drop log (Drops panel) and what happens when something good drops.
@@ -160,12 +163,16 @@ struct HudOptions {
     Vec2 labelCenter;
     ReaderStatus* reader = nullptr;  // live mode: reader start/stop in the Info panel
     SalvageStatus* salvage = nullptr;  // live mode: auto salvage panel
-    // Out (filled by Draw): the salvage button over the blacksmith's anvil, in
-    // overlay client px. The owner makes the overlay interactive while the
-    // cursor is inside it, so the button is clickable without F8.
-    float salvageButtonX0 = -1.f, salvageButtonY0 = -1.f, salvageButtonX1 = -1.f, salvageButtonY1 = -1.f;
-    // Same for the safe-area toolbar under the backpack (plus the whole grid while editing).
-    float editAreaX0 = -1.f, editAreaY0 = -1.f, editAreaX1 = -1.f, editAreaY1 = -1.f;
+    // Out (filled by Draw): overlay client-px rects where the owner makes the overlay
+    // interactive while the cursor is inside, so they are clickable without F8: the
+    // anvil's salvage button, the safe-area toolbar (and grid while editing), the search box.
+    struct HotRect { float x0, y0, x1, y1; };
+    static constexpr int kMaxHot = 8;
+    HotRect hot[kMaxHot] = {};
+    int hotCount = 0;
+    void AddHot(float x0, float y0, float x1, float y1) {
+        if (hotCount < kMaxHot) hot[hotCount++] = {x0, y0, x1, y1};
+    }
     bool mouseLive = false;  // the overlay receives mouse input right now (F8, or over a hot rect)
 };
 
@@ -198,6 +205,8 @@ private:
     void DrawLabelSettings();
     void DrawProfileSettings();
     void DrawItemSettings();
+    void DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt);
+    char searchQuery_[64] = {};
     void DrawDropSettings();
     void DrawReaderSettings();
     void DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps);

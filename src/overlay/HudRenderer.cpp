@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "imgui.h"
+#include "ItemSearch.h"
 #include "imgui_internal.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -179,6 +180,9 @@ bool MinimapLayout::Load(const char* path) {
             else if (!strcmp(k, "colPrimal")) items.colPrimal = static_cast<uint32_t>(v) & 0xFFFFFF;
             else if (!strcmp(k, "hoverMode")) items.hoverMode = std::clamp(static_cast<int>(v), 0, 2);
             else if (!strcmp(k, "hoverAlpha")) items.hoverAlpha = std::clamp(v, 0.2f, 1.f);
+            else if (!strcmp(k, "search")) items.search = v != 0.f;
+            else if (!strcmp(k, "searchRgb")) items.searchRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
+            else if (!strcmp(k, "searchDim")) items.searchDim = std::clamp(v, 0.f, 1.f);
         }
         else if (!strncmp(key, "labels.", 7)) {
             const char* k = key + 7;
@@ -292,6 +296,7 @@ bool MinimapLayout::Save(const char* path) const {
                items.badges ? 1 : 0, items.badgeScale, items.badgeCorner, items.badgeAugment ? 1 : 0);
     std::print(f, "items.colAncient={}\nitems.colPrimal={}\nitems.hoverMode={}\nitems.hoverAlpha={:.2f}\n",
                items.colAncient, items.colPrimal, items.hoverMode, items.hoverAlpha);
+    std::print(f, "items.search={}\nitems.searchRgb={}\nitems.searchDim={:.2f}\n", items.search ? 1 : 0, items.searchRgb, items.searchDim);
     std::print(f, "labels.enabled={}\nlabels.mode={}\nlabels.showBonus={}\nlabels.scale={:.2f}\nlabels.bgAlpha={:.2f}\n",
                labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
     std::print(f, "labels.colLegendary={}\nlabels.colSet={}\nlabels.colPrimal={}\nlabels.colBonus={}\n",
@@ -1216,8 +1221,6 @@ void HudRenderer::DrawItemBadges(const WorldSnapshot& snap) {
 // salvage tab is open, and a small control panel. Safe cells are toggled by
 // clicking them in "edit" mode (F8: the overlay must take the clicks).
 void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
-    opt.salvageButtonX0 = opt.salvageButtonY0 = opt.salvageButtonX1 = opt.salvageButtonY1 = -1.f;
-    opt.editAreaX0 = opt.editAreaY0 = opt.editAreaX1 = opt.editAreaY1 = -1.f;
     if (opt.salvage == nullptr || !snap.ui.inventoryOpen) return;
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const UiRect grid = UiToScreen(snap.ui.backpack, display.x, display.y);
@@ -1257,10 +1260,8 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
         ImGui::SameLine();
         ImGui::TextDisabled(editSafeArea_ ? "click cells to toggle" : "%d safe cells", safe.Count());
         const ImVec2 p = ImGui::GetWindowPos(), s = ImGui::GetWindowSize();
-        opt.editAreaX0 = editSafeArea_ ? std::min(p.x, grid.x0) : p.x;
-        opt.editAreaY0 = editSafeArea_ ? std::min(p.y, grid.y0) : p.y;
-        opt.editAreaX1 = editSafeArea_ ? std::max(p.x + s.x, grid.x1) : p.x + s.x;
-        opt.editAreaY1 = p.y + s.y;
+        opt.AddHot(editSafeArea_ ? std::min(p.x, grid.x0) : p.x, editSafeArea_ ? std::min(p.y, grid.y0) : p.y,
+                   editSafeArea_ ? std::max(p.x + s.x, grid.x1) : p.x + s.x, p.y + s.y);
     }
     ImGui::End();
 
@@ -1315,10 +1316,7 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
         }
         if (st.status[0] != '\0') ImGui::TextDisabled("%s", st.status);
         const ImVec2 p = ImGui::GetWindowPos(), s = ImGui::GetWindowSize();
-        opt.salvageButtonX0 = p.x;
-        opt.salvageButtonY0 = p.y;
-        opt.salvageButtonX1 = p.x + s.x;
-        opt.salvageButtonY1 = p.y + s.y;
+        opt.AddHot(p.x, p.y, p.x + s.x, p.y + s.y);
     }
     ImGui::End();
 }
@@ -1553,6 +1551,72 @@ void HudRenderer::DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& o
     }
 }
 
+// Stash search: a box above the stash grid. Words are matched against name, type,
+// rarity and flags (see ItemSearch.h); matches get an outline, everything else is
+// dimmed, in the stash tab and backpack that are on screen. Other tabs with matches
+// are listed. Typing works through the overlay's keyboard hand-off (main.cpp).
+void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
+    const ItemStyle& S = layout_.items;
+    if (!S.search || (!snap.ui.stashOpen && !snap.ui.inventoryOpen)) return;
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const bool active = searchQuery_[0] != '\0';
+
+    if (snap.ui.stashOpen) {
+        const UiRect grid = UiToScreen(snap.ui.stash, display.x, display.y);
+        if (grid.x1 - grid.x0 > 8.0f) {
+            int perTab[64] = {};
+            int inBags = 0;
+            if (active)
+                for (uint16_t i = 0; i < snap.itemCount; ++i) {
+                    const ItemSnapshot& it = snap.items[i];
+                    if (!ItemMatchesQuery(it, searchQuery_)) continue;
+                    if (it.location == kItemLocationStash) ++perTab[std::min(63, it.gridY / kStashRowsPerTab)];
+                    else ++inBags;
+                }
+            ImGui::SetNextWindowPos(ImVec2(grid.x0, grid.y0 - 6.0f), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+            if (ImGui::Begin("##stash_search", nullptr,
+                             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing)) {
+                ImGui::SetNextItemWidth(std::max(220.0f, grid.x1 - grid.x0 - 60.0f * layout_.uiScale));
+                ImGui::InputTextWithHint("##q", "find: name, type, ancient, primal, set... (all words)", searchQuery_,
+                                         sizeof(searchQuery_));
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x")) searchQuery_[0] = '\0';
+                if (active) {
+                    const int here = snap.ui.stashTab >= 0 ? perTab[std::min(63, static_cast<int>(snap.ui.stashTab))] : 0;
+                    char others[96] = {};
+                    int shown = 0;
+                    for (int t = 0; t < 64 && shown < 8; ++t)
+                        if (perTab[t] > 0 && t != snap.ui.stashTab) {
+                            const size_t len = strlen(others);
+                            snprintf(others + len, sizeof(others) - len, "%s%d(%d)", shown ? " " : "", t + 1, perTab[t]);
+                            ++shown;
+                        }
+                    ImGui::TextDisabled("%d on this tab%s%s%s", here, shown ? ", other tabs: " : "", others,
+                                        inBags ? "  (+ matches in the bags)" : "");
+                }
+                const ImVec2 p = ImGui::GetWindowPos(), sz = ImGui::GetWindowSize();
+                opt.AddHot(p.x, p.y, p.x + sz.x, p.y + sz.y);
+            }
+            ImGui::End();
+        }
+    }
+
+    if (!active) return;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImU32 outline = Rgba(S.searchRgb, 255), dim = IM_COL32(0, 0, 0, static_cast<int>(S.searchDim * 255.f));
+    for (uint16_t i = 0; i < snap.itemCount; ++i) {
+        const ItemSnapshot& it = snap.items[i];
+        UiRect ui;
+        if (!ItemScreenRect(snap.ui, it.location, it.gridX, it.gridY, it.height, &ui)) continue;
+        const UiRect r = UiToScreen(ui, display.x, display.y);
+        if (ItemMatchesQuery(it, searchQuery_))
+            dl->AddRect(ImVec2(r.x0 + 1, r.y0 + 1), ImVec2(r.x1 - 1, r.y1 - 1), outline, 0.f, 0, 3.0f);
+        else
+            dl->AddRectFilled(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), dim);
+    }
+}
+
 // Settings > Drops: alerts, log size, CSV export.
 void HudRenderer::DrawDropSettings() {
     DropStyle& D = layout_.drops;
@@ -1596,6 +1660,17 @@ void HudRenderer::DrawItemSettings() {
     colour("ancient badge", &S.colAncient);
     ImGui::SameLine();
     colour("primal badge", &S.colPrimal);
+    ch |= ImGui::Checkbox("stash search box (highlights matching items)", &S.search);
+    {
+        float c[3] = {((S.searchRgb >> 16) & 255) / 255.f, ((S.searchRgb >> 8) & 255) / 255.f, (S.searchRgb & 255) / 255.f};
+        if (ImGui::ColorEdit3("highlight colour", c, ImGuiColorEditFlags_NoInputs)) {
+            S.searchRgb = (static_cast<uint32_t>(c[0] * 255.f + 0.5f) << 16) | (static_cast<uint32_t>(c[1] * 255.f + 0.5f) << 8) |
+                          static_cast<uint32_t>(c[2] * 255.f + 0.5f);
+            ch = true;
+        }
+    }
+    ImGui::SliderFloat("dim items that do not match", &S.searchDim, 0.0f, 0.9f, "%.2f");
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SeparatorText("Hover card");
     ch |= ImGui::Combo("show the card for", &S.hoverMode, "Unidentified items only\0Every item\0Off\0");
     ImGui::SliderFloat("card opacity", &S.hoverAlpha, 0.2f, 1.0f, "%.2f");
@@ -1772,6 +1847,7 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     DrawGroundLabels(snap, opt); // independent of F9, like the game's own item labels
     DrawItemBadges(snap);        // independent of F9: only while the game shows inventory/stash
     DrawAutoSalvage(snap, opt);  // safe area + salvage preview while the inventory is open
+    DrawItemSearch(snap, opt);   // stash search box + highlights
     DrawHoveredItem(snap, opt);  // independent of F9: it only appears while the game shows a tooltip
     DrawDiagnostics(snap, opt, fps);
     if (ImGui::GetTime() < flashUntil_) {  // drop alert: a fading border around the screen

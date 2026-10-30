@@ -14,6 +14,7 @@
 #include "SceneGen.h"
 #include "SharedRing.h"
 #include "Snapshot.h"
+#include "ItemSearch.h"
 #include "Salvage.h"
 #include "SceneCells.h"
 #include "SceneTable.h"
@@ -427,6 +428,26 @@ static void TestSalvageRules() {
     CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
 }
 
+static void TestItemSearch() {
+    ItemSnapshot it;
+    it.rarity = ItemRarity::Legendary;
+    it.identified = true;
+    strcpy_s(it.name, "Convention of Elements");
+    strcpy_s(it.typeName, "Ring");
+    CHECK(ItemMatchesQuery(it, "convention"));
+    CHECK(ItemMatchesQuery(it, "ELEMENTS ring"));       // case-insensitive, all words
+    CHECK(!ItemMatchesQuery(it, "convention boots"));    // every word must match
+    CHECK(ItemMatchesQuery(it, "legendary"));
+    CHECK(!ItemMatchesQuery(it, "ancient"));
+    CHECK(!ItemMatchesQuery(it, "") && !ItemMatchesQuery(it, "   "));  // empty matches nothing
+    it.ancient = true;
+    CHECK(ItemMatchesQuery(it, "ancient ring") && !ItemMatchesQuery(it, "primal"));
+    it.primal = true;
+    CHECK(ItemMatchesQuery(it, "primal") && ItemMatchesQuery(it, "ancient"));  // primal is ancient too
+    it.identified = false;
+    CHECK(ItemMatchesQuery(it, "unidentified"));
+}
+
 static void TestShrineLabels() {
     CHECK(!strcmp(ShrineLabel("x1_LR_Shrine_Electrified_TieredRift"), "Conduit Pylon"));
     CHECK(!strcmp(ShrineLabel("x1_LR_Shrine_Damage"), "Power Pylon"));
@@ -635,6 +656,7 @@ int main() {
     TestScenes();
     TestShrineLabels();
     TestSalvageRules();
+    TestItemSearch();
     TestSnapshotInterp();
     TestAcdItemDecode();
     TestMapOrientation();
