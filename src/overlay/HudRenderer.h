@@ -79,6 +79,11 @@ struct MinimapLayout {
     float panelW[kPanelCount] = {};  // size of resizable panels (fraction of window); 0 = default
     float panelH[kPanelCount] = {};
     float uiScale = 1.0f;            // global text/widget scale (Settings > General)
+    int dockCorner = 0;              // 0 bottom-right, 1 bottom-left, 2 top-right, 3 top-left
+    float dockAlpha = 0.55f;         // dock background (a bit stronger while interactive)
+    bool dockAutoHide = false;       // dock shows only near the cursor or while a panel is open
+    float panelAlpha = 0.94f;        // panel background opacity
+    bool compact = false;            // tighter padding and spacing
 
     // global hotkeys (virtual-key codes, 0 = unbound); ids 1.. in main.cpp
     enum HotkeyAction { kHkClickThrough, kHkPanels, kHkQuit, kHkMapOrientation, kHkPanelFirst /* + PanelId */ };
@@ -170,6 +175,7 @@ private:
     bool panelResizable_[kPanels] = {};
     bool panelMoved_[kPanels] = {};        // title-bar drag in progress; saved on release
     int settingsTab_ = 0;
+    ImVec2 dockPos_ = {}, dockSize_ = {};  // last frame's dock rect (auto-hide keeps testing it)
 
     void DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt);
     void DrawBigMap(const WorldSnapshot& snap, const HudOptions& opt);

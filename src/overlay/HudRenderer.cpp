@@ -138,6 +138,11 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
         else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
         else if (!strcmp(key, "uiScale")) uiScale = std::clamp(v, 0.5f, 3.0f);
+        else if (!strcmp(key, "dockCorner")) dockCorner = std::clamp(static_cast<int>(v), 0, 3);
+        else if (!strcmp(key, "dockAlpha")) dockAlpha = std::clamp(v, 0.f, 1.f);
+        else if (!strcmp(key, "dockAutoHide")) dockAutoHide = v != 0.f;
+        else if (!strcmp(key, "panelAlpha")) panelAlpha = std::clamp(v, 0.2f, 1.f);
+        else if (!strcmp(key, "compact")) compact = v != 0.f;
         else if (!strncmp(key, "labels.", 7)) {
             const char* k = key + 7;
             if (!strcmp(k, "enabled")) labels.enabled = v != 0.f;
@@ -235,7 +240,8 @@ bool MinimapLayout::Save(const char* path) const {
         std::print(f, "panel.{0}.pinned={1}\npanel.{0}.hidden={2}\npanel.{0}.x={3:.4f}\npanel.{0}.y={4:.4f}\n"
                       "panel.{0}.w={5:.4f}\npanel.{0}.h={6:.4f}\n",
                    kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i], panelW[i], panelH[i]);
-    std::print(f, "uiScale={:.2f}\n", uiScale);
+    std::print(f, "uiScale={:.2f}\ndockCorner={}\ndockAlpha={:.2f}\ndockAutoHide={}\npanelAlpha={:.2f}\ncompact={}\n",
+               uiScale, dockCorner, dockAlpha, dockAutoHide ? 1 : 0, panelAlpha, compact ? 1 : 0);
     for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
     std::print(f, "labels.enabled={}\nlabels.mode={}\nlabels.showBonus={}\nlabels.scale={:.2f}\nlabels.bgAlpha={:.2f}\n",
                labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
@@ -786,6 +792,13 @@ static const char* PanelName(PanelId id) {
     return "?";
 }
 
+// Anchor point (and ImGui pivot) in a screen corner, `inset` px from the edges.
+static void CornerAnchor(int corner, ImVec2 display, float inset, ImVec2* pos, ImVec2* pivot) {
+    const bool right = corner == 0 || corner == 2, bottom = corner == 0 || corner == 1;
+    *pos = ImVec2(right ? display.x - 12.f : 12.f, bottom ? display.y - inset : inset);
+    *pivot = ImVec2(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f);
+}
+
 bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize) {
     const int i = static_cast<int>(id);
     const ImGuiIO& io = ImGui::GetIO();
@@ -811,10 +824,13 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
         if (layout_.panelX[i] >= 0.f)
             ImGui::SetNextWindowPos(ImVec2(layout_.panelX[i] * display.x, layout_.panelY[i] * display.y),
                                     ImGuiCond_Always);
-        else
-            ImGui::SetNextWindowPos(ImVec2(display.x - 12.f, display.y - 44.f), ImGuiCond_Always,
-                                    ImVec2(1.0f, 1.0f));
+        else {
+            ImVec2 pos, pivot;
+            CornerAnchor(layout_.dockCorner, display, 44.f, &pos, &pivot);  // just beside the dock bar
+            ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+        }
     }
+    ImGui::SetNextWindowBgAlpha(layout_.panelAlpha);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
     panelResizable_[i] = defaultSize.x > 0.f;
     if (panelResizable_[i]) {
@@ -884,9 +900,19 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
 void HudRenderer::DrawDock(const HudOptions& opt) {
     // a slim bar of tabs, bottom-right; a click (interactive mode) toggles pin
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(display.x - 12.f, display.y - 12.f), ImGuiCond_Always,
-                            ImVec2(1.0f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.08f, opt.inputInteractive ? 0.85f : 0.55f));
+    if (layout_.dockAutoHide && dockSize_.x > 0.f && !opt.inputInteractive) {
+        bool anyOpen = false;  // a panel is showing: keep the dock to go with it
+        for (int i = 0; i < kPanels; ++i) anyOpen |= panelSize_[i].x > 0.f;
+        const float m = 40.0f;  // proximity margin around the dock
+        const bool near = opt.cursorX >= dockPos_.x - m && opt.cursorX <= dockPos_.x + dockSize_.x + m &&
+                          opt.cursorY >= dockPos_.y - m && opt.cursorY <= dockPos_.y + dockSize_.y + m;
+        if (!anyOpen && !near) return;
+    }
+    ImVec2 pos, pivot;
+    CornerAnchor(layout_.dockCorner, display, 12.f, &pos, &pivot);
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.08f,
+                          opt.inputInteractive ? std::min(1.0f, layout_.dockAlpha + 0.3f) : layout_.dockAlpha));
     if (ImGui::Begin("##dock", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_AlwaysAutoResize |
@@ -911,6 +937,8 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
                 panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;
         }
         ImGui::PopStyleColor();
+        dockPos_ = ImGui::GetWindowPos();
+        dockSize_ = ImGui::GetWindowSize();
     }
     ImGui::End();
     ImGui::PopStyleColor();
@@ -1318,6 +1346,16 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
         if (ImGui::IsItemDeactivatedAfterEdit()) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
         ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
+        ImGui::SeparatorText("Dock");
+        bool ch = ImGui::Combo("corner", &layout_.dockCorner, "Bottom right\0Bottom left\0Top right\0Top left\0");
+        ch |= ImGui::Checkbox("auto-hide (show near the cursor or while a panel is open)", &layout_.dockAutoHide);
+        ImGui::SliderFloat("dock opacity", &layout_.dockAlpha, 0.0f, 1.0f, "%.2f");
+        ch |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SeparatorText("Panels");
+        ImGui::SliderFloat("panel opacity", &layout_.panelAlpha, 0.2f, 1.0f, "%.2f");
+        ch |= ImGui::IsItemDeactivatedAfterEdit();
+        ch |= ImGui::Checkbox("compact (tighter padding)", &layout_.compact);
+        if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
     } else if (settingsTab_ == kHotkeys) {
         DrawHotkeySettings();
     } else if (settingsTab_ >= kInfo && settingsTab_ <= kActors) {
@@ -1386,7 +1424,11 @@ void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& o
 }
 
 void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName) {
-    ImGui::GetStyle().FontScaleMain = layout_.uiScale;
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.FontScaleMain = layout_.uiScale;
+    style.WindowPadding = layout_.compact ? ImVec2(4.f, 3.f) : ImVec2(8.f, 8.f);
+    style.FramePadding = layout_.compact ? ImVec2(3.f, 1.f) : ImVec2(4.f, 3.f);
+    style.ItemSpacing = layout_.compact ? ImVec2(4.f, 2.f) : ImVec2(8.f, 4.f);
     for (int i = 0; i < kPanels; ++i)
         if (opt.panelToggleMask & (1u << i)) {
             layout_.panelPinned[i] = !layout_.panelPinned[i];
