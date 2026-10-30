@@ -39,6 +39,8 @@ using namespace d3hud;
 static const wchar_t* kClassName = L"D3HudOverlayClass";
 static HWND g_hwnd = nullptr;
 static HWND g_targetHwnd = nullptr;
+static wchar_t g_targetSub[256] = {};      // title substring of the window to cover (empty = whole screen)
+static bool g_waitingForTarget = false;    // that window is not there (yet): overlay hidden, searching
 static bool g_running = true;
 static bool g_clickThrough = true;
 static bool g_textFocus = false;  // an ImGui text field is active: the overlay holds the keyboard
@@ -247,6 +249,7 @@ static void Resize(int w, int h) {
 
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
+    setvbuf(stdout, nullptr, _IONBF, 0);  // live console output, also when redirected to a file
     const char* targetSubstr = nullptr;
     const char* recordPath = nullptr;
     const char* replayPath = nullptr;
@@ -254,12 +257,16 @@ int main(int argc, char** argv) {
     double recordSeconds = 10.0;
     bool live = false;
     bool startReader = false;
+    bool demo = false;       // synthetic scene instead of the live game
+    bool noReader = false;   // do not manage the reader (run D3Hud.Reader by hand)
 
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--target") && i + 1 < argc) targetSubstr = argv[++i];
         else if (!strcmp(argv[i], "--record") && i + 1 < argc) recordPath = argv[++i];
         else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replayPath = argv[++i];
         else if (!strcmp(argv[i], "--live")) live = true;
+        else if (!strcmp(argv[i], "--demo")) demo = true;
+        else if (!strcmp(argv[i], "--no-reader")) noReader = true;
         else if (!strcmp(argv[i], "--start-reader")) live = startReader = true;
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) recordSeconds = atof(argv[++i]);
         else if (!strcmp(argv[i], "--selftest") && i + 1 < argc) selftestFrames = atoi(argv[++i]);
@@ -269,17 +276,29 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--matrix-base") && i + 1 < argc) g_baseNoRedir = (strcmp(argv[++i], "noredir") == 0);
         else if (!strcmp(argv[i], "--colorkey")) g_useDComp = false;
         else if (!strcmp(argv[i], "--help")) {
-            std::print("D3Hud.Overlay M0\n"
-                   "  --target <title substring>  track & cover that window\n"
+            std::print("D3Hud.Overlay\n"
+                   "  (no options)                cover Diablo III, start the reader, show live data\n"
+                   "  --target <title substring>  cover that window instead of \"Diablo III\"\n"
+                   "  --no-reader                 do not start/manage D3Hud.Reader (run it yourself)\n"
+                   "  --demo                      synthetic demo scene instead of the game\n"
                    "  --replay <file>             play a recorded .bin\n"
                    "  --record <file> [--seconds N]  record synthetic scene (default 10s)\n"
+                   "  --live / --start-reader     explicit live mode (default already)\n"
                    "  --colorkey                  color-key fallback instead of DirectComposition\n"
-                   "  --start-reader              --live, and launch D3Hud.Reader in the background\n"
                    "  --selftest <frames>         run N frames and exit\n"
-                   "Hotkeys: F8 click-through, F9 panels, END quit\n");
+                   "Hotkeys (rebindable in Settings): F7 map orientation, F8 click-through, F9 panels, END quit\n");
             return 0;
         }
     }
+
+    // Started without options (double-click): live data over Diablo III, reader managed by us.
+    const bool otherSource = replayPath != nullptr || recordPath != nullptr || selftestFrames > 0 || g_matrix || demo;
+    if (!otherSource && !live) {
+        live = true;
+        startReader = !noReader;
+    }
+    if (live && noReader) startReader = false;
+    if (live && targetSubstr == nullptr) targetSubstr = "Diablo III";
 
     // --- window -------------------------------------------------------------
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -312,11 +331,16 @@ int main(int argc, char** argv) {
     }
 
     if (targetSubstr) {
-        wchar_t wsub[256];
-        MultiByteToWideChar(CP_UTF8, 0, targetSubstr, -1, wsub, 256);
-        g_targetHwnd = FindTargetWindow(wsub);
-        if (g_targetHwnd) std::print("tracking window {}\n", static_cast<void*>(g_targetHwnd));
-        else std::print("no window matches '{}' — covering primary screen\n", targetSubstr);
+        MultiByteToWideChar(CP_UTF8, 0, targetSubstr, -1, g_targetSub, 256);
+        g_targetHwnd = FindTargetWindow(g_targetSub);
+        if (g_targetHwnd) {
+            std::print("tracking window {}\n", static_cast<void*>(g_targetHwnd));
+        } else if (live) {
+            g_waitingForTarget = true;  // start the game whenever you like: we hide until it appears
+            std::print("waiting for a window titled '{}' (start the game)...\n", targetSubstr);
+        } else {
+            std::print("no window matches '{}' - covering primary screen\n", targetSubstr);
+        }
     }
 
     RECT r;
@@ -327,7 +351,7 @@ int main(int argc, char** argv) {
     if (!g_hwnd) { std::print(stderr, "FATAL: CreateWindowExW failed\n"); return 1; }
     if (!CreateGraphics(g_hwnd, w0, h0)) return 1;
     if (!MakeRtv()) return 1;
-    ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+    ShowWindow(g_hwnd, g_waitingForTarget ? SW_HIDE : SW_SHOWNOACTIVATE);
 
 
     // --- imgui --------------------------------------------------------------
@@ -390,8 +414,12 @@ int main(int argc, char** argv) {
         opts.reader = &readerStatus;
         opts.salvage = &salvageStatus;
     }
-    if ((startReader || (live && renderer.readerAutostart())) && !reader.Start(renderer.readerHz()))
-        std::print(stderr, "{}\n", reader.lastError());
+    // The reader is started once the game window exists, restarted if the game is restarted, and left
+    // alone after the user pressed Stop or when it keeps dying right away.
+    bool readerUserStopped = false, readerWasRunning = false;
+    ULONGLONG readerNextTry = 0, readerStartedAt = 0;
+    int readerQuickExits = 0;
+    std::string readerAutoError;
 
     LARGE_INTEGER freq, tPrev, tNow;
     QueryPerformanceFrequency(&freq);
@@ -426,6 +454,19 @@ int main(int argc, char** argv) {
         }
         if (GetTickCount() - lastTrack > 250) {
             lastTrack = GetTickCount();
+            if (g_targetSub[0] != L'\0' && (g_targetHwnd == nullptr || !IsWindow(g_targetHwnd))) {
+                g_targetHwnd = FindTargetWindow(g_targetSub);  // the game was (re)started
+                if (g_targetHwnd != nullptr) {
+                    std::print("tracking window {}\n", static_cast<void*>(g_targetHwnd));
+                    g_waitingForTarget = false;
+                    lastRect = RECT{};  // force a reposition below
+                    ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+                } else if (live && !g_waitingForTarget) {
+                    g_waitingForTarget = true;
+                    std::print("the game window is gone - waiting for it...\n");
+                    ShowWindow(g_hwnd, SW_HIDE);
+                }
+            }
             RECT nr;
             GetOverlayRect(&nr);
             if (!EqualRect(&nr, &lastRect)) {
@@ -434,6 +475,11 @@ int main(int argc, char** argv) {
                              nr.bottom - nr.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 Resize(nr.right - nr.left, nr.bottom - nr.top);
             }
+        }
+
+        if (g_waitingForTarget) {  // nothing to draw on: idle until the game window shows up
+            Sleep(100);
+            continue;
         }
 
         // Advance the data source at its native cadence.
@@ -527,11 +573,26 @@ int main(int argc, char** argv) {
                 ringOpen = liveRing.Open();
                 if (ringOpen) std::print("live ring connected\n");
             }
-            readerStatus.running = reader.Running();
+            const ULONGLONG nowMs = GetTickCount64();
+            const bool readerRunning = reader.Running();
+            if (readerWasRunning && !readerRunning)
+                readerQuickExits = nowMs - readerStartedAt < 15000 ? readerQuickExits + 1 : 0;
+            readerWasRunning = readerRunning;
+            const bool wantReader = startReader || renderer.readerAutostart();
+            const bool gameUp = g_targetHwnd != nullptr && IsWindow(g_targetHwnd);
+            if (wantReader && !readerRunning && !readerUserStopped && gameUp && readerQuickExits < 4 &&
+                nowMs >= readerNextTry) {
+                readerNextTry = nowMs + 5000;
+                if (reader.Start(renderer.readerHz())) readerStartedAt = nowMs;
+                else std::print(stderr, "{}\n", reader.lastError());
+            }
+            readerAutoError = readerQuickExits >= 4 ? "the reader keeps stopping right away - see reader.log; press Start reader to retry"
+                                                    : reader.lastError();
+            readerStatus.running = readerRunning;
             readerStatus.connected = ringOpen && liveRing.latestIndex() > 0;
             readerStatus.pid = reader.pid();
             readerStatus.line = reader.LastLogLine().c_str();
-            readerStatus.error = reader.lastError().c_str();
+            readerStatus.error = readerAutoError.c_str();
         }
         if (live) {
             salvageRunner.Tick(snap, renderer.safeArea(), renderer.salvageRules());
@@ -585,8 +646,15 @@ int main(int argc, char** argv) {
                 SetClickThrough(g_hwnd, true);
             }
         }
-        if (readerStatus.startClicked) reader.Start(renderer.readerHz());
-        if (readerStatus.stopClicked) reader.Stop();
+        if (readerStatus.startClicked) {
+            readerUserStopped = false;
+            readerQuickExits = 0;
+            if (reader.Start(renderer.readerHz())) readerStartedAt = GetTickCount64();
+        }
+        if (readerStatus.stopClicked) {
+            readerUserStopped = true;  // do not bring it back by itself
+            reader.Stop();
+        }
         readerStatus.startClicked = readerStatus.stopClicked = false;
         if (g_visualMark && framesDrawn >= 5 && (g_matrix || framesDrawn < 55)) {
             // big saturated marker so an external screen capture can verify compositing

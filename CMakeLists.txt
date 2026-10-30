@@ -76,7 +76,6 @@ install(FILES
     analysis/sno_actors.tsv
     analysis/items_gbid.tsv
     analysis/scene_cells.bin
-    packaging/D3Hud.cmd
     README.md
     DESTINATION .)
 install(FILES third_party/imgui/LICENSE.txt DESTINATION licenses RENAME imgui-LICENSE.txt)
