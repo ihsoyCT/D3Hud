@@ -20,6 +20,7 @@
 #include "backends/imgui_impl_win32.h"
 
 #include "HudRenderer.h"
+#include "PluginHost.h"
 #include "ReplayIO.h"
 #include "SceneGen.h"
 #include "Paths.h"
@@ -253,6 +254,7 @@ int main(int argc, char** argv) {
     const char* recordPath = nullptr;
     const char* replayPath = nullptr;
     int selftestFrames = 0;
+    const char* settingsPage = nullptr;  // --settings-page <id>: open the Settings window on that page
     double recordSeconds = 10.0;
     bool live = false;
     bool startReader = false;
@@ -269,6 +271,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--start-reader")) live = startReader = true;
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) recordSeconds = atof(argv[++i]);
         else if (!strcmp(argv[i], "--selftest") && i + 1 < argc) selftestFrames = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--settings-page") && i + 1 < argc) settingsPage = argv[++i];
         else if (!strcmp(argv[i], "--selftest-hit")) { selftestFrames = 80; g_hitTest = true; }
         else if (!strcmp(argv[i], "--selftest-visual")) { g_visualMark = true; }
         else if (!strcmp(argv[i], "--matrix")) { g_matrix = true; g_visualMark = true; selftestFrames = 20000; }
@@ -394,11 +397,14 @@ int main(int argc, char** argv) {
     DWORD lastPhaseTick = GetTickCount();
 
     HudRenderer renderer;
+    PluginHost plugins(renderer);
     {
         renderer.SetLayoutPath(ExeDir() / "d3hud.ini");
         // map prediction shapes, next to the exe like d3hud.ini (copied by the build)
         if (!renderer.LoadSceneCells(ExeDir() / "scene_cells.bin")) std::print(stderr, "no scene_cells.bin - map prediction off\n");
     }
+    plugins.LoadAll(ExeDir() / "plugins", ExeDir() / "plugins.ini");
+    if (settingsPage != nullptr && !renderer.OpenSettingsPage(settingsPage)) std::print(stderr, "no settings page '{}'\n", settingsPage);
     HudOptions opts;
     opts.showPanels = g_showPanels;
     ReaderProcess reader;  // Info panel "Start reader" (live mode); ends with the overlay
@@ -596,6 +602,7 @@ int main(int argc, char** argv) {
             salvageStatus.running = salvageRunner.Active();
             salvageStatus.status = salvageRunner.status().c_str();
         }
+        plugins.OnFrame(snap, ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
         renderer.Draw(snap, opts, fpsSmooth, sourceName);
         {
             // Typing: the overlay is WS_EX_NOACTIVATE, so keys go to the game. While a text

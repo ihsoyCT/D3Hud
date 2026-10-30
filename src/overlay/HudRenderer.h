@@ -201,6 +201,8 @@ class HudRenderer {
 public:
     HudRenderer();
     void AddSettingsPage(SettingsPage page);
+    // Shows the Settings window pinned open on the page with this id (nothing is saved); false if unknown.
+    bool OpenSettingsPage(const std::string& id);
     void Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName);
     // Loads the layout from `path` (defaults if missing); the calibration panel saves there.
     void SetLayoutPath(const std::filesystem::path& path);

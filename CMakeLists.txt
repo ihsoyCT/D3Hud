@@ -35,9 +35,13 @@ target_link_libraries(d3hud_plugins PUBLIC d3hud_core lua)
 
 add_executable(D3Hud.Overlay
     src/overlay/main.cpp
-    src/overlay/HudRenderer.cpp src/overlay/ReaderProcess.cpp src/overlay/SalvageRunner.cpp)
+    src/overlay/HudRenderer.cpp src/overlay/ReaderProcess.cpp src/overlay/SalvageRunner.cpp
+    src/overlay/PluginHost.cpp)
 target_include_directories(D3Hud.Overlay PRIVATE src/overlay src/core)
-target_link_libraries(D3Hud.Overlay PRIVATE d3hud_core imgui d3d11 dxgi dxguid dcomp)
+target_link_libraries(D3Hud.Overlay PRIVATE d3hud_core d3hud_plugins imgui d3d11 dxgi dxguid dcomp)
+# Lua plugins are loaded from <exe>/plugins/<name>/
+add_custom_command(TARGET D3Hud.Overlay POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/plugins $<TARGET_FILE_DIR:D3Hud.Overlay>/plugins)
 
 add_library(d3hud_reader STATIC
     src/reader/Process.cpp
@@ -98,6 +102,8 @@ install(FILES
     README.md
     DESTINATION .)
 install(FILES third_party/imgui/LICENSE.txt DESTINATION licenses RENAME imgui-LICENSE.txt)
+install(FILES third_party/lua/LICENSE.txt DESTINATION licenses RENAME lua-LICENSE.txt)
+install(DIRECTORY plugins DESTINATION .)
 
 set(CPACK_GENERATOR ZIP)
 set(CPACK_PACKAGE_NAME D3Hud)

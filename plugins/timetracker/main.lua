@@ -3,7 +3,7 @@
 -- Rifts and greater rifts are detected from the rift progress bar. Everything else is sorted by the
 -- world you are in: open the "Time tracker" page in Settings, stand in a world and pick which area it
 -- belongs to once (e.g. "Town"); the choice is remembered. Unassigned worlds count as "Other".
--- Edit the list of areas in the page to rename or add areas.
+-- The list of areas (and the on-screen display) are options on the "timetracker options" page.
 
 local SAVE_EVERY = 30      -- seconds of tracked time between saves
 local MAX_GAP_MS = 5000    -- a longer gap between snapshots (reader stopped, game paused) is not counted
@@ -177,11 +177,6 @@ d3hud.page{
         section(ui, "All time", total)
 
         ui.spacing()
-        local changed, areas = ui.input_text("areas", d3hud.get("areas"))
-        if changed then d3hud.set("areas", clean(areas)) end
-        local show, value = ui.checkbox("show the session split on screen", d3hud.get("show_hud"))
-        if show then d3hud.set("show_hud", value) end
-
         if ui.button("reset session") then session = {} end
         ui.same_line()
         if confirm_reset then

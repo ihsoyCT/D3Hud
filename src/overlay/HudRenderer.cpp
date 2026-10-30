@@ -2022,6 +2022,14 @@ void HudRenderer::AddSettingsPage(SettingsPage page) {
     settingsPages_.insert(at, std::move(page));
 }
 
+bool HudRenderer::OpenSettingsPage(const std::string& id) {
+    const auto it = std::ranges::find(settingsPages_, id, &SettingsPage::id);
+    if (it == settingsPages_.end()) return false;
+    settingsTab_ = static_cast<int>(it - settingsPages_.begin());
+    layout_.panelPinned[static_cast<int>(PanelId::Settings)] = true;
+    return true;
+}
+
 // The built-in pages, in list order; plugin pages go through the same AddSettingsPage.
 void HudRenderer::RegisterBuiltinSettingsPages() {
     int order = 0;
