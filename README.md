@@ -213,6 +213,15 @@ cpack -C Release                                      # -> D3Hud-<version>-win64
 Close a running overlay before rebuilding: Windows does not let the linker replace a
 running exe.
 
+**GitHub Actions**
+
+- `.github/workflows/ci.yml` builds and runs the tests on every pull request (and on pushes
+  to `main`), checks that the release folder can be installed, and attaches the zip of that
+  commit to the run as an artifact.
+- `.github/workflows/release.yml` runs when a GitHub release is published: it builds, runs
+  the tests and uploads `D3Hud-<tag>-win64.zip` to that release. To make a release, create
+  one on GitHub (a new tag such as `v0.2.0` is fine); the zip appears a few minutes later.
+
 ## Troubleshooting
 
 - **No markers, "reader stopped"**: the game must be running and you must be in the game

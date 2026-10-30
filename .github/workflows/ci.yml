@@ -1,0 +1,46 @@
+name: CI
+
+# Build and test on every pull request (and on pushes to main, to keep it green).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: windows-2022   # Visual Studio 2022, matches the "Visual Studio 17 2022" generator
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      # Prove that the release folder can be produced and holds what the program needs.
+      - name: Install
+        shell: bash
+        run: |
+          cmake --install build --config Release --prefix dist
+          for f in D3Hud.Overlay.exe D3Hud.Reader.exe sno_actors.tsv items_gbid.tsv scene_cells.bin D3Hud.cmd README.md; do
+            test -f "dist/$f" || { echo "missing in install: $f"; exit 1; }
+          done
+
+      - name: Package
+        run: cpack --config build/CPackConfig.cmake -C Release -B packages
+
+      # The zip of this commit, handy for trying out a pull request.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: D3Hud-win64
+          path: packages/*.zip
+          retention-days: 14
+          if-no-files-found: error

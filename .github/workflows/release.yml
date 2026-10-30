@@ -1,0 +1,41 @@
+name: Release
+
+# When a GitHub release is published: build, test, and attach the installed folder as a zip
+# (D3Hud-<tag>-win64.zip) to that release.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # upload the zip to the release
+
+jobs:
+  release-zip:
+    runs-on: windows-2022
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          cpack --config build/CPackConfig.cmake -C Release -B packages -G ZIP \
+                -D "CPACK_PACKAGE_FILE_NAME=D3Hud-${TAG}-win64"
+          ls -l packages
+
+      - name: Upload to the release
+        shell: bash
+        run: gh release upload "$TAG" "packages/D3Hud-${TAG}-win64.zip" --clobber --repo "$GITHUB_REPOSITORY"
