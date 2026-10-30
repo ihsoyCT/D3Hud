@@ -514,6 +514,7 @@ enum GameUi : size_t {
     kUiSalvageRare,
     kUiRiftTimerBar,               // greater rift timer bar and its sliding marker
     kUiRiftTimerMarker,
+    kUiRiftNormalBar,              // the normal rift's progress bar (rift_container)
     kUiCount,
 };
 
@@ -546,6 +547,7 @@ static std::vector<std::string> GameUiPaths() {
     p.push_back("Root.NormalLayer.vendor_dialog_mainPage.salvage_dialog.salvage_all_wrapper.salvage_rare_button");
     p.push_back(rift + "greater_rift_container.rift_timer_progress_bar");
     p.push_back(rift + "greater_rift_container.rift_timer_marker");
+    p.push_back(rift + "rift_container.rift_progress_bar");
     return p;
 }
 
@@ -558,21 +560,30 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
         float pan[2] = {};
         if (ui.ReadFloats(proc, kUiBigMapLocal, 3216, pan, 2)) out->bigMapPan = {pan[0], pan[1]};
     }
-    // Rift progress: the marker slides along the bar (greater rifts use one container, the
-    // other rift types the other; whichever bar is visible).
-    for (const auto& [barIdx, markerIdx] : {std::pair<size_t, size_t>{kUiRiftGrBar, kUiRiftGrMarker},
-                                            std::pair<size_t, size_t>{kUiRiftBar, kUiRiftMarker}}) {
-        const UiControlState bar = ui.Read(proc, barIdx), marker = ui.Read(proc, markerIdx);
-        if (!bar.visible || !marker.found) continue;
-        const float p = RiftProgressFromRects(bar.rect.x0, bar.rect.x1, marker.rect.x0);
+    // Rift progress. The progress bar control keeps the progress as a 0..1 float at +0xA60 (measured
+    // in a normal and a greater rift; in the greater one it equals the sliding marker's position along
+    // the bar). Greater rifts also cross-check with the marker. Whichever bar is visible wins.
+    struct RiftBar { size_t bar, marker; int kind; };  // marker == npos: none; kind 2 = greater rift
+    static const RiftBar kRiftBars[] = {{kUiRiftGrBar, kUiRiftGrMarker, 2},
+                                        {kUiRiftNormalBar, std::string::npos, 1},
+                                        {kUiRiftBar, kUiRiftMarker, 1}};
+    for (const RiftBar& rb : kRiftBars) {
+        const UiControlState bar = ui.Read(proc, rb.bar);
+        if (!bar.visible) continue;
+        float p = -1.0f, v = 0.0f;
+        if (ui.ReadFloats(proc, rb.bar, 0xA60, &v, 1) && v >= 0.0f && v <= 1.0001f) p = std::min(v, 1.0f);
+        if (rb.marker != std::string::npos) {
+            const UiControlState marker = ui.Read(proc, rb.marker);
+            if (marker.found) p = std::max(p, RiftProgressFromRects(bar.rect.x0, bar.rect.x1, marker.rect.x0));
+        }
         if (p < 0.0f) continue;
-        out->riftOpen = barIdx == kUiRiftGrBar ? 2 : 1;  // 2 = greater rift
-        if (barIdx == kUiRiftGrBar) {
+        out->riftOpen = static_cast<uint8_t>(rb.kind);
+        out->riftProgress = p;
+        if (rb.kind == 2) {
             const UiControlState timerBar = ui.Read(proc, kUiRiftTimerBar), timerMarker = ui.Read(proc, kUiRiftTimerMarker);
             if (timerBar.found && timerMarker.found)
                 out->riftTimerFraction = RiftTimerFractionFromRects(timerBar.rect.x0, timerBar.rect.x1, timerMarker.rect.x0);
         }
-        out->riftProgress = p;
         break;
     }
     out->salvageOpen = ui.Read(proc, kUiSalvageDialog).visible;

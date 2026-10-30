@@ -285,3 +285,12 @@ Same containers as the rift progress: `greater_rift_container.rift_timer_progres
 i.e. a 322 unit bar in ~900 s = the 15 minute limit. elapsed = (marker.x0 - bar.x0) / (bar.x1 - bar.x0) * 900 s.
 Before the rift UI is laid out and after it ends the marker rect holds garbage (x0 ~ 454060, later 4470..156000),
 so values outside the bar (+-3%) are rejected. Found with `--ui-watch rift_timer`.
+
+## Rift progress, second finding: the bar control holds it as a float
+
+The `rift_progress_bar` control stores the progress as a 0..1 float at +0xA60 (duplicated at +0xA64).
+Normal rift (`rift_wrapper.rift_container.rift_progress_bar`): 0.0 -> 0.91 over 115 updates, monotonic.
+Greater rift (`greater_rift_container.rift_progress_bar`): equals the marker-derived progress within 0.002
+at every sample; resets to 0.0 when the rift ends. The normal rift container has no marker control.
+The reader reads +0xA60 for whichever bar is visible and, for greater rifts, takes the larger of it and
+the marker position (the float drops to 0 at the end while the marker stays at 100%).
