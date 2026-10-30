@@ -46,8 +46,10 @@ example `C:\Games\D3Hud`. No installer and no extra runtimes.
 
 To quit, press **End**. The reader stops with the overlay.
 
-The minimap draws its markers over the game's own minimap by default. If they do not sit
-exactly on the game's icons, calibrate once in **Settings > Minimap** (position, radius, zoom).
+The minimap markers are drawn over the game's own minimap, and the overlay finds that
+minimap by itself (it reads the position and size of the game's minimap control, so it works
+at any resolution). If it ever cannot, or the zoom is off, adjust it in **Settings > Minimap**
+(*zoom*, and the manual position when automatic following is turned off).
 
 ## Features
 
@@ -235,8 +237,10 @@ running exe.
 - **No markers, "reader stopped"**: the game must be running and you must be in the game
   world. Open the Info panel and use *Start reader*; check `reader.log` next to the exes.
 - **Nothing draws over the game**: switch the game to windowed or windowed fullscreen.
-- **Markers are offset from the game's minimap**: Settings > Minimap, adjust the
-  position, radius and zoom; press Save. If the markers are rotated, press F7 to cycle the orientation.
+- **Markers are offset from the game's minimap**: Settings > Minimap says whether the game's
+  minimap was found. If not, turn off *follow automatically* and set the position and radius by hand
+  (press Save). If the markers are too spread out or too bunched up, change *zoom*; if they are
+  rotated, press F7 to cycle the orientation.
 - **The first start takes long**: the reader scans the game's memory once; the result is
   cached for the running game.
 - **Salvage stops with "an item did not salvage"**: the game missed a click. Raise

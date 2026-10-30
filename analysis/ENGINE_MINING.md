@@ -294,3 +294,10 @@ Greater rift (`greater_rift_container.rift_progress_bar`): equals the marker-der
 at every sample; resets to 0.0 when the rift ends. The normal rift container has no marker control.
 The reader reads +0xA60 for whichever bar is visible and, for greater rifts, takes the larger of it and
 the marker position (the float drops to 0 at the end while the marker stays at 100%).
+
+## The game minimap control
+
+`Root.NormalLayer.minimap_dialog_backgroundScreen.minimap_dialog_pve.minimap_pve_arrow_region` is the
+square the minimap icons are placed in: (1515,80)-(1815,380) UI units, i.e. centre (1665,230) and radius 150.
+That equals the hand-calibrated overlay placement (0.19 H from the top, ~0.168 H from the right on 16:9,
+radius ~0.125 H), so the overlay follows this control instead of using calibrated offsets.

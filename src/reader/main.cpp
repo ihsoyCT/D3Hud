@@ -515,6 +515,7 @@ enum GameUi : size_t {
     kUiRiftTimerBar,               // greater rift timer bar and its sliding marker
     kUiRiftTimerMarker,
     kUiRiftNormalBar,              // the normal rift's progress bar (rift_container)
+    kUiMinimap,                    // the game's minimap: the square its icons are placed in
     kUiCount,
 };
 
@@ -548,6 +549,7 @@ static std::vector<std::string> GameUiPaths() {
     p.push_back(rift + "greater_rift_container.rift_timer_progress_bar");
     p.push_back(rift + "greater_rift_container.rift_timer_marker");
     p.push_back(rift + "rift_container.rift_progress_bar");
+    p.push_back("Root.NormalLayer.minimap_dialog_backgroundScreen.minimap_dialog_pve.minimap_pve_arrow_region");
     return p;
 }
 
@@ -585,6 +587,11 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
                 out->riftTimerFraction = RiftTimerFractionFromRects(timerBar.rect.x0, timerBar.rect.x1, timerMarker.rect.x0);
         }
         break;
+    }
+    {
+        const UiControlState mm = ui.Read(proc, kUiMinimap);  // laid out and shown
+        out->minimapOpen = mm.visible && mm.rect.x1 - mm.rect.x0 > 20.0f && mm.rect.y1 - mm.rect.y0 > 20.0f;
+        if (out->minimapOpen) out->minimapRect = mm.rect;
     }
     out->salvageOpen = ui.Read(proc, kUiSalvageDialog).visible;
     if (out->salvageOpen) {
