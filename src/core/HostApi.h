@@ -270,6 +270,9 @@ typedef struct d3h_host {
 
     /* policy hooks */
     d3h_bool (*set_salvage_policy)(d3h_salvage_policy_fn fn, void* user);
+
+    /* size in screen pixels of `text` as draw_text would draw it at `scale` */
+    d3h_vec2 (*text_size)(const char* text, float scale);
 } d3h_host;
 
 /* True when the host's table is large enough to contain `field` (a newer plugin on an older host). */

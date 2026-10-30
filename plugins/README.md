@@ -14,8 +14,8 @@ current one is 1). The overlay loads every folder at start; **restart the overla
 `actors()`) are complete examples.
 
 The Plugins page in Settings lists every plugin, whether it runs, its errors, its log lines and what it costs:
-microseconds spent in its code per drawn frame (average and peak, event handlers and page / panel drawing
-included), so a slow plugin is easy to spot.
+microseconds spent in its code per drawn frame (average and worst frame, refreshed twice a second; event handlers
+and page / panel drawing included), so a slow plugin is easy to spot.
 `D3Hud.Overlay.exe --settings-page timetracker.timetracker` opens Settings on one page (ids are
 `<plugin>.<page id>`, and `<plugin>.settings` for the automatic options page).
 
@@ -40,6 +40,7 @@ memory, press keys or click, touch files or the network. (See `PLUGIN_PLAN.md` f
 | `d3hud.actor(i)`, `d3hud.item(i)` | the i-th (1-based) actor / item of the snapshot, or `nil` |
 | `d3hud.world_to_screen(x, y [, height])` | screen pixels of a world position, or `nil` when off screen |
 | `d3hud.draw_text(x, y, argb, text [, scale])` | text on the screen, from a `frame` event handler |
+| `d3hud.text_size(text [, scale])` | width, height in pixels of text as `draw_text` draws it |
 | `d3hud.draw_rect(x0, y0, x1, y1, argb [, filled = true [, thickness]])` | a rectangle, from a `frame` handler |
 | `d3hud.draw_line(x0, y0, x1, y1, argb [, thickness])` | a line, from a `frame` handler |
 | `d3hud.setting{...}`, `d3hud.get(key)`, `d3hud.set(key, value)` | persisted settings (below) |

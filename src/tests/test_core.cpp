@@ -544,6 +544,7 @@ d3h_bool WorldToScreen(d3h_vec2 w, float, d3h_vec2* out) {
     return 1;
 }
 void DrawRect(int32_t, d3h_rect r, d3h_color, d3h_bool, float) { g.rects.push_back(r); }
+d3h_vec2 TextSize(const char* t, float scale) { return {7.f * scale * static_cast<float>(strlen(t)), 13.f * scale}; }
 d3h_bool RegisterPanel(const d3h_panel_desc* d) {
     g.panels.push_back({d->id, d->title, "", d->draw, d->user});
     return 1;
@@ -574,6 +575,7 @@ d3h_host MakeHost() {
     h.api_version = D3H_API_VERSION;
     h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.subscribe = Subscribe; h.draw_text = DrawText;
     h.world_to_screen = WorldToScreen; h.draw_rect = DrawRect; h.register_panel = RegisterPanel;
+    h.text_size = TextSize;
     h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
     h.get_float = GetFloat; h.get_color = GetColor; h.get_string = GetString; h.set_value = SetValue; h.set_string = SetString;
     return h;
@@ -707,16 +709,24 @@ static void TestLuaSandbox() {
     CHECK(bad->disabled() && bad->errorCount() == LuaPlugin::kMaxErrors);
     CHECK(!fake::g.logs.empty() && fake::g.logs[0].find("[testplugin]") == 0 && fake::g.logs[0].find("boom") != std::string::npos);
 
-    // time spent in plugin code is measured per frame
+    // time spent in plugin code is measured per frame and published once per window
     fake::g.Reset();
     auto busy = load("busy", "d3hud.on('frame', function() local n = 0 for i = 1, 300000 do n = n + i end end)");
     CHECK(busy != nullptr && busy->timing().avgUs == 0.0);
+    auto clock = std::chrono::steady_clock::now();
     for (int i = 0; i < 5; ++i) {
         fake::Fire(D3H_EVENT_FRAME);
-        busy->EndFrame();
+        busy->EndFrame(clock + std::chrono::milliseconds(i * 10));  // 40 ms: still inside the first window
     }
-    CHECK(busy->timing().lastUs > 0.0 && busy->timing().avgUs > 0.0 && busy->timing().peakUs >= busy->timing().lastUs);
+    CHECK(busy->timing().avgUs == 0.0);  // nothing published yet, so a display does not flicker
+    fake::Fire(D3H_EVENT_FRAME);
+    busy->EndFrame(clock + std::chrono::milliseconds(600));
+    CHECK(busy->timing().avgUs > 0.0 && busy->timing().peakUs >= busy->timing().avgUs);
     CHECK(busy->timing().calls == 1.0);
+    const double published = busy->timing().avgUs;
+    fake::Fire(D3H_EVENT_FRAME);
+    busy->EndFrame(clock + std::chrono::milliseconds(700));
+    CHECK(busy->timing().avgUs == published);  // unchanged until the next window ends
 
     // events carry their data; settings round trip through the host
     fake::g.Reset();
@@ -840,11 +850,12 @@ static void TestHealthBars() {
                       fake::Actor(D3H_ACTOR_TRASH, 400.f, 1.0f, "Trash"),
                       fake::Actor(D3H_ACTOR_RARE, 500.f, 0.f, "Dead rare"),
                       fake::Actor(D3H_ACTOR_CHAMPION, -50.f, 0.7f, "Off screen")};
+    CHECK(fake::g.settings.SetNumber("healthbars.list", 0));  // the bars over the monsters first
     fake::Fire(D3H_EVENT_FRAME);
     CHECK(!p->disabled());
-    // two bars (border, background, fill each) and their percentages
+    // two bars (border, background, fill each) and their percentages (each drawn twice: shadow and text)
     CHECK(fake::g.rects.size() == 6);
-    CHECK(fake::g.drawn.size() == 2 && fake::g.drawn[0] == "50%" && fake::g.drawn[1] == "100%");
+    CHECK(fake::g.drawn.size() == 4 && fake::g.drawn[0] == "50%" && fake::g.drawn[2] == "100%");
     if (fake::g.rects.size() == 6) {
         const d3h_rect fill = fake::g.rects[2];  // the champion's: half of the 80 px bar
         CHECK(std::fabs((fill.x1 - fill.x0) - 40.f) < 0.01f);
@@ -857,6 +868,42 @@ static void TestHealthBars() {
     CHECK(fake::g.settings.SetNumber("healthbars.champion", 0) && fake::g.settings.SetNumber("healthbars.percent", 0));
     fake::Fire(D3H_EVENT_FRAME);
     CHECK(fake::g.rects.size() == 6 && fake::g.drawn.empty());  // rare and boss
+
+    // the list on the side: a box, then one bar per elite with its name and percentage inside, nearest first
+    CHECK(fake::g.settings.SetNumber("healthbars.over", 0) && fake::g.settings.SetNumber("healthbars.list", 1) &&
+          fake::g.settings.SetNumber("healthbars.champion", 1));
+    fake::g.actors[0].name[0] = 'x';
+    strncpy_s(fake::g.actors[0].name, sizeof(fake::g.actors[0].name), "x1_Fallen_Champion", _TRUNCATE);
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(!p->disabled());
+    CHECK(fake::g.rects.size() == 1 + 3 * 3);  // box + champion, rare, boss
+    // per row: percentage (shadow, text) then name (shadow, text); the first row is the champion, 100 units away
+    CHECK(fake::g.drawn.size() == 12);
+    if (fake::g.drawn.size() == 12) {
+        CHECK(fake::g.drawn[0] == "50%" && fake::g.drawn[2] == "Fallen Champion");  // prettified name
+        CHECK(fake::g.drawn[8] == "90%" && fake::g.drawn[10] == "Boss, life not read");
+    }
+    // the box and the bars sit on the left (default) side, inside the screen
+    CHECK(fake::g.rects[0].x0 >= 0.f && fake::g.rects[0].x1 < 400.f);
+
+    // right side, lowest life first, no box
+    CHECK(fake::g.settings.SetNumber("healthbars.list_side", 1) && fake::g.settings.SetNumber("healthbars.list_sort", 1) &&
+          fake::g.settings.SetNumber("healthbars.list_box", 0));
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.rects.size() == 9 && fake::g.rects[0].x0 > 1920.f / 2);
+    CHECK(fake::g.drawn.size() == 12 && fake::g.drawn[0] == "50%");  // champion has the lowest life (0.5)
+
+    // a name too long for the bar is cut short
+    strncpy_s(fake::g.actors[0].name, sizeof(fake::g.actors[0].name), "AVeryLongMonsterNameThatCannotFitInTheBar", _TRUNCATE);
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    bool cut = false;
+    for (const std::string& d : fake::g.drawn) cut |= d.size() > 2 && d.ends_with("..");
+    CHECK(cut);
 }
 
 static void TestPaths() {

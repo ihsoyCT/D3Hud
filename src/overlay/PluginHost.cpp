@@ -142,6 +142,13 @@ struct PluginHost::HostFns {
                     ArgbToImColor(color), text);
     }
 
+    static d3h_vec2 TextSize(const char* text, float scale) {
+        if (text == nullptr) return {0.f, 0.f};
+        const float size = ImGui::GetFontSize() * std::clamp(scale, 0.25f, 8.f);
+        const ImVec2 v = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.f, text);
+        return {v.x, v.y};
+    }
+
     static ImDrawList* ListFor(int32_t layer) {
         return layer <= D3H_LAYER_MARKERS ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
     }
@@ -293,6 +300,7 @@ PluginHost::PluginHost(HudRenderer& renderer) : renderer_(renderer) {
     host_.register_panel = HostFns::RegisterPanel;
     host_.draw_line = HostFns::DrawLine;
     host_.draw_rect = HostFns::DrawRect;
+    host_.text_size = HostFns::TextSize;
     host_.define_setting = HostFns::Define;
     host_.get_bool = HostFns::GetBool;
     host_.get_int = HostFns::GetInt;

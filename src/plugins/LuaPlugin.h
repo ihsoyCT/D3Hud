@@ -6,6 +6,7 @@
 // call, and a plugin that raises errors repeatedly is switched off. See docs in PLUGIN_PLAN.md.
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -50,15 +51,17 @@ public:
     [[nodiscard]] int errorCount() const { return errors_; }
     [[nodiscard]] const std::string& lastError() const { return lastError_; }
 
-    // Time spent inside the plugin's code (events, page and panel draws), per drawn frame.
+    // Time spent inside the plugin's code (events, page and panel draws), per drawn frame. The figures
+    // are published once per kTimingWindowSec (the average and the worst frame of that window), so a
+    // display of them stays readable instead of flickering with every frame.
+    static constexpr double kTimingWindowSec = 0.5;
     struct Timing {
-        double lastUs = 0;  // the previous frame
-        double avgUs = 0;   // smoothed over roughly the last second
-        double peakUs = 0;  // worst recent frame, decaying
-        double calls = 0;   // calls into the plugin in the previous frame
+        double avgUs = 0;   // average per frame over the last window
+        double peakUs = 0;  // worst frame of the last window
+        double calls = 0;   // average calls into the plugin per frame
     };
     // Closes the books of one drawn frame; the host calls it once per frame.
-    void EndFrame();
+    void EndFrame(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
     [[nodiscard]] const Timing& timing() const { return timing_; }
 
 private:
@@ -83,8 +86,11 @@ private:
     PluginManifest manifest_;
     int errors_ = 0;
     Timing timing_;
-    double accumUs_ = 0;
+    double accumUs_ = 0;  // the frame in progress
     int accumCalls_ = 0;
+    double windowUs_ = 0, windowPeakUs_ = 0, windowCalls_ = 0;  // the window in progress
+    int windowFrames_ = 0;
+    std::chrono::steady_clock::time_point windowStart_{};
     std::string lastError_;
     int handlersRef_ = 0;  // registry table: event type -> array of Lua functions
     int uiRef_ = 0;        // registry: the `ui` table handed to page draw functions

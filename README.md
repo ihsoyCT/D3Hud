@@ -135,7 +135,8 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
   to (for example *Town* or *Bounties*); the answer is remembered. The page also holds the options (rename
   or add areas, show the split on screen). A **Time** tab in the dock shows the same split when you hover it.
 - **Health bars** (`plugins/healthbars`) draws a life bar over every champion (blue), rare and boss on the
-  screen, with size, colours and what to show on its settings page. The reader reads the life of those three
+  screen, and lists the same bars one under the other on the left or right edge of the screen with the
+  monster's name inside each bar. Size, colours, order and what to show are on its settings page. The reader reads the life of those three
   kinds only, and only once it has found their data, so a bar can appear a few seconds late.
 
 Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
