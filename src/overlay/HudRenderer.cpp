@@ -1202,10 +1202,13 @@ void HudRenderer::DrawRunTimer(const WorldSnapshot& snap) {
     double left = 0.0;
     const bool gr = layout_.drops.showRift && snap.ui.riftOpen == 2 && grStartT_ >= 0.0;
     if (gr) {
-        left = kGreaterRiftSeconds - (now - grStartT_);
+        // the game's own timer bar when readable, else our clock since the bar appeared
+        const bool fromGame = snap.ui.riftTimerFraction >= 0.0f;
+        left = fromGame ? kGreaterRiftSeconds * (1.0 - snap.ui.riftTimerFraction)
+                        : kGreaterRiftSeconds - (now - grStartT_);
         char t[24];
         FormatDuration(std::max(0.0, left), t, sizeof(t));
-        snprintf(lines[n], sizeof(lines[0]), "GR timer %s left (est.)", t);
+        snprintf(lines[n], sizeof(lines[0]), "GR timer %s left%s", t, fromGame ? "" : " (est.)");
         cols[n++] = left < 60.0 ? IM_COL32(255, 90, 90, 255) : left < 180.0 ? IM_COL32(255, 200, 70, 255) : normal;
     }
     if (layout_.drops.showRift && snap.ui.riftOpen) {

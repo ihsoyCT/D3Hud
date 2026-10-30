@@ -428,6 +428,16 @@ static void TestSalvageRules() {
     CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
 }
 
+static void TestRiftTimer() {
+    // measured in a greater rift: bar 1505..1827 (322 units), marker moved 25 units in 70 s
+    CHECK(std::fabs(RiftTimerFractionFromRects(1505.f, 1827.f, 1507.2f) - 0.0068f) < 1e-3f);
+    CHECK(std::fabs(RiftTimerFractionFromRects(1505.f, 1827.f, 1666.f) - 0.5f) < 1e-4f);
+    CHECK(RiftTimerFractionFromRects(1505.f, 1827.f, 454060.f) < 0.0f);  // control not laid out yet
+    CHECK(RiftTimerFractionFromRects(1505.f, 1827.f, 26869.f) < 0.0f);   // recycled control after the rift
+    CHECK(RiftTimerFractionFromRects(1505.f, 1505.f, 1505.f) < 0.0f);
+    CHECK(RiftTimerFractionFromRects(1505.f, 1827.f, 1830.f) == 1.0f);   // slightly past the end clamps
+}
+
 static void TestSalvageAll() {
     SafeArea safe;
     SalvageRules rules;
@@ -699,6 +709,7 @@ int main() {
     TestItemSearch();
     TestRiftProgress();
     TestSalvageAll();
+    TestRiftTimer();
     TestSnapshotInterp();
     TestAcdItemDecode();
     TestMapOrientation();

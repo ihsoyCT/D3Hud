@@ -512,6 +512,8 @@ enum GameUi : size_t {
     kUiRiftMarker,
     kUiSalvageMagic,               // salvage tab: "salvage all blue" / "salvage all yellow"
     kUiSalvageRare,
+    kUiRiftTimerBar,               // greater rift timer bar and its sliding marker
+    kUiRiftTimerMarker,
     kUiCount,
 };
 
@@ -542,6 +544,8 @@ static std::vector<std::string> GameUiPaths() {
     p.push_back(rift + "challenge_rift_container.rift_progress_marker");
     p.push_back("Root.NormalLayer.vendor_dialog_mainPage.salvage_dialog.salvage_all_wrapper.salvage_magic_button");
     p.push_back("Root.NormalLayer.vendor_dialog_mainPage.salvage_dialog.salvage_all_wrapper.salvage_rare_button");
+    p.push_back(rift + "greater_rift_container.rift_timer_progress_bar");
+    p.push_back(rift + "greater_rift_container.rift_timer_marker");
     return p;
 }
 
@@ -563,6 +567,11 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
         const float p = RiftProgressFromRects(bar.rect.x0, bar.rect.x1, marker.rect.x0);
         if (p < 0.0f) continue;
         out->riftOpen = barIdx == kUiRiftGrBar ? 2 : 1;  // 2 = greater rift
+        if (barIdx == kUiRiftGrBar) {
+            const UiControlState timerBar = ui.Read(proc, kUiRiftTimerBar), timerMarker = ui.Read(proc, kUiRiftTimerMarker);
+            if (timerBar.found && timerMarker.found)
+                out->riftTimerFraction = RiftTimerFractionFromRects(timerBar.rect.x0, timerBar.rect.x1, timerMarker.rect.x0);
+        }
         out->riftProgress = p;
         break;
     }

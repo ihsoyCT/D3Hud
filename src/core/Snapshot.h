@@ -11,7 +11,7 @@
 
 namespace d3hud {
 
-constexpr uint32_t kSnapshotVersion = 9;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons
+constexpr uint32_t kSnapshotVersion = 10;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer
 constexpr int kMaxScenes = 512;  // scenes of the current world (a rift has ~100-250)
 constexpr int kMaxActors = 256;
 constexpr int kMaxItems = 256;  // inventory + equipped + the visible stash tab (70)
@@ -180,6 +180,7 @@ struct UiLayout {
     uint8_t stashPageMask = 0;  // bit p: page button p exists (the account owns that page)
     UiRect salvageMagicButton;  // the salvage tab's "salvage all blue" / "salvage all yellow" buttons
     UiRect salvageRareButton;
+    float riftTimerFraction = -1.f;  // greater rift: elapsed share of the 15 min limit (0..1), -1 unknown
 };
 
 // The rift progress bar's marker slides along the bar: its left edge is the bar's left edge at
@@ -188,6 +189,17 @@ inline float RiftProgressFromRects(float barX0, float barX1, float markerX0) {
     const float w = barX1 - barX0;
     if (w < 50.0f) return -1.0f;
     const float p = (markerX0 - barX0) / w;
+    return p < 0.0f ? 0.0f : p > 1.0f ? 1.0f : p;
+}
+
+// The greater rift timer marker slides along its bar over the 15 minute limit (measured: 0.358 UI
+// units/s over a 322 unit bar). Returns the elapsed share 0..1, or -1 when the marker is not on the bar
+// (unset or recycled control with garbage geometry).
+inline float RiftTimerFractionFromRects(float barX0, float barX1, float markerX0) {
+    const float w = barX1 - barX0;
+    if (w < 50.0f) return -1.0f;
+    const float p = (markerX0 - barX0) / w;
+    if (!(p >= -0.03f && p <= 1.03f)) return -1.0f;  // also rejects NaN
     return p < 0.0f ? 0.0f : p > 1.0f ? 1.0f : p;
 }
 
@@ -254,7 +266,7 @@ static_assert(std::is_trivially_copyable_v<WorldSnapshot>, "snapshots must be me
 // UiLayout: 4 + 16 * (2 + kEquipSlots) + 8 = 268.
 static_assert(sizeof(ActorSnapshot) == 80, "ActorSnapshot layout changed");
 static_assert(sizeof(ItemSnapshot) == 120, "ItemSnapshot layout changed");
-static_assert(sizeof(UiLayout) == 492, "UiLayout layout changed");
+static_assert(sizeof(UiLayout) == 496, "UiLayout layout changed");
 static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 80 + kMaxItems * 120,
               "WorldSnapshot layout changed");
 
