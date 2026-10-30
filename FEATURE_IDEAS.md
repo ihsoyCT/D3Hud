@@ -70,3 +70,14 @@ labels is covered by the label mode; item "slot" rules are the never-salvage ite
 - Start the reader with the overlay; publish rate.
 - Fps/timings overlay; on-screen reader error log.
 - "Open ini folder"; "reset everything" with confirmation.
+
+## Rift progress (investigation)
+
+The reader finds the rift UI controls (`...rift_wrapper.greater_rift_container.rift_progress_text`,
+`.rift_progress_bar`, `.rift_progress_marker`, `.rift_timer_value`) but only reads their visibility and
+rects. The progress value itself is not located yet. To find it, start a rift and run:
+
+    D3Hud.Reader.exe --attach "Diablo III64.exe" --ui-watch rift_progress --seconds 120 > rift_watch.txt
+
+while killing monsters. The summary at the end lists the fields that changed; the one that only grows
+with the progress is the value (or the marker rect moves with it). Then publish it in UiLayout.

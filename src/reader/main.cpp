@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <print>
+#include <map>
 #include <string>
 #include <unordered_map>
 
@@ -1170,6 +1171,7 @@ int main(int argc, char** argv) {
     bool dumpItems = false;
     bool dumpScenes = false;
     const char* uiFilter = nullptr;
+    const char* uiWatch = nullptr;  // --ui-watch <substring>
     double publishSeconds = 0;  // 0 = forever
     const char* listFilter = nullptr;
     const char* snoPath = nullptr;
@@ -1183,6 +1185,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--items")) dumpItems = true;
         else if (!strcmp(argv[i], "--scenes")) dumpScenes = true;
         else if (!strcmp(argv[i], "--ui") && i + 1 < argc) uiFilter = argv[++i];
+        else if (!strcmp(argv[i], "--ui-watch") && i + 1 < argc) uiWatch = argv[++i];
         else if (!strcmp(argv[i], "--sno") && i + 1 < argc) snoPath = argv[++i];
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) publishSeconds = atof(argv[++i]);
         else if (!strcmp(argv[i], "--hz") && i + 1 < argc) g_publishHz = std::clamp(atof(argv[++i]), 5.0, 240.0);
@@ -1242,6 +1245,59 @@ int main(int argc, char** argv) {
         if (dumpActors) return DumpActors(*proc, sno);
         if (dumpItems) return DumpItems(*proc, sno);
         if (dumpScenes) return DumpScenes(*proc, sno);
+        if (uiWatch != nullptr) {
+            // --ui-watch <substring> [--seconds N]: poll the memory of the matching UI controls
+            // and report which 4-byte fields change (and how often). A value that only ever
+            // moves while a rift progresses is the progress field. Output: a diff stream, then
+            // a per-field summary (first/last value as integer and float).
+            const double secs = publishSeconds > 0 ? publishSeconds : 120.0;
+            const auto infos = UiControls::List(*proc, uiWatch);
+            std::print("watching {} control(s) matching '{}' for {:.0f} s (play the rift now)" "\n", infos.size(), uiWatch, secs);
+            struct Stat { int changes = 0; uint32_t first = 0, last = 0; };
+            std::map<std::pair<size_t, size_t>, Stat> stats;
+            std::vector<std::vector<uint8_t>> prev(infos.size());
+            const ULONGLONG t0 = GetTickCount64();
+            while (GetTickCount64() - t0 < static_cast<ULONGLONG>(secs * 1000.0)) {
+                const double t = static_cast<double>(GetTickCount64() - t0) / 1000.0;
+                int printed = 0;
+                for (size_t i = 0; i < infos.size(); ++i) {
+                    std::vector<uint8_t> cur(0x1000);
+                    if (!proc->Read(infos[i].address, cur.data(), cur.size())) continue;
+                    if (!prev[i].empty()) {
+                        for (size_t off = 0; off + 4 <= cur.size(); off += 4) {
+                            uint32_t a, b;
+                            memcpy(&a, &prev[i][off], 4);
+                            memcpy(&b, &cur[off], 4);
+                            if (a == b) continue;
+                            Stat& st = stats[{i, off}];
+                            if (st.changes++ == 0) st.first = a;
+                            st.last = b;
+                            float fb;
+                            memcpy(&fb, &b, 4);
+                            if (printed++ < 12) {
+                                const std::string& p = infos[i].path;
+                                std::print("t={:.2f} {} +0x{:X}: {:08X} -> {:08X} (f={:.4f})" "\n", t,
+                                           p.size() > 60 ? p.substr(p.size() - 60) : p, off, a, b, fb);
+                            }
+                        }
+                    }
+                    prev[i] = std::move(cur);
+                }
+                Sleep(250);
+            }
+            std::print("--- summary: fields that changed 2..600 times ---" "\n");
+            int lines = 0;
+            for (const auto& [key, st] : stats) {
+                if (st.changes < 2 || st.changes > 600 || lines++ >= 400) continue;
+                float f0, f1;
+                memcpy(&f0, &st.first, 4);
+                memcpy(&f1, &st.last, 4);
+                const std::string& p = infos[key.first].path;
+                std::print("{}x {} +0x{:X}: {:08X} -> {:08X} (f {:.4f} -> {:.4f})" "\n", st.changes,
+                           p.size() > 60 ? p.substr(p.size() - 60) : p, key.second, st.first, st.last, f0, f1);
+            }
+            return 0;
+        }
         if (uiFilter != nullptr) {
             // --ui <substring>: live UI controls by path (find dialog/button paths)
             for (const UiControlInfo& c : UiControls::List(*proc, uiFilter))
