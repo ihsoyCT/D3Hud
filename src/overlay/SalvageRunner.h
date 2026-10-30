@@ -4,8 +4,9 @@
 //   2. arms the anvil and clicks every remaining candidate in the backpack (see Salvage.h),
 //      confirming the legendary prompt.
 // Ordinary items are clicked in a burst: the next click does not wait for the previous item to
-// vanish (a few clicks are "in flight" and verified afterwards); legendary/set items, which raise
-// a confirmation, are done one at a time. Sends real mouse input to the game.
+// vanish (a few clicks are "in flight" and verified afterwards). Legendary/set items raise a
+// confirmation: the runner waits only for that prompt, clicks its OK and carries on. Sends real
+// mouse input to the game.
 //
 // Stops at once on: Esc, the user moving the mouse, the game losing focus,
 // the salvage tab or inventory closing, or an item that does not vanish.
@@ -33,7 +34,7 @@ public:
     const std::string& status() const { return status_; }
 
 private:
-    enum class Step { Idle, Batch, WaitBatch, Anvil, NextItem, WaitGone };
+    enum class Step { Idle, Batch, WaitBatch, Anvil, NextItem, WaitGone, WaitPrompt };
     // Moves the cursor now, clicks on a later tick (the game wants a hover first); the next
     // action waits `postMs` after the click.
     void QueueClick(const UiRect& uiRect, float screenW, float screenH, ULONGLONG hoverMs, ULONGLONG postMs);
@@ -56,6 +57,9 @@ private:
     ItemRarity batchQuality_ = ItemRarity::Magic;
     int batchCount_ = 0;
     ULONGLONG batchSince_ = 0;
+    uint64_t promptItem_ = 0;      // legendary whose confirmation we are waiting for
+    ULONGLONG promptSince_ = 0;
+    bool promptHandled_ = false;   // its OK was clicked
     int done_ = 0;
     std::string status_ = "idle";
 };

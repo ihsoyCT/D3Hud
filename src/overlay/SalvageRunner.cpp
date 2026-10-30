@@ -11,6 +11,8 @@ static constexpr ULONGLONG kBatchTimeoutMs = 6000;  // "salvage all" must finish
 static constexpr ULONGLONG kFocusGraceMs = 1500;   // after Start: the game regains focus
 static constexpr ULONGLONG kBurstHoverMs = 30, kBurstPostMs = 40;    // ordinary items, burst mode
 static constexpr ULONGLONG kCarefulHoverMs = 60, kCarefulPostMs = 150;  // legendaries / burst off
+static constexpr ULONGLONG kConfirmHoverMs = 30, kConfirmPostMs = 70, kConfirmRetryMs = 150;  // the prompt's OK
+static constexpr ULONGLONG kPromptWaitMs = 900;  // a legendary click that raises no prompt
 static constexpr size_t kMaxInFlight = 4;
 
 void SalvageRunner::Start(HWND overlay, HWND game) {
@@ -99,9 +101,10 @@ void SalvageRunner::Tick(const WorldSnapshot& snap, const SafeArea& safe, const 
 
     // the legendary "are you sure?" prompt can appear after any item click
     if (snap.ui.confirmOpen) {
-        if (now - confirmAt_ > 500) {
-            QueueClick(snap.ui.confirmOk, w, h, kCarefulHoverMs, 250);
+        if (now - confirmAt_ > kConfirmRetryMs) {
+            QueueClick(snap.ui.confirmOk, w, h, kConfirmHoverMs, kConfirmPostMs);
             confirmAt_ = now;
+            promptHandled_ = true;
         }
         return;
     }
@@ -185,8 +188,10 @@ void SalvageRunner::Tick(const WorldSnapshot& snap, const SafeArea& safe, const 
                 if (!flights_.empty()) return;  // wait for the last clicks to land
                 return Finish(limitReached ? " (run limit reached)" : "");
             }
-            // legendary/set items raise a confirmation: one at a time, with nothing else in flight
-            const bool careful = !rules.burst || best->rarity == ItemRarity::Legendary || best->rarity == ItemRarity::Set;
+            // fast mode: everything is pipelined, a legendary/set only waits for its own prompt;
+            // otherwise one item at a time
+            const bool careful = !rules.burst;
+            const bool needsPrompt = best->rarity == ItemRarity::Legendary || best->rarity == ItemRarity::Set;
             if ((careful && !flights_.empty()) || flights_.size() >= kMaxInFlight) return;
             UiRect r;
             if (!ItemScreenRect(snap.ui, best->location, best->gridX, best->gridY, best->height, &r))
@@ -194,7 +199,25 @@ void SalvageRunner::Tick(const WorldSnapshot& snap, const SafeArea& safe, const 
             QueueClick(r, w, h, careful ? kCarefulHoverMs : kBurstHoverMs, careful ? kCarefulPostMs : kBurstPostMs);
             flights_.push_back({best->id, now});
             status_ = std::format("salvaging {} ({} done)", best->name, done_);
-            if (careful) step_ = Step::WaitGone;
+            if (careful) {
+                step_ = Step::WaitGone;
+            } else if (needsPrompt) {
+                step_ = Step::WaitPrompt;
+                promptItem_ = best->id;
+                promptSince_ = now;
+                promptHandled_ = false;
+            }
+            break;
+        }
+        case Step::WaitPrompt: {
+            // the prompt shows up shortly after the click; once its OK has been clicked (or the item is
+            // already gone, or no prompt came) carry on - the item's disappearance is verified later
+            bool stillThere = false;
+            for (const Flight& f : flights_) stillThere |= f.id == promptItem_;
+            if (promptHandled_ || !stillThere || now - promptSince_ > kPromptWaitMs) {
+                nextAt_ = std::max(nextAt_, now + 20);
+                step_ = Step::NextItem;
+            }
             break;
         }
         case Step::WaitGone:
