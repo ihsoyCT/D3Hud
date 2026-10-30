@@ -878,7 +878,18 @@ bool HudRenderer::PanelOpenView(const PanelView& v, const HudOptions& opt, const
         flags |= ImGuiWindowFlags_AlwaysAutoResize;
     }
     if (!opt.inputInteractive) flags |= ImGuiWindowFlags_NoInputs;  // hover = view-only
-    if (!ImGui::Begin(title, nullptr, flags)) {
+    bool keepOpen = true;
+    const bool wasPinned = *v.pinned;
+    const bool visible = ImGui::Begin(title, wasPinned ? &keepOpen : nullptr, flags);  // a pinned panel has an X
+    if (wasPinned && !keepOpen) {  // closed with the X: unpin and collapse now, no hover peek on the spot it was in
+        ImGui::End();
+        *v.pinned = false;
+        *v.hoverUntil = 0.f;
+        *v.size = ImVec2(0.f, 0.f);
+        SaveLayout();
+        return false;
+    }
+    if (!visible) {
         ImGui::End();
         return false;
     }
@@ -955,7 +966,7 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
         bool first = true;
         for (int i = 0; i < MinimapLayout::kPanelCount; ++i) {
-            if (layout_.panelHidden[i]) continue;
+            if (layout_.panelHidden[i] || i == static_cast<int>(PanelId::Settings)) continue;  // Settings: last, below
             const bool pinned = layout_.panelPinned[i];
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
@@ -985,6 +996,30 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
             const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
             if (opt.cursorX >= lo.x && opt.cursorX <= hi.x && opt.cursorY >= lo.y && opt.cursorY <= hi.y)
                 p.hoverUntil = static_cast<float>(ImGui::GetTime()) + 0.30f;
+        }
+        {  // Settings, always the rightmost tab: a cogwheel (the UI font has no such glyph, so it is drawn)
+            constexpr int kSettings = static_cast<int>(PanelId::Settings);
+            const bool pinned = layout_.panelPinned[kSettings];
+            const float side = ImGui::GetFrameHeight();
+            if (!first) ImGui::SameLine();
+            if (ImGui::Button("##dock_settings", ImVec2(side, side))) {
+                layout_.panelPinned[kSettings] = !pinned;
+                SaveLayout();
+            }
+            const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+            const ImVec2 c((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+            const float r = side * 0.27f, tooth = side * 0.14f;
+            const ImU32 col = ImGui::GetColorU32(pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            for (int k = 0; k < 8; ++k) {
+                const float a = static_cast<float>(k) * 0.7853982f;  // pi / 4
+                const ImVec2 dir(std::cos(a), std::sin(a));
+                dl->AddLine(ImVec2(c.x + dir.x * r, c.y + dir.y * r), ImVec2(c.x + dir.x * (r + tooth), c.y + dir.y * (r + tooth)),
+                            col, std::max(2.0f, side * 0.15f));
+            }
+            dl->AddCircle(c, r, col, 20, std::max(1.5f, side * 0.1f));
+            dl->AddCircle(c, r * 0.4f, col, 12, std::max(1.0f, side * 0.07f));
+            if (opt.inputInteractive && ImGui::IsItemHovered()) ImGui::SetTooltip("Settings");
         }
         ImGui::PopStyleColor();
         dockPos_ = ImGui::GetWindowPos();
