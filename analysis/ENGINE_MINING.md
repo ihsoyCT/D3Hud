@@ -267,3 +267,13 @@ D3Hud are ours (offsets/layouts), no code copying.
 - TurboHUD's SceneHintPlugin is something else: a hand-made list of 31 scene
   SNOs -> campaign dungeon names ("Cave of the Betrayer"), drawn at the scene
   centre when the scene has no portal.
+
+## Rift progress (UI geometry, measured live in a greater rift)
+
+Under `Root.NormalLayer.eventtext_bkgrnd.eventtext_region.stackpanel.rift_wrapper.` the containers
+`greater_rift_container` and `challenge_rift_container` each hold `rift_progress_bar` (rect 1505..1827,
+576..608 UI units, visible while the rift runs) and `rift_progress_marker`. The marker control
+slides along the bar: its left edge (rect x0, +0x498) goes from the bar left edge (0%) to the bar right
+edge (100%), monotonically, ~115 updates over 75 s. progress = (marker.x0 - bar.x0) / (bar.x1 - bar.x0).
+Found with `D3Hud.Reader --ui-watch rift_progress`. Only the greater-rift container was seen moving;
+the other container is read the same way but is untested.

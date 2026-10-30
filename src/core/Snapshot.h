@@ -11,7 +11,7 @@
 
 namespace d3hud {
 
-constexpr uint32_t kSnapshotVersion = 5;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI
+constexpr uint32_t kSnapshotVersion = 6;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress
 constexpr int kMaxScenes = 512;  // scenes of the current world (a rift has ~100-250)
 constexpr int kMaxActors = 256;
 constexpr int kMaxItems = 256;  // inventory + equipped + the visible stash tab (70)
@@ -171,7 +171,18 @@ struct UiLayout {
     uint8_t confirmOpen = 0;  // "are you sure?" prompt (salvaging a legendary)
     UiRect salvageButton;     // the anvil: arms the salvage cursor
     UiRect confirmOk;         // the prompt's OK button
+    uint8_t riftOpen = 0;     // a rift progress bar is on screen
+    float riftProgress = 0.f; // 0..1, from the bar's marker (see RiftProgressFromRects); valid when riftOpen
 };
+
+// The rift progress bar's marker slides along the bar: its left edge is the bar's left edge at
+// 0% and the bar's right edge at 100% (measured live in a greater rift). -1 if the bar is unusable.
+inline float RiftProgressFromRects(float barX0, float barX1, float markerX0) {
+    const float w = barX1 - barX0;
+    if (w < 50.0f) return -1.0f;
+    const float p = (markerX0 - barX0) / w;
+    return p < 0.0f ? 0.0f : p > 1.0f ? 1.0f : p;
+}
 
 // One scene (prebuilt level tile) of the current world: its SNO (shape, see
 // SceneCells) and world rectangle. The whole level is loaded up front, so this
@@ -236,7 +247,7 @@ static_assert(std::is_trivially_copyable_v<WorldSnapshot>, "snapshots must be me
 // UiLayout: 4 + 16 * (2 + kEquipSlots) + 8 = 268.
 static_assert(sizeof(ActorSnapshot) == 80, "ActorSnapshot layout changed");
 static_assert(sizeof(ItemSnapshot) == 120, "ItemSnapshot layout changed");
-static_assert(sizeof(UiLayout) == 304, "UiLayout layout changed");
+static_assert(sizeof(UiLayout) == 312, "UiLayout layout changed");
 static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 80 + kMaxItems * 120,
               "WorldSnapshot layout changed");
 

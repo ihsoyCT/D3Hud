@@ -170,6 +170,7 @@ bool MinimapLayout::Load(const char* path) {
             else if (!strcmp(k, "flash")) drops.flash = v != 0.f;
             else if (!strcmp(k, "maxEntries")) drops.maxEntries = std::max(0, static_cast<int>(v));
             else if (!strcmp(k, "showRunTimer")) drops.showRunTimer = v != 0.f;
+            else if (!strcmp(k, "showRift")) drops.showRift = v != 0.f;
             else if (!strcmp(k, "minRunSeconds")) drops.minRunSeconds = std::clamp(static_cast<int>(v), 0, 3600);
         }
         else if (!strncmp(key, "items.", 6)) {
@@ -294,7 +295,7 @@ bool MinimapLayout::Save(const char* path) const {
     for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
     std::print(f, "drops.alertPrimal={}\ndrops.alertAncient={}\ndrops.sound={}\ndrops.flash={}\ndrops.maxEntries={}\n",
                drops.alertPrimal ? 1 : 0, drops.alertAncient ? 1 : 0, drops.sound ? 1 : 0, drops.flash ? 1 : 0, drops.maxEntries);
-    std::print(f, "drops.showRunTimer={}\ndrops.minRunSeconds={}\n", drops.showRunTimer ? 1 : 0, drops.minRunSeconds);
+    std::print(f, "drops.showRunTimer={}\ndrops.minRunSeconds={}\ndrops.showRift={}\n", drops.showRunTimer ? 1 : 0, drops.minRunSeconds, drops.showRift ? 1 : 0);
     std::print(f, "items.badges={}\nitems.badgeScale={:.2f}\nitems.badgeCorner={}\nitems.badgeAugment={}\n",
                items.badges ? 1 : 0, items.badgeScale, items.badgeCorner, items.badgeAugment ? 1 : 0);
     std::print(f, "items.colAncient={}\nitems.colPrimal={}\nitems.hoverMode={}\nitems.hoverAlpha={:.2f}\n",
@@ -1165,16 +1166,43 @@ void HudRenderer::ResetSession() {
     }
 }
 
-void HudRenderer::DrawRunTimer() {
-    if (!layout_.drops.showRunTimer || !haveRun_) return;
-    char t[24], text[48];
-    FormatDuration(ImGui::GetTime() - runStartT_, t, sizeof(t));
-    snprintf(text, sizeof(text), "Run %s", t);
-    const ImVec2 ds = ImGui::GetIO().DisplaySize, ts = ImGui::CalcTextSize(text);
-    const ImVec2 at(ds.x * 0.5f - ts.x * 0.5f, 6.0f);
+void HudRenderer::DrawRunTimer(const WorldSnapshot& snap) {
+    const double now = ImGui::GetTime();
+    // rift progress samples (about 1 per second, last 60 s) for the ETA
+    if (snap.ui.riftOpen) {
+        if (riftSamples_.empty() || now - riftSamples_.back().first >= 1.0) riftSamples_.push_back({now, snap.ui.riftProgress});
+        while (riftSamples_.size() > 1 && now - riftSamples_.front().first > 60.0) riftSamples_.erase(riftSamples_.begin());
+    } else {
+        riftSamples_.clear();
+    }
+    char lines[2][64];
+    int n = 0;
+    if (layout_.drops.showRunTimer && haveRun_) {
+        char t[24];
+        FormatDuration(now - runStartT_, t, sizeof(t));
+        snprintf(lines[n++], sizeof(lines[0]), "Run %s", t);
+    }
+    if (layout_.drops.showRift && snap.ui.riftOpen) {
+        char eta[24] = "--";
+        if (riftSamples_.size() >= 2) {
+            const auto& a = riftSamples_.front();
+            const auto& b = riftSamples_.back();
+            const double dt = b.first - a.first, dp = b.second - a.second;
+            if (dt >= 8.0 && dp > 0.002) FormatDuration((1.0 - b.second) / (dp / dt), eta, sizeof(eta));
+        }
+        snprintf(lines[n++], sizeof(lines[0]), "Rift %.0f%%   ETA %s", snap.ui.riftProgress * 100.0f, eta);
+    }
+    if (n == 0) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    dl->AddRectFilled(ImVec2(at.x - 6, at.y - 2), ImVec2(at.x + ts.x + 6, at.y + ts.y + 2), IM_COL32(0, 0, 0, 140), 4.f);
-    dl->AddText(at, IM_COL32(230, 230, 240, 255), text);
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    float y = 6.0f;
+    for (int i = 0; i < n; ++i) {
+        const ImVec2 ts = ImGui::CalcTextSize(lines[i]);
+        const ImVec2 at(ds.x * 0.5f - ts.x * 0.5f, y);
+        dl->AddRectFilled(ImVec2(at.x - 6, at.y - 2), ImVec2(at.x + ts.x + 6, at.y + ts.y + 2), IM_COL32(0, 0, 0, 140), 4.f);
+        dl->AddText(at, IM_COL32(230, 230, 240, 255), lines[i]);
+        y += ts.y + 6.0f;
+    }
 }
 
 bool HudRenderer::ExportDropsCsv(const char* path) const {
@@ -1740,6 +1768,7 @@ void HudRenderer::DrawDropSettings() {
     ImGui::SliderInt("keep at most (0 = all)", &D.maxEntries, 0, 2000);
     ch |= ImGui::IsItemDeactivatedAfterEdit();
     ch |= ImGui::Checkbox("run timer at the top of the screen", &D.showRunTimer);
+    ch |= ImGui::Checkbox("rift progress and ETA at the top of the screen", &D.showRift);
     ImGui::SliderInt("list runs longer than (seconds)", &D.minRunSeconds, 0, 300);
     ch |= ImGui::IsItemDeactivatedAfterEdit();
     if (ImGui::Button("Reset session stats")) ResetSession();
@@ -1948,7 +1977,7 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
         }
     UpdateRuns(snap);
     UpdateDrops(snap);           // the log keeps recording while the panels are hidden
-    DrawRunTimer();
+    DrawRunTimer(snap);
     if (!opt.showPanels)
         for (ImVec2& s : panelSize_) s = ImVec2(0.f, 0.f);  // F9 off: nothing to hover
     for (int i = 0; i < kPanels; ++i)

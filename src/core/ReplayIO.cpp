@@ -3,7 +3,7 @@
 namespace d3hud {
 namespace {
 constexpr uint32_t kReplayMagic = 0x52483344;  // 'D3HR'
-constexpr uint32_t kReplayVersion = 5;  // follows kSnapshotVersion (frame layout)
+constexpr uint32_t kReplayVersion = 6;  // follows kSnapshotVersion (frame layout)
 }  // namespace
 
 bool ReplayWriter::Open(const char* path, float frameIntervalMs) {

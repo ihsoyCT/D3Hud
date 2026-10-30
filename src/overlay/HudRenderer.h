@@ -63,6 +63,7 @@ struct DropStyle {
     bool flash = true;
     int maxEntries = 500;       // oldest entries are dropped past this; 0 = keep all
     bool showRunTimer = false;  // "Run 04:12" at the top centre of the screen
+    bool showRift = true;       // "Rift 47%  ETA 1:40" while a rift progress bar is open
     int minRunSeconds = 30;     // shorter world visits are not listed as runs (town hops)
 };
 
@@ -219,7 +220,8 @@ private:
     };
     void UpdateRuns(const WorldSnapshot& snap);
     void ResetSession();
-    void DrawRunTimer();
+    void DrawRunTimer(const WorldSnapshot& snap);
+    std::vector<std::pair<double, float>> riftSamples_;  // (time, progress) while a rift bar is open
     std::vector<RunEntry> runs_;  // finished runs, oldest first
     RunEntry run_;                // the current one
     bool haveRun_ = false;

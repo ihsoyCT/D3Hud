@@ -428,6 +428,14 @@ static void TestSalvageRules() {
     CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
 }
 
+static void TestRiftProgress() {
+    CHECK(RiftProgressFromRects(1505.f, 1827.f, 1504.67f) == 0.0f);    // marker at the start (slightly left): 0%
+    CHECK(RiftProgressFromRects(1505.f, 1827.f, 1827.0f) == 1.0f);
+    CHECK(std::fabs(RiftProgressFromRects(1505.f, 1827.f, 1666.0f) - 0.5f) < 1e-4f);
+    CHECK(RiftProgressFromRects(1505.f, 1827.f, 1900.0f) == 1.0f);     // clamped
+    CHECK(RiftProgressFromRects(1505.f, 1505.f, 1505.0f) < 0.0f);      // unlaid-out bar
+}
+
 static void TestItemSearch() {
     ItemSnapshot it;
     it.rarity = ItemRarity::Legendary;
@@ -657,6 +665,7 @@ int main() {
     TestShrineLabels();
     TestSalvageRules();
     TestItemSearch();
+    TestRiftProgress();
     TestSnapshotInterp();
     TestAcdItemDecode();
     TestMapOrientation();

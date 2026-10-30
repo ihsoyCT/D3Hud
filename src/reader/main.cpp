@@ -506,6 +506,10 @@ enum GameUi : size_t {
     kUiSalvageAnvilAlt,
     kUiConfirm,                    // generic "are you sure?" prompt
     kUiConfirmOk,
+    kUiRiftGrBar,                  // greater rift progress bar and its sliding marker
+    kUiRiftGrMarker,
+    kUiRiftBar,                    // same for the other rift types (challenge container)
+    kUiRiftMarker,
     kUiCount,
 };
 
@@ -529,6 +533,11 @@ static std::vector<std::string> GameUiPaths() {
     p.push_back("Root.NormalLayer.vendor_dialog_mainPage.salvage_dialog.salvage_button");
     p.push_back("Root.TopLayer.confirmation");
     p.push_back("Root.TopLayer.confirmation.subdlg.stack.wrap.button_ok");
+    const std::string rift = "Root.NormalLayer.eventtext_bkgrnd.eventtext_region.stackpanel.rift_wrapper.";
+    p.push_back(rift + "greater_rift_container.rift_progress_bar");
+    p.push_back(rift + "greater_rift_container.rift_progress_marker");
+    p.push_back(rift + "challenge_rift_container.rift_progress_bar");
+    p.push_back(rift + "challenge_rift_container.rift_progress_marker");
     return p;
 }
 
@@ -540,6 +549,18 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
     if (out->bigMapOpen) {
         float pan[2] = {};
         if (ui.ReadFloats(proc, kUiBigMapLocal, 3216, pan, 2)) out->bigMapPan = {pan[0], pan[1]};
+    }
+    // Rift progress: the marker slides along the bar (greater rifts use one container, the
+    // other rift types the other; whichever bar is visible).
+    for (const auto& [barIdx, markerIdx] : {std::pair<size_t, size_t>{kUiRiftGrBar, kUiRiftGrMarker},
+                                            std::pair<size_t, size_t>{kUiRiftBar, kUiRiftMarker}}) {
+        const UiControlState bar = ui.Read(proc, barIdx), marker = ui.Read(proc, markerIdx);
+        if (!bar.visible || !marker.found) continue;
+        const float p = RiftProgressFromRects(bar.rect.x0, bar.rect.x1, marker.rect.x0);
+        if (p < 0.0f) continue;
+        out->riftOpen = 1;
+        out->riftProgress = p;
+        break;
     }
     out->salvageOpen = ui.Read(proc, kUiSalvageDialog).visible;
     if (out->salvageOpen) {
