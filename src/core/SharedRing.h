@@ -17,7 +17,7 @@ public:
 
     // Create (writer) or open (reader) the ring. Fails if mapping cannot be made.
     bool Create();
-    bool Open();
+    [[nodiscard]] bool Open();
     void Close();
 
     // Writer side: publish a snapshot (single writer assumed).
@@ -25,7 +25,7 @@ public:
 
     // Reader side: non-blocking poll; returns true when a newer snapshot was
     // consumed into `out`. Skips stale slots and always delivers in order.
-    bool Poll(WorldSnapshot* out);
+    [[nodiscard]] bool Poll(WorldSnapshot* out);
 
     uint64_t latestIndex() const { return header_ ? header_->writeIndex : 0; }
 

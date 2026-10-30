@@ -129,8 +129,8 @@ struct MinimapLayout {
     static constexpr int kHotkeyCount = kHkPanelFirst + kPanelCount;
     uint8_t hotkeys[kHotkeyCount] = {0x77, 0x78, 0x23, 0x76, 0, 0, 0, 0, 0};  // F8 F9 END F7
 
-    bool Load(const char* path);
-    bool Save(const char* path) const;
+    [[nodiscard]] bool Load(const char* path);
+    [[nodiscard]] bool Save(const char* path) const;
 };
 
 // Panels of the HUD: collapsed tabs docked at the bottom-right. Hovering a tab
@@ -206,6 +206,7 @@ private:
     void PanelEnd(PanelId id, bool wasOpen);
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
+    void SaveLayout();  // layout_.Save + status line
     void DrawMinimapSettings();
     bool minimapFound_ = false;  // last frame: the game's minimap control was used for placement
     void DrawHotkeySettings();

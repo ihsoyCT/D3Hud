@@ -315,6 +315,9 @@ bool MinimapLayout::Save(const char* path) const {
     return true;
 }
 
+// Writes d3hud.ini; the status line in Settings says when that failed.
+void HudRenderer::SaveLayout() { layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed"; }
+
 void HudRenderer::SetLayoutPath(const char* path) {
     strncpy_s(layoutPath_, path, _TRUNCATE);
     layoutStatus_ = layout_.Load(layoutPath_) ? "loaded" : "defaults (no d3hud.ini yet)";
@@ -932,14 +935,14 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
                                                                     : ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
         if (ImGui::SmallButton(layout_.panelPinned[i] ? "pinned" : "pin")) {
             layout_.panelPinned[i] = !layout_.panelPinned[i];
-            layout_.Save(layoutPath_);
+            SaveLayout();
         }
         ImGui::PopStyleColor();
         if (layout_.panelX[i] >= 0.f) {
             ImGui::SameLine();
             if (ImGui::SmallButton("dock")) {  // back to the bottom-right corner
                 layout_.panelX[i] = layout_.panelY[i] = -1.f;
-                layout_.Save(layoutPath_);
+                SaveLayout();
             }
         }
         ImGui::Separator();
@@ -961,7 +964,7 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
         if (std::abs(w - layout_.panelW[i]) > 0.002f || std::abs(h - layout_.panelH[i]) > 0.002f) {
             layout_.panelW[i] = w;
             layout_.panelH[i] = h;
-            layout_.Save(layoutPath_);
+            SaveLayout();
         }
     }
     // Follow the title-bar drag in the layout every frame, so the forced position of the
@@ -973,7 +976,7 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
         panelMoved_[i] = true;
     } else if (panelMoved_[i]) {
         panelMoved_[i] = false;
-        layout_.Save(layoutPath_);
+        SaveLayout();
     }
 }
 
@@ -1008,7 +1011,7 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
             first = false;
             if (ImGui::Button(PanelName(static_cast<PanelId>(i)))) {
                 layout_.panelPinned[i] = !layout_.panelPinned[i];
-                layout_.Save(layoutPath_);
+                SaveLayout();
             }
             ImGui::PopStyleColor();
             // cursor test, not IsItemHovered: the dock ignores input while click-through
@@ -1433,7 +1436,7 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
         const int cx = static_cast<int>((m.x - grid.x0) / cw), cy = static_cast<int>((m.y - grid.y0) / ch);
         if (m.x >= grid.x0 && m.y >= grid.y0 && cx < kBackpackCols && cy < kBackpackRows) {
             safe.Toggle(cx, cy);
-            layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+            SaveLayout();
         }
     }
     if (showSafe) {
@@ -1581,7 +1584,7 @@ void HudRenderer::DrawSalvageSettings() {
         }
     }
     ImGui::TextDisabled("The Salvage button appears under the anvil when the blacksmith's salvage tab is open.");
-    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    if (ch) SaveLayout();
 }
 
 // Two columns: the panels on the left, the selected one's settings on the right.
@@ -1628,7 +1631,7 @@ void HudRenderer::DrawHotkeySettings() {
         captureHotkey_ = -1;
         captureReady_ = false;
         hotkeysDirty_ = true;
-        layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        SaveLayout();
     }
 }
 
@@ -1719,7 +1722,7 @@ void HudRenderer::DrawReaderSettings() {
     }
     ImGui::PopStyleColor();
     ImGui::TextDisabled("Reset also clears the safe area, panel layout and hotkeys (profiles are kept).");
-    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    if (ch) SaveLayout();
 }
 
 // On-screen diagnostics, bottom-left: fps/counts and the reader's state.
@@ -1943,7 +1946,7 @@ void HudRenderer::DrawDropSettings() {
         dropIndex_.clear();
     }
     ImGui::TextDisabled("%zu entries   %s", drops_.size(), layoutStatus_);
-    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    if (ch) SaveLayout();
 }
 
 // Settings > Items: A/P badges on icons and the hover card.
@@ -1997,7 +2000,7 @@ void HudRenderer::DrawItemSettings() {
     ch |= ImGui::Combo("show the card for", &S.hoverMode, "Unidentified items only\0Every item\0Off\0");
     ImGui::SliderFloat("card opacity", &S.hoverAlpha, 0.2f, 1.0f, "%.2f");
     ch |= ImGui::IsItemDeactivatedAfterEdit();
-    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    if (ch) SaveLayout();
 }
 
 // Settings > Ground labels.
@@ -2049,7 +2052,7 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     ImGui::Separator();
     if (settingsTab_ == kGeneral) {
         ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        if (ImGui::IsItemDeactivatedAfterEdit()) SaveLayout();
         ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
         ImGui::SeparatorText("Dock");
         bool ch = ImGui::Combo("corner", &layout_.dockCorner, "Bottom right\0Bottom left\0Top right\0Top left\0");
@@ -2060,7 +2063,7 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         ImGui::SliderFloat("panel opacity", &layout_.panelAlpha, 0.2f, 1.0f, "%.2f");
         ch |= ImGui::IsItemDeactivatedAfterEdit();
         ch |= ImGui::Checkbox("compact (tighter padding)", &layout_.compact);
-        if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        if (ch) SaveLayout();
     } else if (settingsTab_ == kHotkeys) {
         DrawHotkeySettings();
     } else if (settingsTab_ == kProfiles) {
@@ -2077,7 +2080,7 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
             changed = true;
         }
         ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
-        if (changed) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        if (changed) SaveLayout();
         if (settingsTab_ == kDrops) {
             ImGui::SeparatorText("Drop log and alerts");
             DrawDropSettings();
@@ -2149,7 +2152,7 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     for (int i = 0; i < kPanels; ++i)
         if (opt.panelToggleMask & (1u << i)) {
             layout_.panelPinned[i] = !layout_.panelPinned[i];
-            layout_.Save(layoutPath_);
+            SaveLayout();
         }
     UpdateRuns(snap);
     UpdateDrops(snap);           // the log keeps recording while the panels are hidden

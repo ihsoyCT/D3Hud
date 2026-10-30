@@ -34,17 +34,17 @@ struct RegionInfo {
 class Process {
 public:
     static std::vector<ProcInfo> List(const char* nameFilter = nullptr);
-    static std::optional<Process> OpenByPid(DWORD pid);
-    static std::optional<Process> OpenByName(const std::string& namePart);
+    [[nodiscard]] static std::optional<Process> OpenByPid(DWORD pid);
+    [[nodiscard]] static std::optional<Process> OpenByName(const std::string& namePart);
 
     ~Process();
     Process(Process&& o) noexcept;
     Process& operator=(Process&&) = delete;
     Process(const Process&) = delete;
 
-    bool Read(uint64_t addr, void* buf, size_t size) const;
+    [[nodiscard]] bool Read(uint64_t addr, void* buf, size_t size) const;
     template <typename T>
-    bool Read(uint64_t addr, T* out) const {
+    [[nodiscard]] bool Read(uint64_t addr, T* out) const {
         return Read(addr, out, sizeof(T));
     }
     std::vector<uint8_t> ReadVec(uint64_t addr, size_t size) const;

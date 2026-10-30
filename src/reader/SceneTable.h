@@ -61,7 +61,7 @@ public:
     int Discover(const Process& proc, const SceneCells& known, bool verbose = false,
                  std::vector<std::pair<uint64_t, SceneRecord>>* hits = nullptr, const Vec2* player = nullptr);
     // All valid records in the known blocks (every world in memory).
-    bool Read(const Process& proc, const SceneCells& known, std::vector<SceneRecord>* out) const;
+    [[nodiscard]] bool Read(const Process& proc, const SceneCells& known, std::vector<SceneRecord>* out) const;
     size_t baseCount() const;
     void SetBases(const std::vector<uint64_t>& bases);
     std::vector<uint64_t> GetBases() const;

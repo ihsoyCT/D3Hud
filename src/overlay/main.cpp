@@ -382,7 +382,10 @@ int main(int argc, char** argv) {
             replayPath = nullptr;
         }
     }
-    if (recordPath) recorder.Open(recordPath, static_cast<float>(scene.frameIntervalMs()));
+    if (recordPath && !recorder.Open(recordPath, static_cast<float>(scene.frameIntervalMs()))) {
+        std::print(stderr, "cannot open '{}' for recording\n", recordPath);
+        recordPath = nullptr;
+    }
 
     d3hud::WorldSnapshot snap;
     scene.Generate(&snap);  // first frame immediately

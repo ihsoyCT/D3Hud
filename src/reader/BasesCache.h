@@ -17,9 +17,9 @@ struct BasesCache {
     std::vector<uint64_t> acd, attrib, scene;
     std::vector<uint64_t> ui;  // control addresses, same order as GameUiPaths()
 
-    bool Save(const std::string& path) const;
+    [[nodiscard]] bool Save(const std::string& path) const;
     // True only when the file matches this exact process instance.
-    bool Load(const std::string& path);
+    [[nodiscard]] bool Load(const std::string& path);
 };
 
 }  // namespace d3hud

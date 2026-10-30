@@ -18,7 +18,7 @@ struct ReplayHeader {
 class ReplayWriter {
 public:
     ~ReplayWriter() { Close(); }
-    bool Open(const char* path, float frameIntervalMs);
+    [[nodiscard]] bool Open(const char* path, float frameIntervalMs);
     void Append(const WorldSnapshot& snap);
     void Close();
     uint32_t count() const { return count_; }
@@ -32,8 +32,8 @@ private:
 class ReplayReader {
 public:
     ~ReplayReader() { Close(); }
-    bool Open(const char* path);
-    bool Read(uint32_t index, WorldSnapshot* out) const;
+    [[nodiscard]] bool Open(const char* path);
+    [[nodiscard]] bool Read(uint32_t index, WorldSnapshot* out) const;
     void Close();
     uint32_t frameCount() const { return hdr_.frameCount; }
     float frameIntervalMs() const { return hdr_.frameIntervalMs; }

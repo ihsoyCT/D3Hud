@@ -382,7 +382,7 @@ static int DumpActors(const Process& proc, const std::string& snoPath) {
     ActorList list;
     list.setBase(base);
     std::vector<RawActor> raw;
-    list.Read(proc, &raw);
+    if (!list.Read(proc, &raw)) std::print(stderr, "warning: the actor list is not readable\n");
     std::print("{} live actors\n", raw.size());
     const std::unordered_set<uint32_t> snoIds = sno.Ids();
     AcdTable acds;
@@ -659,7 +659,7 @@ static void SaveBasesCache(const Process& proc, const ActorList& actors, const A
     cache.attrib = attribs.GetBases();
     cache.scene = scenes.GetBases();
     cache.ui = ui.GetControls();
-    cache.Save(path);
+    if (!cache.Save(path)) std::print(stderr, "warning: cannot write the bases cache {}\n", path);
 }
 
 static DWORD WINAPI AcdScanThread(LPVOID param) {
@@ -743,7 +743,7 @@ static DWORD WINAPI StartupScanThread(LPVOID param) {
     cache.attrib = job->attribs->GetBases();
     cache.scene = job->scenes->GetBases();
     cache.ui = job->ui->GetControls();
-    cache.Save(job->cachePath);
+    if (!cache.Save(job->cachePath)) std::print(stderr, "warning: cannot write the bases cache {}\n", job->cachePath);
     std::print("startup discovery done - bases cached\n");
     job->busy = false;
     return 0;
@@ -1039,7 +1039,8 @@ static int RunPublish(const Process& proc, double seconds, const std::string& sn
                 }
                 // map prediction: the current world's scenes; if the player stands in
                 // no known scene (new area, new blocks) rescan, at most every 10 s
-                if (sceneTable.baseCount() > 0) sceneTable.Read(proc, sceneCells, &sceneRecords);
+                // a failed read keeps the previous records and is retried on the next tick
+                if (sceneTable.baseCount() > 0) (void)sceneTable.Read(proc, sceneCells, &sceneRecords);
                 CurrentWorldScenes(sceneRecords, lastPlayer, &worldScenes);
                 if (!worldScenes.empty() || !ok) {
                     sceneMissingSince = 0;
@@ -1167,7 +1168,7 @@ static int DumpItems(const Process& proc, const std::string& snoPath) {
     ActorList list;
     list.setBase(base);
     std::vector<RawActor> raw;
-    list.Read(proc, &raw);
+    if (!list.Read(proc, &raw)) std::print(stderr, "warning: the actor list is not readable\n");
     const std::unordered_set<uint32_t> snoIds = sno.Ids();
     AcdTable acds;
     acds.Discover(proc, raw, &snoIds, true);
