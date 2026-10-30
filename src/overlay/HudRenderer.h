@@ -9,6 +9,7 @@
 
 #include "Salvage.h"
 #include "SceneCells.h"
+#include "Settings.h"
 #include "Snapshot.h"
 #include "imgui.h"
 
@@ -130,6 +131,8 @@ struct MinimapLayout {
     static constexpr int kHotkeyCount = kHkPanelFirst + kPanelCount;
     uint8_t hotkeys[kHotkeyCount] = {0x77, 0x78, 0x23, 0x76, 0, 0, 0, 0, 0};  // F8 F9 END F7
 
+    // Binds every persisted field to its ini key (see HudRenderer.cpp); Load and Save are built on it.
+    void Describe(SettingsTable& table);
     [[nodiscard]] bool Load(const std::filesystem::path& path);
     [[nodiscard]] bool Save(const std::filesystem::path& path) const;
 };

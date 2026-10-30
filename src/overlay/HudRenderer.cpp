@@ -120,198 +120,125 @@ void MinimapLayout::ResetMarkers() {
     set(ActorKind::RiftOrbTiered, 0xFFE150, 4.5f, MarkerShape::Dot, 1.0f, false, true);  // yellow (greater rifts)
 }
 
-bool MinimapLayout::Load(const std::filesystem::path& path) {
-    File f = OpenFile(path, L"r");
-    if (f == nullptr) return false;
-    char line[128];
-    while (fgets(line, sizeof(line), f) != nullptr) {
-        char key[64];
-        float v;
-        unsigned long long cells;
-        if (sscanf(line, " safeCells = %llx", &cells) == 1) {
-            safeArea.cells = cells & ((1ull << (kBackpackCols * kBackpackRows)) - 1);
-            continue;
-        }
-        if (sscanf(line, " %63[^=]= %f", key, &v) != 2) continue;
-        if (!strcmp(key, "onGameMap")) onGameMap = v != 0.f;
-        else if (!strcmp(key, "autoMinimap")) autoMinimap = v != 0.f;
-        else if (!strcmp(key, "rightOffset")) rightOffset = v;
-        else if (!strcmp(key, "topOffset")) topOffset = v;
-        else if (!strcmp(key, "radius")) radius = v;
-        else if (!strcmp(key, "worldRadius")) worldRadius = v;
-        else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
-        else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
-        else if (!strcmp(key, "uiScale")) uiScale = std::clamp(v, 0.5f, 3.0f);
-        else if (!strncmp(key, "salvage.", 8)) {
-            const char* k = key + 8;
-            if (!strcmp(k, "rarityMask")) salvageRules.rarityMask = static_cast<uint32_t>(v) & 0x1F;
-            else if (!strcmp(k, "keepAncient")) salvageRules.keepAncient = v != 0.f;
-            else if (!strcmp(k, "keepPrimal")) salvageRules.keepPrimal = v != 0.f;
-            else if (!strcmp(k, "neverFamilies")) salvageRules.neverFamilies = static_cast<uint32_t>(v) & ((1u << kGearFamilyCount) - 1);
-            else if (!strcmp(k, "maxPerRun")) salvageRules.maxPerRun = std::max(0, static_cast<int>(v));
-            else if (!strcmp(k, "extraDelayMs")) salvageRules.extraDelayMs = std::clamp(static_cast<int>(v), 0, 2000);
-            else if (!strcmp(k, "useAll")) salvageRules.useGameSalvageAll = v != 0.f;
-            else if (!strcmp(k, "burst")) salvageRules.burst = v != 0.f;
-            else if (!strcmp(k, "confirm")) salvageConfirm = v != 0.f;
-            else if (!strcmp(k, "preview")) salvagePreview = v != 0.f;
-            else if (!strcmp(k, "safeOnlyAtAnvil")) safeOnlyAtAnvil = v != 0.f;
-            else if (!strcmp(k, "previewRgb")) salvagePreviewRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
-        }
-        else if (!strcmp(key, "readerAutostart")) readerAutostart = v != 0.f;
-        else if (!strcmp(key, "readerHz")) readerHz = std::clamp(static_cast<int>(v), 5, 240);
-        else if (!strcmp(key, "diagFps")) diagFps = v != 0.f;
-        else if (!strcmp(key, "diagReader")) diagReader = v != 0.f;
-        else if (!strcmp(key, "dockCorner")) dockCorner = std::clamp(static_cast<int>(v), 0, 3);
-        else if (!strcmp(key, "dockAlpha")) dockAlpha = std::clamp(v, 0.f, 1.f);
-        else if (!strcmp(key, "dockAutoHide")) dockAutoHide = v != 0.f;
-        else if (!strcmp(key, "panelAlpha")) panelAlpha = std::clamp(v, 0.2f, 1.f);
-        else if (!strcmp(key, "compact")) compact = v != 0.f;
-        else if (!strncmp(key, "drops.", 6)) {
-            const char* k = key + 6;
-            if (!strcmp(k, "alertPrimal")) drops.alertPrimal = v != 0.f;
-            else if (!strcmp(k, "alertAncient")) drops.alertAncient = v != 0.f;
-            else if (!strcmp(k, "sound")) drops.sound = v != 0.f;
-            else if (!strcmp(k, "flash")) drops.flash = v != 0.f;
-            else if (!strcmp(k, "maxEntries")) drops.maxEntries = std::max(0, static_cast<int>(v));
-            else if (!strcmp(k, "showRunTimer")) drops.showRunTimer = v != 0.f;
-            else if (!strcmp(k, "showRift")) drops.showRift = v != 0.f;
-            else if (!strcmp(k, "minRunSeconds")) drops.minRunSeconds = std::clamp(static_cast<int>(v), 0, 3600);
-        }
-        else if (!strncmp(key, "items.", 6)) {
-            const char* k = key + 6;
-            if (!strcmp(k, "badges")) items.badges = v != 0.f;
-            else if (!strcmp(k, "badgeScale")) items.badgeScale = std::clamp(v, 0.5f, 3.0f);
-            else if (!strcmp(k, "badgeCorner")) items.badgeCorner = std::clamp(static_cast<int>(v), 0, 3);
-            else if (!strcmp(k, "badgeAugment")) items.badgeAugment = v != 0.f;
-            else if (!strcmp(k, "colAncient")) items.colAncient = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "colPrimal")) items.colPrimal = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "hoverMode")) items.hoverMode = std::clamp(static_cast<int>(v), 0, 2);
-            else if (!strcmp(k, "hoverAlpha")) items.hoverAlpha = std::clamp(v, 0.2f, 1.f);
-            else if (!strcmp(k, "search")) items.search = v != 0.f;
-            else if (!strcmp(k, "searchRgb")) items.searchRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "markIndexed")) items.markIndexed = v != 0.f;
-            else if (!strcmp(k, "searchDim")) items.searchDim = std::clamp(v, 0.f, 1.f);
-        }
-        else if (!strncmp(key, "labels.", 7)) {
-            const char* k = key + 7;
-            if (!strcmp(k, "enabled")) labels.enabled = v != 0.f;
-            else if (!strcmp(k, "mode")) labels.mode = std::clamp(static_cast<int>(v), 0, 2);
-            else if (!strcmp(k, "showBonus")) labels.showBonus = v != 0.f;
-            else if (!strcmp(k, "scale")) labels.scale = std::clamp(v, 0.5f, 3.0f);
-            else if (!strcmp(k, "bgAlpha")) labels.bgAlpha = std::clamp(v, 0.f, 1.f);
-            else if (!strcmp(k, "colLegendary")) labels.colLegendary = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "colSet")) labels.colSet = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "colPrimal")) labels.colPrimal = static_cast<uint32_t>(v) & 0xFFFFFF;
-            else if (!strcmp(k, "colBonus")) labels.colBonus = static_cast<uint32_t>(v) & 0xFFFFFF;
-        }
-        else if (!strncmp(key, "hotkey.", 7)) {
-            for (int h = 0; h < kHotkeyCount; ++h)
-                if (!strcmp(key + 7, kHotkeyIds[h])) hotkeys[h] = static_cast<uint8_t>(std::clamp(v, 0.f, 254.f));
-        }
-        else if (!strcmp(key, "markerScale")) markerScale = v;
-        else if (!strcmp(key, "outline")) outline = v != 0.f;
-        else if (!strcmp(key, "bigMapMarkers")) bigMapMarkers = v != 0.f;
-        else if (!strcmp(key, "showScenes")) showScenes = v != 0.f;
-        else if (!strcmp(key, "sceneAlpha")) sceneAlpha = v;
-        else if (!strcmp(key, "sceneLabels")) sceneLabels = v != 0.f;
-        else if (!strcmp(key, "distanceLabels")) distanceLabels = v != 0.f;
-        else if (!strcmp(key, "pylonArrow")) pylonArrow = v != 0.f;
-        else if (!strcmp(key, "eliteRing")) eliteRing = v != 0.f;
-        else if (!strcmp(key, "trashLimit")) trashLimit = std::max(0, static_cast<int>(v));
-        else if (!strcmp(key, "playerRgb")) playerRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
-        else if (!strcmp(key, "playerSize")) playerSize = std::clamp(v, 2.f, 30.f);
-        else if (!strncmp(key, "kind.", 5)) {
-            // kind.<Name>.<show|color|size|shape|alpha|label|pulse> = v
-            char kname[16], what[16] = {};
-            if (sscanf(key, "kind.%15[^.].%15s", kname, what) == 2) {
-                for (int k = 0; k < kKindCount; ++k) {
-                    if (strcmp(kname, ActorKindName(static_cast<ActorKind>(k))) != 0) continue;
-                    KindStyle& ks = kinds[k];
-                    if (!strcmp(what, "show")) ks.show = v != 0.f;
-                    else if (!strcmp(what, "color")) ks.rgb = static_cast<uint32_t>(v) & 0xFFFFFF;
-                    else if (!strcmp(what, "size")) ks.size = v;
-                    else if (!strcmp(what, "shape")) ks.shape = static_cast<MarkerShape>(std::clamp(static_cast<int>(v), 0, 3));
-                    else if (!strcmp(what, "alpha")) ks.alpha = v;
-                    else if (!strcmp(what, "label")) ks.label = v != 0.f;
-                    else if (!strcmp(what, "pulse")) ks.pulse = v != 0.f;
-                    else if (!strcmp(what, "maxDist")) ks.maxDist = std::max(0.f, v);
-                    break;
-                }
-            }
-        } else {
-            static const char* kNames[MinimapLayout::kPanelCount] = {"Info", "Drops", "Items", "Actors",
-                                                                     "Settings"};
-            char pname[16], what[16] = {};
-            // panel.<Info|Drops|Items|Actors|Settings>.<pinned|hidden|x|y> = v
-            if (sscanf(key, "panel.%15[^.].%15s", pname, what) == 2) {
-                for (int id = 0; id < MinimapLayout::kPanelCount; ++id) {
-                    if (strcmp(pname, kNames[id]) != 0) continue;
-                    if (!strcmp(what, "pinned")) panelPinned[id] = v != 0.f;
-                    else if (!strcmp(what, "hidden")) panelHidden[id] = v != 0.f;
-                    else if (!strcmp(what, "x")) panelX[id] = v;
-                    else if (!strcmp(what, "y")) panelY[id] = v;
-                    else if (!strcmp(what, "w")) panelW[id] = v;
-                    else if (!strcmp(what, "h")) panelH[id] = v;
-                    break;
-                }
-            }
-        }
+static const char* const kPanelNames[MinimapLayout::kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
+
+// Every persisted setting, in the order d3hud.ini lists them. The table holds references into
+// this struct, so it is rebuilt for each Load/Save. A new setting is one line here (plus its
+// control on a settings page).
+void MinimapLayout::Describe(SettingsTable& t) {
+    constexpr uint32_t kRgbMax = 0xFFFFFF;
+    constexpr float kAnyLo = std::numeric_limits<float>::lowest(), kAnyHi = std::numeric_limits<float>::max();
+    t.Comment("D3Hud minimap layout (positions/radius = fraction of window height)");
+    t.Add("autoMinimap", autoMinimap);
+    t.Add("onGameMap", onGameMap);
+    t.Add("rightOffset", rightOffset, kAnyLo, kAnyHi, 4);
+    t.Add("topOffset", topOffset, kAnyLo, kAnyHi, 4);
+    t.Add("radius", radius, kAnyLo, kAnyHi, 4);
+    t.Add("worldRadius", worldRadius, kAnyLo, kAnyHi, 1);
+    t.Add("beyondRim", beyondRim);
+    t.Comment("auto salvage: safe backpack cells (bit row*10+col), protections");
+    t.AddHex64("safeCells", safeArea.cells, (1ull << (kBackpackCols * kBackpackRows)) - 1);
+    t.Add("protectEquipped", salvageRules.protectEquippedAncients);
+    t.Comment("marker look (color = 0xRRGGBB as decimal; shape 0 dot,1 ring,2 diamond,3 filled)");
+    t.Add("markerScale", markerScale);
+    t.Add("outline", outline);
+    t.Add("bigMapMarkers", bigMapMarkers);
+    t.Add("showScenes", showScenes);
+    t.Add("sceneAlpha", sceneAlpha);
+    t.Add("sceneLabels", sceneLabels);
+    t.Add("distanceLabels", distanceLabels);
+    t.Add("pylonArrow", pylonArrow);
+    t.Add("eliteRing", eliteRing);
+    t.Add("trashLimit", trashLimit, 0, std::numeric_limits<int>::max());
+    t.Add("playerRgb", playerRgb, 0u, kRgbMax);
+    t.Add("playerSize", playerSize, 2.f, 30.f, 1);
+    for (int k = 0; k < kKindCount; ++k) {
+        const std::string p = std::string("kind.") + ActorKindName(static_cast<ActorKind>(k)) + ".";
+        KindStyle& ks = kinds[k];
+        t.Add(p + "show", ks.show);
+        t.Add(p + "color", ks.rgb, 0u, kRgbMax);
+        t.Add(p + "size", ks.size);
+        t.Add(p + "shape", ks.shape, MarkerShape::Dot, MarkerShape::DiamondFilled);
+        t.Add(p + "alpha", ks.alpha);
+        t.Add(p + "label", ks.label);
+        t.Add(p + "pulse", ks.pulse);
+        t.Add(p + "maxDist", ks.maxDist, 0.f, kAnyHi, 0);
     }
-    return true;
+    t.Comment("panels: pinned open, hidden from the dock, position (fraction of window; <0 = docked)");
+    for (int i = 0; i < kPanelCount; ++i) {
+        const std::string p = std::string("panel.") + kPanelNames[i] + ".";
+        t.Add(p + "pinned", panelPinned[i]);
+        t.Add(p + "hidden", panelHidden[i]);
+        t.Add(p + "x", panelX[i], kAnyLo, kAnyHi, 4);
+        t.Add(p + "y", panelY[i], kAnyLo, kAnyHi, 4);
+        t.Add(p + "w", panelW[i], kAnyLo, kAnyHi, 4);
+        t.Add(p + "h", panelH[i], kAnyLo, kAnyHi, 4);
+    }
+    t.Add("salvage.rarityMask", salvageRules.rarityMask, 0u, 0x1Fu);
+    t.Add("salvage.keepAncient", salvageRules.keepAncient);
+    t.Add("salvage.keepPrimal", salvageRules.keepPrimal);
+    t.Add("salvage.neverFamilies", salvageRules.neverFamilies, 0u, (1u << kGearFamilyCount) - 1);
+    t.Add("salvage.maxPerRun", salvageRules.maxPerRun, 0, std::numeric_limits<int>::max());
+    t.Add("salvage.extraDelayMs", salvageRules.extraDelayMs, 0, 2000);
+    t.Add("salvage.useAll", salvageRules.useGameSalvageAll);
+    t.Add("salvage.burst", salvageRules.burst);
+    t.Add("salvage.confirm", salvageConfirm);
+    t.Add("salvage.preview", salvagePreview);
+    t.Add("salvage.previewRgb", salvagePreviewRgb, 0u, kRgbMax);
+    t.Add("salvage.safeOnlyAtAnvil", safeOnlyAtAnvil);
+    t.Add("readerAutostart", readerAutostart);
+    t.Add("readerHz", readerHz, 5, 240);
+    t.Add("diagFps", diagFps);
+    t.Add("diagReader", diagReader);
+    t.Add("uiScale", uiScale, 0.5f, 3.0f);
+    t.Add("dockCorner", dockCorner, 0, 3);
+    t.Add("dockAlpha", dockAlpha, 0.f, 1.f);
+    t.Add("dockAutoHide", dockAutoHide);
+    t.Add("panelAlpha", panelAlpha, 0.2f, 1.f);
+    t.Add("compact", compact);
+    for (int h = 0; h < kHotkeyCount; ++h) t.Add(std::string("hotkey.") + kHotkeyIds[h], hotkeys[h], uint8_t{0}, uint8_t{254}, 0);
+    t.Add("drops.alertPrimal", drops.alertPrimal);
+    t.Add("drops.alertAncient", drops.alertAncient);
+    t.Add("drops.sound", drops.sound);
+    t.Add("drops.flash", drops.flash);
+    t.Add("drops.maxEntries", drops.maxEntries, 0, std::numeric_limits<int>::max());
+    t.Add("drops.showRunTimer", drops.showRunTimer);
+    t.Add("drops.minRunSeconds", drops.minRunSeconds, 0, 3600);
+    t.Add("drops.showRift", drops.showRift);
+    t.Add("items.badges", items.badges);
+    t.Add("items.badgeScale", items.badgeScale, 0.5f, 3.0f);
+    t.Add("items.badgeCorner", items.badgeCorner, 0, 3);
+    t.Add("items.badgeAugment", items.badgeAugment);
+    t.Add("items.colAncient", items.colAncient, 0u, kRgbMax);
+    t.Add("items.colPrimal", items.colPrimal, 0u, kRgbMax);
+    t.Add("items.hoverMode", items.hoverMode, 0, 2);
+    t.Add("items.hoverAlpha", items.hoverAlpha, 0.2f, 1.f);
+    t.Add("items.search", items.search);
+    t.Add("items.searchRgb", items.searchRgb, 0u, kRgbMax);
+    t.Add("items.searchDim", items.searchDim, 0.f, 1.f);
+    t.Add("items.markIndexed", items.markIndexed);
+    t.Add("labels.enabled", labels.enabled);
+    t.Add("labels.mode", labels.mode, 0, 2);
+    t.Add("labels.showBonus", labels.showBonus);
+    t.Add("labels.scale", labels.scale, 0.5f, 3.0f);
+    t.Add("labels.bgAlpha", labels.bgAlpha, 0.f, 1.f);
+    t.Add("labels.colLegendary", labels.colLegendary, 0u, kRgbMax);
+    t.Add("labels.colSet", labels.colSet, 0u, kRgbMax);
+    t.Add("labels.colPrimal", labels.colPrimal, 0u, kRgbMax);
+    t.Add("labels.colBonus", labels.colBonus, 0u, kRgbMax);
+}
+
+bool MinimapLayout::Load(const std::filesystem::path& path) {
+    SettingsTable t;
+    Describe(t);
+    return t.Load(path);
 }
 
 bool MinimapLayout::Save(const std::filesystem::path& path) const {
-    File f = OpenFile(path, L"w");
-    if (f == nullptr) return false;
-    std::print(f, "# D3Hud minimap layout (positions/radius = fraction of window height)\n");
-    std::print(f, "autoMinimap={}\n", autoMinimap ? 1 : 0);
-    std::print(f, "onGameMap={}\nrightOffset={:.4f}\ntopOffset={:.4f}\nradius={:.4f}\nworldRadius={:.1f}\nbeyondRim={}\n",
-            onGameMap ? 1 : 0, rightOffset, topOffset, radius, worldRadius, beyondRim ? 1 : 0);
-    std::print(f, "# auto salvage: safe backpack cells (bit row*10+col), protections\n");
-    std::print(f, "safeCells={:x}\nprotectEquipped={}\n",
-               static_cast<unsigned long long>(safeArea.cells),
-               salvageRules.protectEquippedAncients ? 1 : 0);
-    std::print(f, "# marker look (color = 0xRRGGBB as decimal; shape 0 dot,1 ring,2 diamond,3 filled)\n");
-    std::print(f, "markerScale={:.2f}\noutline={}\nbigMapMarkers={}\nshowScenes={}\nsceneAlpha={:.2f}\nsceneLabels={}\n",
-               markerScale, outline ? 1 : 0, bigMapMarkers ? 1 : 0, showScenes ? 1 : 0, sceneAlpha, sceneLabels ? 1 : 0);
-    std::print(f, "distanceLabels={}\npylonArrow={}\neliteRing={}\ntrashLimit={}\nplayerRgb={}\nplayerSize={:.1f}\n",
-               distanceLabels ? 1 : 0, pylonArrow ? 1 : 0, eliteRing ? 1 : 0, trashLimit, playerRgb, playerSize);
-    for (int k = 0; k < kKindCount; ++k) {
-        const KindStyle& ks = kinds[k];
-        std::print(f, "kind.{0}.show={1}\nkind.{0}.color={2}\nkind.{0}.size={3:.2f}\nkind.{0}.shape={4}\n"
-                      "kind.{0}.alpha={5:.2f}\nkind.{0}.label={6}\nkind.{0}.pulse={7}\nkind.{0}.maxDist={8:.0f}\n",
-                   ActorKindName(static_cast<ActorKind>(k)), ks.show ? 1 : 0, ks.rgb, ks.size,
-                   static_cast<int>(ks.shape), ks.alpha, ks.label ? 1 : 0, ks.pulse ? 1 : 0, ks.maxDist);
-    }
-    static const char* kNames[kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
-    std::print(f, "# panels: pinned open, hidden from the dock, position (fraction of window; <0 = docked)\n");
-    for (int i = 0; i < kPanelCount; ++i)
-        std::print(f, "panel.{0}.pinned={1}\npanel.{0}.hidden={2}\npanel.{0}.x={3:.4f}\npanel.{0}.y={4:.4f}\n"
-                      "panel.{0}.w={5:.4f}\npanel.{0}.h={6:.4f}\n",
-                   kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i], panelW[i], panelH[i]);
-    std::print(f, "salvage.rarityMask={}\nsalvage.keepAncient={}\nsalvage.keepPrimal={}\nsalvage.neverFamilies={}\nsalvage.maxPerRun={}\nsalvage.extraDelayMs={}\n",
-               salvageRules.rarityMask, salvageRules.keepAncient ? 1 : 0, salvageRules.keepPrimal ? 1 : 0,
-               salvageRules.neverFamilies, salvageRules.maxPerRun, salvageRules.extraDelayMs);
-    std::print(f, "salvage.useAll={}\nsalvage.burst={}\n", salvageRules.useGameSalvageAll ? 1 : 0, salvageRules.burst ? 1 : 0);
-    std::print(f, "salvage.confirm={}\nsalvage.preview={}\nsalvage.previewRgb={}\nsalvage.safeOnlyAtAnvil={}\n", salvageConfirm ? 1 : 0, salvagePreview ? 1 : 0, salvagePreviewRgb, safeOnlyAtAnvil ? 1 : 0);
-    std::print(f, "readerAutostart={}\nreaderHz={}\ndiagFps={}\ndiagReader={}\n",
-               readerAutostart ? 1 : 0, readerHz, diagFps ? 1 : 0, diagReader ? 1 : 0);
-    std::print(f, "uiScale={:.2f}\ndockCorner={}\ndockAlpha={:.2f}\ndockAutoHide={}\npanelAlpha={:.2f}\ncompact={}\n",
-               uiScale, dockCorner, dockAlpha, dockAutoHide ? 1 : 0, panelAlpha, compact ? 1 : 0);
-    for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
-    std::print(f, "drops.alertPrimal={}\ndrops.alertAncient={}\ndrops.sound={}\ndrops.flash={}\ndrops.maxEntries={}\n",
-               drops.alertPrimal ? 1 : 0, drops.alertAncient ? 1 : 0, drops.sound ? 1 : 0, drops.flash ? 1 : 0, drops.maxEntries);
-    std::print(f, "drops.showRunTimer={}\ndrops.minRunSeconds={}\ndrops.showRift={}\n", drops.showRunTimer ? 1 : 0, drops.minRunSeconds, drops.showRift ? 1 : 0);
-    std::print(f, "items.badges={}\nitems.badgeScale={:.2f}\nitems.badgeCorner={}\nitems.badgeAugment={}\n",
-               items.badges ? 1 : 0, items.badgeScale, items.badgeCorner, items.badgeAugment ? 1 : 0);
-    std::print(f, "items.colAncient={}\nitems.colPrimal={}\nitems.hoverMode={}\nitems.hoverAlpha={:.2f}\n",
-               items.colAncient, items.colPrimal, items.hoverMode, items.hoverAlpha);
-    std::print(f, "items.search={}\nitems.searchRgb={}\nitems.searchDim={:.2f}\nitems.markIndexed={}\n", items.search ? 1 : 0, items.searchRgb, items.searchDim, items.markIndexed ? 1 : 0);
-    std::print(f, "labels.enabled={}\nlabels.mode={}\nlabels.showBonus={}\nlabels.scale={:.2f}\nlabels.bgAlpha={:.2f}\n",
-               labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
-    std::print(f, "labels.colLegendary={}\nlabels.colSet={}\nlabels.colPrimal={}\nlabels.colBonus={}\n",
-               labels.colLegendary, labels.colSet, labels.colPrimal, labels.colBonus);
-    return true;
+    SettingsTable t;
+    // Describe binds fields by reference but Save only reads them.
+    const_cast<MinimapLayout*>(this)->Describe(t);
+    return t.Save(path);
 }
 
 // Writes d3hud.ini; the status line in Settings says when that failed.

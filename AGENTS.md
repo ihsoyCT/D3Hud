@@ -17,7 +17,7 @@ A Diablo III HUD for Windows x64, C++23, CMake + Visual Studio 2022.
 ## Layout
 
 ```
-src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h (pure, unit-tested)
+src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h (pure, unit-tested)
 src/reader    Process, AobScanner, ActorList, AcdTable, AttribTable, UiControls, SceneTable, SnoTable, BasesCache, main.cpp
 src/overlay   main.cpp (window, loop, hotkeys), HudRenderer.{h,cpp} (all drawing, settings, panels),
               SalvageRunner (real mouse clicks), ReaderProcess (launches the reader)
@@ -53,9 +53,10 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
    rejected by design. Appending a new `ActorKind` at the end is safe.
 2. **UI controls** are found by path. `GameUiPaths()` in `src/reader/main.cpp` and the `enum GameUi`
    above it must list the same controls in the same order. `ReadGameUi` fills `UiLayout`.
-3. **Settings** live in `MinimapLayout` (HudRenderer.h). Adding one needs all four: the field with a
-   default, a key in `MinimapLayout::Load`, a line in `MinimapLayout::Save`, and a control on a settings
-   page (`DrawSettings` and the `Draw*Settings` functions). Forgetting Load/Save silently loses the setting.
+3. **Settings** live in `MinimapLayout` (HudRenderer.h). Adding one needs three things: the field with a
+   default, one `t.Add("key", field, lo, hi)` line in `MinimapLayout::Describe` (HudRenderer.cpp; it gives
+   Load, Save and clamping), and a control on a settings page (`DrawSettings` and the `Draw*Settings`
+   functions). Without the `Describe` line the setting is silently not saved.
 4. **Finding new game data**: use `D3Hud.Reader.exe --attach "Diablo III64.exe" --ui <text>` to list UI
    controls and `--ui-watch <text> --seconds N` while playing to see which fields change. Measure first,
    then code; write what you found into `analysis/ENGINE_MINING.md`. Prefer reading UI geometry/values

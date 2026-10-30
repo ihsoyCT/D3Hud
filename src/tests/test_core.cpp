@@ -20,6 +20,7 @@
 #include "Salvage.h"
 #include "SceneCells.h"
 #include "SceneTable.h"
+#include "Settings.h"
 #include "SnapshotInterp.h"
 #include "SnoTable.h"
 
@@ -435,6 +436,51 @@ static void TestSalvageRules() {
     CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
 }
 
+static void TestSettingsTable() {
+    enum class Shape : uint8_t { A, B, C };
+    bool on = true;
+    int n = 5;
+    float f = 1.5f;
+    uint32_t rgb = 0x102030;
+    uint64_t mask = 0;
+    Shape shape = Shape::A;
+    SettingsTable t;
+    t.Comment("first section");
+    t.Add("on", on);
+    t.Add("n", n, 0, 10);
+    t.Add("f", f, 0.f, 2.f, 3);
+    t.Add("rgb", rgb, 0u, 0xFFFFFFu);
+    t.AddHex64("mask", mask, 0xFFull);
+    t.Add("shape", shape, Shape::A, Shape::C);
+    t.Alias("oldOn", "on");
+    CHECK(t.size() == 6);
+
+    // text round trip
+    const std::string saved = t.SaveText();
+    CHECK(saved.starts_with("# first section\non=1\n"));
+    on = false; n = 0; f = 0.f; rgb = 0; mask = 0; shape = Shape::C;
+    CHECK(t.LoadText(saved) == 6);
+    CHECK(on && n == 5 && f == 1.5f && rgb == 0x102030 && shape == Shape::A);
+
+    // clamping, spaces, comments, CRLF, unknown keys, junk values, aliases, hex masks
+    CHECK(t.LoadText("# n=3\r\n n = 99 \r\nf=-4\nmissing=1\nshape=text\nrgb=1e30\nmask=1ff\noldOn=0\nnoequals\n") == 5);
+    CHECK(n == 10 && f == 0.f && rgb == 0xFFFFFFu && mask == 0xFF && !on && shape == Shape::A);
+    CHECK(t.LoadText("shape=7") == 1 && shape == Shape::C);
+    CHECK(!t.Has("oldOn") || t.Has("on"));
+
+    // file round trip, unicode folder
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / L"d3hud_settings_é日";
+    fs::create_directories(dir);
+    n = 7;
+    CHECK(t.Save(dir / L"s.ini"));
+    n = 0;
+    CHECK(t.Load(dir / L"s.ini") && n == 7);
+    CHECK(!t.Load(dir / L"missing.ini"));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 static void TestPaths() {
     namespace fs = std::filesystem;
     const fs::path exe = ExePath();
@@ -767,6 +813,7 @@ int main() {
     TestSalvageAll();
     TestRiftTimer();
     TestPaths();
+    TestSettingsTable();
     TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();
