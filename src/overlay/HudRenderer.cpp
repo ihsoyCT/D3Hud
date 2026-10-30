@@ -156,6 +156,14 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "dockAutoHide")) dockAutoHide = v != 0.f;
         else if (!strcmp(key, "panelAlpha")) panelAlpha = std::clamp(v, 0.2f, 1.f);
         else if (!strcmp(key, "compact")) compact = v != 0.f;
+        else if (!strncmp(key, "drops.", 6)) {
+            const char* k = key + 6;
+            if (!strcmp(k, "alertPrimal")) drops.alertPrimal = v != 0.f;
+            else if (!strcmp(k, "alertAncient")) drops.alertAncient = v != 0.f;
+            else if (!strcmp(k, "sound")) drops.sound = v != 0.f;
+            else if (!strcmp(k, "flash")) drops.flash = v != 0.f;
+            else if (!strcmp(k, "maxEntries")) drops.maxEntries = std::max(0, static_cast<int>(v));
+        }
         else if (!strncmp(key, "items.", 6)) {
             const char* k = key + 6;
             if (!strcmp(k, "badges")) items.badges = v != 0.f;
@@ -271,6 +279,8 @@ bool MinimapLayout::Save(const char* path) const {
     std::print(f, "uiScale={:.2f}\ndockCorner={}\ndockAlpha={:.2f}\ndockAutoHide={}\npanelAlpha={:.2f}\ncompact={}\n",
                uiScale, dockCorner, dockAlpha, dockAutoHide ? 1 : 0, panelAlpha, compact ? 1 : 0);
     for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
+    std::print(f, "drops.alertPrimal={}\ndrops.alertAncient={}\ndrops.sound={}\ndrops.flash={}\ndrops.maxEntries={}\n",
+               drops.alertPrimal ? 1 : 0, drops.alertAncient ? 1 : 0, drops.sound ? 1 : 0, drops.flash ? 1 : 0, drops.maxEntries);
     std::print(f, "items.badges={}\nitems.badgeScale={:.2f}\nitems.badgeCorner={}\nitems.badgeAugment={}\n",
                items.badges ? 1 : 0, items.badgeScale, items.badgeCorner, items.badgeAugment ? 1 : 0);
     std::print(f, "items.colAncient={}\nitems.colPrimal={}\nitems.hoverMode={}\nitems.hoverAlpha={:.2f}\n",
@@ -1074,7 +1084,34 @@ void HudRenderer::UpdateDrops(const WorldSnapshot& snap) {
         std::strftime(e.time, sizeof(e.time), "%H:%M:%S", &local);
         dropIndex_[it.id] = drops_.size();
         drops_.push_back(e);
+        const DropStyle& D = layout_.drops;
+        const bool alert = (it.primal && D.alertPrimal) || (it.ancient && D.alertAncient);
+        if (alert && ImGui::GetTime() > 3.0) {  // not for items already lying there at startup
+            if (D.sound) MessageBeep(it.primal ? MB_ICONEXCLAMATION : MB_ICONASTERISK);
+            if (D.flash) {
+                flashUntil_ = ImGui::GetTime() + 1.2;
+                flashRgb_ = it.primal ? layout_.labels.colPrimal : layout_.items.colAncient;
+            }
+        }
     }
+    const size_t cap = static_cast<size_t>(std::max(0, layout_.drops.maxEntries));
+    if (cap > 0 && drops_.size() > cap) {
+        drops_.erase(drops_.begin(), drops_.begin() + static_cast<std::ptrdiff_t>(drops_.size() - cap));
+        dropIndex_.clear();
+        for (size_t k = 0; k < drops_.size(); ++k) dropIndex_[drops_[k].item.id] = k;
+    }
+}
+
+bool HudRenderer::ExportDropsCsv(const char* path) const {
+    FILE* f = fopen(path, "w");
+    if (f == nullptr) return false;
+    fprintf(f, "time,name,type,rarity,ancient,primal,bonus%s", "\n");
+    for (const DropEntry& d : drops_) {
+        fprintf(f, "%s,\"%s\",%s,%s,%d,%d,%d%s", d.time, d.item.name, d.item.typeName, RarityName(d.item.rarity),
+                d.item.ancient ? 1 : 0, d.item.primal ? 1 : 0, d.item.bonus ? 1 : 0, "\n");
+    }
+    fclose(f);
+    return true;
 }
 
 // The drop log, newest first: still on the ground, picked up (now in the
@@ -1442,6 +1479,29 @@ void HudRenderer::DrawProfileSettings() {
     ImGui::TextDisabled("%s", layoutStatus_);
 }
 
+// Settings > Drops: alerts, log size, CSV export.
+void HudRenderer::DrawDropSettings() {
+    DropStyle& D = layout_.drops;
+    bool ch = false;
+    ch |= ImGui::Checkbox("alert on a primal drop", &D.alertPrimal);
+    ch |= ImGui::Checkbox("alert on an ancient drop", &D.alertAncient);
+    ch |= ImGui::Checkbox("  play a sound", &D.sound);
+    ch |= ImGui::Checkbox("  flash the screen border", &D.flash);
+    ImGui::SliderInt("keep at most (0 = all)", &D.maxEntries, 0, 2000);
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    if (ImGui::Button("Export session to CSV")) {
+        const std::string path = (std::filesystem::path(layoutPath_).parent_path() / "d3hud_drops.csv").string();
+        layoutStatus_ = ExportDropsCsv(path.c_str()) ? "exported d3hud_drops.csv next to d3hud.ini" : "export failed";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear log")) {
+        drops_.clear();
+        dropIndex_.clear();
+    }
+    ImGui::TextDisabled("%zu entries   %s", drops_.size(), layoutStatus_);
+    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+}
+
 // Settings > Items: A/P badges on icons and the hover card.
 void HudRenderer::DrawItemSettings() {
     ItemStyle& S = layout_.items;
@@ -1547,6 +1607,10 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         }
         ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
         if (changed) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        if (settingsTab_ == kDrops) {
+            ImGui::SeparatorText("Drop log and alerts");
+            DrawDropSettings();
+        }
         if (settingsTab_ == kItems) {
             ImGui::SeparatorText("Inventory overlays");
             DrawItemSettings();
@@ -1633,6 +1697,11 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     DrawItemBadges(snap);        // independent of F9: only while the game shows inventory/stash
     DrawAutoSalvage(snap, opt);  // safe area + salvage preview while the inventory is open
     DrawHoveredItem(snap, opt);  // independent of F9: it only appears while the game shows a tooltip
+    if (ImGui::GetTime() < flashUntil_) {  // drop alert: a fading border around the screen
+        const ImVec2 ds = ImGui::GetIO().DisplaySize;
+        const float k = static_cast<float>((flashUntil_ - ImGui::GetTime()) / 1.2);
+        ImGui::GetForegroundDrawList()->AddRect(ImVec2(0, 0), ds, Rgba(flashRgb_, static_cast<int>(k * 220.f)), 0.f, 0, 14.0f);
+    }
 }
 
 }  // namespace d3hud

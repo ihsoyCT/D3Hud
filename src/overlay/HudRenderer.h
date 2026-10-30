@@ -52,8 +52,18 @@ struct ItemStyle {
     float hoverAlpha = 0.88f;
 };
 
+// The drop log (Drops panel) and what happens when something good drops.
+struct DropStyle {
+    bool alertPrimal = true;    // beep + flash on a primal drop
+    bool alertAncient = false;  // ... on an ancient drop
+    bool sound = true;
+    bool flash = true;
+    int maxEntries = 500;       // oldest entries are dropped past this; 0 = keep all
+};
+
 struct MinimapLayout {
     MinimapLayout();
+    DropStyle drops;
     LabelStyle labels;
     ItemStyle items;
     bool onGameMap = true;       // dots only, over the game's minimap (else own disc, bottom-right)
@@ -182,6 +192,10 @@ private:
     void DrawLabelSettings();
     void DrawProfileSettings();
     void DrawItemSettings();
+    void DrawDropSettings();
+    bool ExportDropsCsv(const char* path) const;
+    double flashUntil_ = 0.0;   // drop alert: screen-border flash
+    uint32_t flashRgb_ = 0;
     std::vector<std::string> profiles_;  // names of d3hud.<name>.ini next to d3hud.ini
     bool profilesDirty_ = true;
     char profileName_[32] = {};
