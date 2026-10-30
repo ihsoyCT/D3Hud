@@ -236,6 +236,7 @@ private:
     RunEntry run_;                // the current one
     bool haveRun_ = false;
     double runStartT_ = 0.0, sessionStartT_ = -1.0;
+    double grStartT_ = -1.0;  // when the overlay first saw the greater-rift bar (its 15 min timer start, estimated)
     int sessDrops_ = 0, sessAncient_ = 0, sessPrimal_ = 0, sessBonus_ = 0;  // legendary/set, ancient, primal, bonus
     void DrawReaderSettings();
     void DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps);

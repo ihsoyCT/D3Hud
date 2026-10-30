@@ -1181,22 +1181,52 @@ void HudRenderer::DrawRunTimer(const WorldSnapshot& snap) {
     } else {
         riftSamples_.clear();
     }
-    char lines[2][64];
+    // greater rift: the 15 minute limit, counted from when the bar first showed
+    constexpr double kGreaterRiftSeconds = 900.0;
+    if (snap.ui.riftOpen == 2) {
+        if (grStartT_ < 0.0) grStartT_ = now;
+    } else {
+        grStartT_ = -1.0;
+    }
+
+    char lines[3][96];
+    ImU32 cols[3];
     int n = 0;
+    const ImU32 normal = IM_COL32(230, 230, 240, 255);
     if (layout_.drops.showRunTimer && haveRun_) {
         char t[24];
         FormatDuration(now - runStartT_, t, sizeof(t));
-        snprintf(lines[n++], sizeof(lines[0]), "Run %s", t);
+        snprintf(lines[n], sizeof(lines[0]), "Run %s", t);
+        cols[n++] = normal;
+    }
+    double left = 0.0;
+    const bool gr = layout_.drops.showRift && snap.ui.riftOpen == 2 && grStartT_ >= 0.0;
+    if (gr) {
+        left = kGreaterRiftSeconds - (now - grStartT_);
+        char t[24];
+        FormatDuration(std::max(0.0, left), t, sizeof(t));
+        snprintf(lines[n], sizeof(lines[0]), "GR timer %s left (est.)", t);
+        cols[n++] = left < 60.0 ? IM_COL32(255, 90, 90, 255) : left < 180.0 ? IM_COL32(255, 200, 70, 255) : normal;
     }
     if (layout_.drops.showRift && snap.ui.riftOpen) {
-        char eta[24] = "--";
+        char eta[24] = "--", spare[32] = "";
+        double etaSec = -1.0;
         if (riftSamples_.size() >= 2) {
             const auto& a = riftSamples_.front();
             const auto& b = riftSamples_.back();
             const double dt = b.first - a.first, dp = b.second - a.second;
-            if (dt >= 8.0 && dp > 0.002) FormatDuration((1.0 - b.second) / (dp / dt), eta, sizeof(eta));
+            if (dt >= 8.0 && dp > 0.002) {
+                etaSec = (1.0 - b.second) / (dp / dt);
+                FormatDuration(etaSec, eta, sizeof(eta));
+            }
         }
-        snprintf(lines[n++], sizeof(lines[0]), "Rift %.0f%%   ETA %s", snap.ui.riftProgress * 100.0f, eta);
+        if (gr && etaSec >= 0.0) {  // at this pace: progress is full in `eta`, compared with the time left (boss fight not counted)
+            char t[24];
+            FormatDuration(std::fabs(left - etaSec), t, sizeof(t));
+            snprintf(spare, sizeof(spare), "  %s%s", left >= etaSec ? "+" : "-", t);
+        }
+        snprintf(lines[n], sizeof(lines[0]), "Rift %.0f%%   ETA %s%s", snap.ui.riftProgress * 100.0f, eta, spare);
+        cols[n++] = (gr && etaSec >= 0.0 && left < etaSec) ? IM_COL32(255, 120, 90, 255) : normal;
     }
     if (n == 0) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
@@ -1206,7 +1236,7 @@ void HudRenderer::DrawRunTimer(const WorldSnapshot& snap) {
         const ImVec2 ts = ImGui::CalcTextSize(lines[i]);
         const ImVec2 at(ds.x * 0.5f - ts.x * 0.5f, y);
         dl->AddRectFilled(ImVec2(at.x - 6, at.y - 2), ImVec2(at.x + ts.x + 6, at.y + ts.y + 2), IM_COL32(0, 0, 0, 140), 4.f);
-        dl->AddText(at, IM_COL32(230, 230, 240, 255), lines[i]);
+        dl->AddText(at, cols[i], lines[i]);
         y += ts.y + 6.0f;
     }
 }

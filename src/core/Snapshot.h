@@ -171,7 +171,7 @@ struct UiLayout {
     uint8_t confirmOpen = 0;  // "are you sure?" prompt (salvaging a legendary)
     UiRect salvageButton;     // the anvil: arms the salvage cursor
     UiRect confirmOk;         // the prompt's OK button
-    uint8_t riftOpen = 0;     // a rift progress bar is on screen
+    uint8_t riftOpen = 0;     // rift progress bar on screen: 0 none, 1 rift, 2 greater rift
     float riftProgress = 0.f; // 0..1, from the bar's marker (see RiftProgressFromRects); valid when riftOpen
     UiRect stashTabRect[5];   // the stash tab buttons of the selected page
     UiRect stashPageRect[4];  // the stash page buttons (chests at the top)

@@ -562,7 +562,7 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
         if (!bar.visible || !marker.found) continue;
         const float p = RiftProgressFromRects(bar.rect.x0, bar.rect.x1, marker.rect.x0);
         if (p < 0.0f) continue;
-        out->riftOpen = 1;
+        out->riftOpen = barIdx == kUiRiftGrBar ? 2 : 1;  // 2 = greater rift
         out->riftProgress = p;
         break;
     }
