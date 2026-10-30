@@ -41,9 +41,21 @@ struct LabelStyle {
     uint32_t colLegendary = 0xFF8C19, colSet = 0x50FF50, colPrimal = 0xFF4646, colBonus = 0x5AE6FF;  // 0xRRGGBB
 };
 
+// "A"/"P" badges on item icons and the card shown for hovered items.
+struct ItemStyle {
+    bool badges = true;
+    float badgeScale = 1.0f;
+    int badgeCorner = 0;        // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+    bool badgeAugment = true;   // prefix the Caldesann's augment rank ("125A")
+    uint32_t colAncient = 0xFFAF32, colPrimal = 0xFF4646;  // 0xRRGGBB
+    int hoverMode = 0;          // card for: 0 unidentified items only, 1 every item, 2 off
+    float hoverAlpha = 0.88f;
+};
+
 struct MinimapLayout {
     MinimapLayout();
     LabelStyle labels;
+    ItemStyle items;
     bool onGameMap = true;       // dots only, over the game's minimap (else own disc, bottom-right)
     float rightOffset = 0.110f;  // centre distance from the right edge / window height
     float topOffset = 0.115f;    // centre distance from the top edge / window height
@@ -169,6 +181,7 @@ private:
     void DrawHotkeySettings();
     void DrawLabelSettings();
     void DrawProfileSettings();
+    void DrawItemSettings();
     std::vector<std::string> profiles_;  // names of d3hud.<name>.ini next to d3hud.ini
     bool profilesDirty_ = true;
     char profileName_[32] = {};

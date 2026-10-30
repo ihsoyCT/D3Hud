@@ -156,6 +156,17 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "dockAutoHide")) dockAutoHide = v != 0.f;
         else if (!strcmp(key, "panelAlpha")) panelAlpha = std::clamp(v, 0.2f, 1.f);
         else if (!strcmp(key, "compact")) compact = v != 0.f;
+        else if (!strncmp(key, "items.", 6)) {
+            const char* k = key + 6;
+            if (!strcmp(k, "badges")) items.badges = v != 0.f;
+            else if (!strcmp(k, "badgeScale")) items.badgeScale = std::clamp(v, 0.5f, 3.0f);
+            else if (!strcmp(k, "badgeCorner")) items.badgeCorner = std::clamp(static_cast<int>(v), 0, 3);
+            else if (!strcmp(k, "badgeAugment")) items.badgeAugment = v != 0.f;
+            else if (!strcmp(k, "colAncient")) items.colAncient = static_cast<uint32_t>(v) & 0xFFFFFF;
+            else if (!strcmp(k, "colPrimal")) items.colPrimal = static_cast<uint32_t>(v) & 0xFFFFFF;
+            else if (!strcmp(k, "hoverMode")) items.hoverMode = std::clamp(static_cast<int>(v), 0, 2);
+            else if (!strcmp(k, "hoverAlpha")) items.hoverAlpha = std::clamp(v, 0.2f, 1.f);
+        }
         else if (!strncmp(key, "labels.", 7)) {
             const char* k = key + 7;
             if (!strcmp(k, "enabled")) labels.enabled = v != 0.f;
@@ -260,6 +271,10 @@ bool MinimapLayout::Save(const char* path) const {
     std::print(f, "uiScale={:.2f}\ndockCorner={}\ndockAlpha={:.2f}\ndockAutoHide={}\npanelAlpha={:.2f}\ncompact={}\n",
                uiScale, dockCorner, dockAlpha, dockAutoHide ? 1 : 0, panelAlpha, compact ? 1 : 0);
     for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
+    std::print(f, "items.badges={}\nitems.badgeScale={:.2f}\nitems.badgeCorner={}\nitems.badgeAugment={}\n",
+               items.badges ? 1 : 0, items.badgeScale, items.badgeCorner, items.badgeAugment ? 1 : 0);
+    std::print(f, "items.colAncient={}\nitems.colPrimal={}\nitems.hoverMode={}\nitems.hoverAlpha={:.2f}\n",
+               items.colAncient, items.colPrimal, items.hoverMode, items.hoverAlpha);
     std::print(f, "labels.enabled={}\nlabels.mode={}\nlabels.showBonus={}\nlabels.scale={:.2f}\nlabels.bgAlpha={:.2f}\n",
                labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
     std::print(f, "labels.colLegendary={}\nlabels.colSet={}\nlabels.colPrimal={}\nlabels.colBonus={}\n",
@@ -1124,7 +1139,8 @@ void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& op
 // game currently shows: backpack and equipment (inventory open) and the selected
 // stash tab (stash open). Geometry comes from the game's own UI controls.
 void HudRenderer::DrawItemBadges(const WorldSnapshot& snap) {
-    if (!snap.ui.inventoryOpen && !snap.ui.stashOpen) return;
+    const ItemStyle& S = layout_.items;
+    if (!S.badges || (!snap.ui.inventoryOpen && !snap.ui.stashOpen)) return;
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     ImFont* font = ImGui::GetFont();
@@ -1136,14 +1152,16 @@ void HudRenderer::DrawItemBadges(const WorldSnapshot& snap) {
         const UiRect r = UiToScreen(ui, display.x, display.y);
         const float cell = std::min(r.x1 - r.x0, r.y1 - r.y0);
         if (cell < 8.0f) continue;  // control not laid out (yet)
-        const float size = std::clamp(cell * 0.32f, 12.0f, 28.0f);
-        const ImVec2 p(r.x0 + 3.0f, r.y0 + 2.0f);
+        const float size = std::clamp(cell * 0.32f, 12.0f, 28.0f) * S.badgeScale;
         // "A"/"P", prefixed by the Caldesann's augment gem rank if any ("125A")
         char label[8];
-        if (it.augmentRank) snprintf(label, sizeof(label), "%u%s", it.augmentRank, it.primal ? "P" : "A");
+        if (it.augmentRank && S.badgeAugment) snprintf(label, sizeof(label), "%u%s", it.augmentRank, it.primal ? "P" : "A");
         else snprintf(label, sizeof(label), "%s", it.primal ? "P" : "A");
-        const ImU32 col = it.primal ? IM_COL32(255, 70, 70, 255) : IM_COL32(255, 175, 50, 255);
         const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+        const bool right = S.badgeCorner == 1 || S.badgeCorner == 3, bottom = S.badgeCorner >= 2;
+        const ImVec2 p(right ? r.x1 - ts.x - 7.0f : r.x0 + 3.0f, bottom ? r.y1 - ts.y - 2.0f : r.y0 + 2.0f);
+        const uint32_t rgb = it.primal ? S.colPrimal : S.colAncient;
+        const ImU32 col = IM_COL32((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, 255);
         dl->AddRectFilled(p, ImVec2(p.x + ts.x + 4.0f, p.y + ts.y), IM_COL32(0, 0, 0, 170), 3.0f);
         dl->AddText(font, size, ImVec2(p.x + 2.0f, p.y), col, label);
     }
@@ -1424,6 +1442,33 @@ void HudRenderer::DrawProfileSettings() {
     ImGui::TextDisabled("%s", layoutStatus_);
 }
 
+// Settings > Items: A/P badges on icons and the hover card.
+void HudRenderer::DrawItemSettings() {
+    ItemStyle& S = layout_.items;
+    bool ch = false;
+    ch |= ImGui::Checkbox("A/P badges on inventory and stash icons", &S.badges);
+    ImGui::SliderFloat("badge size", &S.badgeScale, 0.5f, 2.5f, "x%.2f");
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    ch |= ImGui::Combo("badge corner", &S.badgeCorner, "Top left\0Top right\0Bottom left\0Bottom right\0");
+    ch |= ImGui::Checkbox("show augment rank in front (125A)", &S.badgeAugment);
+    auto colour = [&](const char* name, uint32_t* rgb) {
+        float c[3] = {((*rgb >> 16) & 255) / 255.f, ((*rgb >> 8) & 255) / 255.f, (*rgb & 255) / 255.f};
+        if (ImGui::ColorEdit3(name, c, ImGuiColorEditFlags_NoInputs)) {
+            *rgb = (static_cast<uint32_t>(c[0] * 255.f + 0.5f) << 16) | (static_cast<uint32_t>(c[1] * 255.f + 0.5f) << 8) |
+                   static_cast<uint32_t>(c[2] * 255.f + 0.5f);
+            ch = true;
+        }
+    };
+    colour("ancient badge", &S.colAncient);
+    ImGui::SameLine();
+    colour("primal badge", &S.colPrimal);
+    ImGui::SeparatorText("Hover card");
+    ch |= ImGui::Combo("show the card for", &S.hoverMode, "Unidentified items only\0Every item\0Off\0");
+    ImGui::SliderFloat("card opacity", &S.hoverAlpha, 0.2f, 1.0f, "%.2f");
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+}
+
 // Settings > Ground labels.
 void HudRenderer::DrawLabelSettings() {
     LabelStyle& L = layout_.labels;
@@ -1502,6 +1547,10 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         }
         ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
         if (changed) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        if (settingsTab_ == kItems) {
+            ImGui::SeparatorText("Inventory overlays");
+            DrawItemSettings();
+        }
     } else if (settingsTab_ == kMinimap) {
         DrawMinimapSettings();
     } else if (settingsTab_ == kLabels) {
@@ -1519,7 +1568,7 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
 void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& opt) {
     if (snap.hoveredItemPlus1 == 0 || snap.hoveredItemPlus1 > snap.itemCount || opt.cursorX < 0.f) return;
     const ItemSnapshot& it = snap.items[snap.hoveredItemPlus1 - 1];
-    if (it.identified) return;
+    if (layout_.items.hoverMode == 2 || (it.identified && layout_.items.hoverMode == 0)) return;
     // left of the cursor, vertically centred on it (pivot = right-middle edge),
     // flipped to the right only if it would leave the screen
     ImVec2 pos(opt.cursorX - 18.0f, opt.cursorY);
@@ -1529,7 +1578,7 @@ void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& o
         pivot.x = 0.0f;
     }
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
-    ImGui::SetNextWindowBgAlpha(0.88f);
+    ImGui::SetNextWindowBgAlpha(layout_.items.hoverAlpha);
     if (!ImGui::Begin("##hovered_item", nullptr,
                       ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
                           ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
@@ -1546,7 +1595,7 @@ void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& o
         default: break;
     }
     ImGui::TextColored(col, "%s", it.name);
-    ImGui::TextDisabled("%s %s - unidentified", RarityName(it.rarity), it.typeName);
+    ImGui::TextDisabled("%s %s%s", RarityName(it.rarity), it.typeName, it.identified ? "" : " - unidentified");
     if (it.primal)       ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "PRIMAL ANCIENT");
     else if (it.ancient) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Ancient");
     else if (it.rarity == ItemRarity::Legendary || it.rarity == ItemRarity::Set)
