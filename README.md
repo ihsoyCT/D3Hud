@@ -103,7 +103,7 @@ at any resolution). If it ever cannot, or the zoom is off, adjust it in **Settin
 **The HUD itself**
 - Panels (Info, Drops, Items, Actors, Settings) start as small tabs in a screen corner.
   Hover to peek, F8 + click to pin, drag a title bar to move, the X in the title bar of a pinned panel closes it again; positions are remembered.
-- Rebindable hotkeys, profiles (save/load whole setups), UI scale, dock options,
+- Text uses the Windows font Segoe UI (Tahoma or Arial if it is missing) at 16 px; "UI scale" in Settings > General makes everything larger or smaller. Rebindable hotkeys, profiles (save/load whole setups), UI scale, dock options,
   compact mode, reader autostart and on-screen diagnostics.
 
 ## Settings

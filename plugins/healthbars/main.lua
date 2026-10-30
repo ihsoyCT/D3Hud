@@ -120,7 +120,8 @@ local function draw_list(f, elites, tag_opts)
     if d3hud.get("list_box") then
         d3hud.draw_rect(x0 - pad, y0 - pad, x0 + w + pad, y0 + total + pad, draw.PANEL)
     end
-    local scale = math.max(0.5, (h - 6) / 14)  -- text that fits the bar height (default font is about 14 px tall)
+    local _, line = d3hud.text_size("Ag", 1)
+    local scale = math.max(0.5, (h - 6) / line)  -- text that fits the bar height
     local names, pct = d3hud.get("list_names"), d3hud.get("list_percent")
     local y = y0
     for i = 1, shown do

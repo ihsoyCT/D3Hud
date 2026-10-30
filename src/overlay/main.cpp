@@ -63,6 +63,18 @@ static IDCompositionVisual* g_dcompVisual = nullptr;
 // selftest extras
 static bool g_hitTest = false;     // --selftest-hit: verify click-through toggling
 static bool g_visualMark = false;  // --selftest-visual: draw a big marker square
+// ImGui's built-in font is a 13 px bitmap-style font: small, and blurry when plugins draw it larger. Use a system
+// TrueType font instead (ImGui 1.92+ renders any size from it sharply); the built-in one stays as the fallback.
+static void LoadUiFont() {
+    wchar_t windir[MAX_PATH] = {};
+    if (GetWindowsDirectoryW(windir, MAX_PATH) == 0) return;
+    for (const wchar_t* name : {L"segoeui.ttf", L"tahoma.ttf", L"arial.ttf"}) {
+        const std::filesystem::path font = std::filesystem::path(windir) / L"Fonts" / name;
+        if (!std::filesystem::exists(font)) continue;
+        if (ImGui::GetIO().Fonts->AddFontFromFileTTF(Utf8(font).c_str(), 16.0f) != nullptr) return;
+    }
+}
+
 static bool g_matrix = false;      // --matrix: cycle exstyle combos for external probing
 static bool g_baseNoRedir = true;  // matrix base window type
 static int g_selftestResult = -1;
@@ -360,6 +372,7 @@ int main(int argc, char** argv) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
+    LoadUiFont();
     ImGui::StyleColorsDark();
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_device, g_ctx);
