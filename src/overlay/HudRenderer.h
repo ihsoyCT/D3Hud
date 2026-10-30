@@ -74,10 +74,11 @@ struct MinimapLayout {
     LabelStyle labels;
     ItemStyle items;
     bool onGameMap = true;       // dots only, over the game's minimap (else own disc, bottom-right)
-    float rightOffset = 0.110f;  // centre distance from the right edge / window height
-    float topOffset = 0.115f;    // centre distance from the top edge / window height
-    float radius = 0.100f;       // / window height
-    float worldRadius = 120.0f;  // world units from centre to rim
+    bool autoMinimap = true;     // follow the game's own minimap control (placement below = fallback)
+    float rightOffset = 0.168f;  // centre distance from the right edge / window height (16:9 measured)
+    float topOffset = 0.192f;    // centre distance from the top edge / window height
+    float radius = 0.125f;       // / window height
+    float worldRadius = 156.0f;  // world units from centre to rim
     bool beyondRim = true;       // also draw actors outside the circle (faded)
     // marker look
     static constexpr int kKindCount = static_cast<int>(ActorKind::RiftOrbTiered) + 1;
@@ -206,6 +207,7 @@ private:
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
     void DrawMinimapSettings();
+    bool minimapFound_ = false;  // last frame: the game's minimap control was used for placement
     void DrawHotkeySettings();
     void DrawLabelSettings();
     void DrawProfileSettings();

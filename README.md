@@ -30,10 +30,13 @@ You need the release folder (see [Build, install and package](#build-install-and
 to make one). It is self-contained and can live anywhere you can write to, for
 example `C:\Games\D3Hud`. No installer and no extra runtimes.
 
-1. Start Diablo III in **windowed** or **windowed fullscreen** mode (an overlay cannot
+1. Run Diablo III in **windowed** or **windowed fullscreen** mode (an overlay cannot
    draw over exclusive fullscreen) and get into the game world.
-2. Run `D3Hud.cmd` from the folder. It starts the overlay on top of the game and lets it
-   launch the reader.
+2. Double-click `D3Hud.Overlay.exe`. With no options it covers the Diablo III window,
+   starts the reader for you and shows live data. A console window stays open and logs
+   what it is doing. You may start it before the game: it stays hidden until a window
+   titled "Diablo III" exists, starts the reader when the game appears, and picks the
+   game up again if you restart it.
 3. After a few seconds the minimap markers appear. The first start scans the game's
    memory (a few seconds up to ~15 s); later starts against the same running game
    are much faster because the found addresses are cached.
@@ -43,8 +46,10 @@ example `C:\Games\D3Hud`. No installer and no extra runtimes.
 
 To quit, press **End**. The reader stops with the overlay.
 
-The minimap draws its markers over the game's own minimap by default. If they do not sit
-exactly on the game's icons, calibrate once in **Settings > Minimap** (position, radius, zoom).
+The minimap markers are drawn over the game's own minimap, and the overlay finds that
+minimap by itself (it reads the position and size of the game's minimap control, so it works
+at any resolution). If it ever cannot, or the zoom is off, adjust it in **Settings > Minimap**
+(*zoom*, and the manual position when automatic following is turned off).
 
 ## Features
 
@@ -137,10 +142,10 @@ keyboard while a field is active and gives it back to the game afterwards.
 ## Command line
 
 ```
-D3Hud.Overlay.exe [options]
-  --target <title substring>   track and cover that window (e.g. "Diablo III")
-  --live                       use the live reader (shared-memory ring)
-  --start-reader               --live, and launch D3Hud.Reader in the background
+D3Hud.Overlay.exe [options]        no options = cover "Diablo III", manage the reader, live data
+  --target <title substring>   cover this window instead of "Diablo III"
+  --no-reader                  do not start the reader (run D3Hud.Reader.exe --publish yourself)
+  --demo                       synthetic demo scene instead of the game (no game needed)
   --replay <file>              play a recorded .bin instead
   --record <file> [--seconds N]  record the synthetic scene
   --colorkey                   fallback if DirectComposition is not available
@@ -148,7 +153,9 @@ D3Hud.Overlay.exe [options]
   --help
 ```
 
-Without any option the overlay shows a synthetic demo scene over the whole screen.
+The reader is started once the game window exists, restarted if the game is restarted,
+and not restarted after you press *Stop reader* in the Info panel. If it stops right away
+four times in a row the overlay gives up and shows a hint (details in `reader.log`).
 
 ```
 D3Hud.Reader.exe --attach "Diablo III64" --publish     # live snapshots for the overlay
@@ -191,7 +198,7 @@ cmake --build build --config Release
 cd build && ctest -C Release            # unit tests
 ```
 
-Binaries are in `build\Release\`. To run from the build tree: `build\Release\D3Hud.Overlay.exe --live --target "Diablo III" --start-reader`.
+Binaries are in `build\Release\`. To run from the build tree: `build\Release\D3Hud.Overlay.exe`.
 
 **A relocatable release folder**
 
@@ -201,7 +208,7 @@ cmake --install build --config Release --prefix D:\D3Hud
 ```
 
 The folder contains `D3Hud.Overlay.exe`, `D3Hud.Reader.exe`, the three data files,
-`D3Hud.cmd`, this README and `licenses\`. It runs on a machine without the Visual C++
+this README and `licenses\`. It runs on a machine without the Visual C++
 redistributable, because the C runtime is linked statically (the default; turn it off
 with `-DD3HUD_STATIC_RUNTIME=OFF`). To get a zip of the same layout:
 
@@ -224,11 +231,16 @@ running exe.
 
 ## Troubleshooting
 
+- **Nothing visible at all**: the overlay hides until a window whose title contains
+  "Diablo III" exists; check the console window it opened. If your game window has a
+  different title, start it with `--target "<part of the title>"`.
 - **No markers, "reader stopped"**: the game must be running and you must be in the game
   world. Open the Info panel and use *Start reader*; check `reader.log` next to the exes.
 - **Nothing draws over the game**: switch the game to windowed or windowed fullscreen.
-- **Markers are offset from the game's minimap**: Settings > Minimap, adjust the
-  position, radius and zoom; press Save. If the markers are rotated, press F7 to cycle the orientation.
+- **Markers are offset from the game's minimap**: Settings > Minimap says whether the game's
+  minimap was found. If not, turn off *follow automatically* and set the position and radius by hand
+  (press Save). If the markers are too spread out or too bunched up, change *zoom*; if they are
+  rotated, press F7 to cycle the orientation.
 - **The first start takes long**: the reader scans the game's memory once; the result is
   cached for the running game.
 - **Salvage stops with "an item did not salvage"**: the game missed a click. Raise
@@ -247,7 +259,6 @@ src/overlay   Win32 + DirectX 11 + DirectComposition window, ImGui renderer, sal
 src/tests     unit tests (ctest)
 analysis      data tables the program loads, plus notes on the game's memory layout
 tools         Python scripts used to mine those tables (not needed at runtime)
-packaging     files that go into the release folder
 ```
 
 - `TESTING.md` — manual test matrix and the replay-first workflow

@@ -23,7 +23,7 @@ Open a Notepad window first (most tests use it as the target).
 
 | # | Command | What you should see | Pass criteria |
 |---|---------|---------------------|---------------|
-| T1 | `D3Hud.Overlay.exe --target Notepad` | Overlay appears over the Notepad window: circular minimap bottom-right, salvage panel right side, info box top-left of the overlay area | All three visible, positioned over Notepad, not on the whole desktop |
+| T1 | `D3Hud.Overlay.exe --demo --target Notepad` | Overlay appears over the Notepad window: circular minimap bottom-right, salvage panel right side, info box top-left of the overlay area | All three visible, positioned over Notepad, not on the whole desktop |
 | T2 | (same, look closely) | Background around dots/panels is fully transparent | You can read Notepad's text THROUGH the overlay; no black box, no colored fringe around text |
 | T3 | (default state) click on Notepad where the overlay covers it | Clicks pass through to Notepad | Caret moves / title bar reacts — Notepad gets every click |
 | T4 | Press **F8**, then click the salvage panel rows / scroll the table | Overlay becomes interactive | Rows highlight on hover, scrollbar draggable; Notepad no longer gets those clicks. F8 again reverts to pass-through |

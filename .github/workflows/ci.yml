@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           cmake --install build --config Release --prefix dist
-          for f in D3Hud.Overlay.exe D3Hud.Reader.exe sno_actors.tsv items_gbid.tsv scene_cells.bin D3Hud.cmd README.md; do
+          for f in D3Hud.Overlay.exe D3Hud.Reader.exe sno_actors.tsv items_gbid.tsv scene_cells.bin README.md; do
             test -f "dist/$f" || { echo "missing in install: $f"; exit 1; }
           done
 

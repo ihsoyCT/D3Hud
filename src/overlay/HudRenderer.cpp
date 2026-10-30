@@ -139,6 +139,7 @@ bool MinimapLayout::Load(const char* path) {
         }
         if (sscanf(line, " %63[^=]= %f", key, &v) != 2) continue;
         if (!strcmp(key, "onGameMap")) onGameMap = v != 0.f;
+        else if (!strcmp(key, "autoMinimap")) autoMinimap = v != 0.f;
         else if (!strcmp(key, "rightOffset")) rightOffset = v;
         else if (!strcmp(key, "topOffset")) topOffset = v;
         else if (!strcmp(key, "radius")) radius = v;
@@ -269,6 +270,7 @@ bool MinimapLayout::Save(const char* path) const {
     FILE* f = fopen(path, "w");
     if (f == nullptr) return false;
     std::print(f, "# D3Hud minimap layout (positions/radius = fraction of window height)\n");
+    std::print(f, "autoMinimap={}\n", autoMinimap ? 1 : 0);
     std::print(f, "onGameMap={}\nrightOffset={:.4f}\ntopOffset={:.4f}\nradius={:.4f}\nworldRadius={:.1f}\nbeyondRim={}\n",
             onGameMap ? 1 : 0, rightOffset, topOffset, radius, worldRadius, beyondRim ? 1 : 0);
     std::print(f, "# auto salvage: safe backpack cells (bit row*10+col), protections\n");
@@ -457,7 +459,15 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
     const ImGuiIO& io = ImGui::GetIO();
     const float h = io.DisplaySize.y;
     float radiusPx, cx, cy;
-    if (layout_.onGameMap) {
+    minimapFound_ = false;
+    if (layout_.onGameMap && layout_.autoMinimap && snap.ui.minimapOpen) {
+        // the game's own minimap control: its arrow region is the circle the icons live in
+        const UiRect r = UiToScreen(snap.ui.minimapRect, io.DisplaySize.x, io.DisplaySize.y);
+        radiusPx = std::min(r.x1 - r.x0, r.y1 - r.y0) * 0.5f;
+        cx = (r.x0 + r.x1) * 0.5f;
+        cy = (r.y0 + r.y1) * 0.5f;
+        minimapFound_ = true;
+    } else if (layout_.onGameMap) {
         radiusPx = layout_.radius * h;
         cx = io.DisplaySize.x - layout_.rightOffset * h;
         cy = layout_.topOffset * h;
@@ -592,9 +602,16 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
 void HudRenderer::DrawMinimapSettings() {
     ImGui::Checkbox("draw over the game's minimap", &layout_.onGameMap);
     ImGui::Checkbox("draw actors beyond the rim", &layout_.beyondRim);
+    ImGui::Checkbox("follow the game's minimap automatically (recommended)", &layout_.autoMinimap);
+    if (layout_.onGameMap && layout_.autoMinimap) {
+        if (minimapFound_) ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "game minimap found: position and size are taken from it");
+        else ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "game minimap not found: using the manual placement below");
+    }
+    ImGui::BeginDisabled(layout_.autoMinimap && minimapFound_);
     ImGui::SliderFloat("from right edge", &layout_.rightOffset, 0.0f, 0.5f, "%.3f");
     ImGui::SliderFloat("from top edge", &layout_.topOffset, 0.0f, 0.5f, "%.3f");
     ImGui::SliderFloat("radius", &layout_.radius, 0.03f, 0.4f, "%.3f");
+    ImGui::EndDisabled();
     ImGui::SliderFloat("zoom (world units to rim)", &layout_.worldRadius, 20.0f, 400.0f, "%.0f");
 
     ImGui::SeparatorText("Markers");
@@ -681,6 +698,7 @@ void HudRenderer::DrawMinimapSettings() {
     if (ImGui::Button("Reset placement")) {
         const MinimapLayout d;
         layout_.onGameMap = d.onGameMap;
+        layout_.autoMinimap = d.autoMinimap;
         layout_.rightOffset = d.rightOffset;
         layout_.topOffset = d.topOffset;
         layout_.radius = d.radius;

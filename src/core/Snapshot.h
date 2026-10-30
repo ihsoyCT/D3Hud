@@ -11,7 +11,7 @@
 
 namespace d3hud {
 
-constexpr uint32_t kSnapshotVersion = 10;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer
+constexpr uint32_t kSnapshotVersion = 11;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect
 constexpr int kMaxScenes = 512;  // scenes of the current world (a rift has ~100-250)
 constexpr int kMaxActors = 256;
 constexpr int kMaxItems = 256;  // inventory + equipped + the visible stash tab (70)
@@ -185,6 +185,8 @@ struct UiLayout {
     UiRect salvageMagicButton;  // the salvage tab's "salvage all blue" / "salvage all yellow" buttons
     UiRect salvageRareButton;
     float riftTimerFraction = -1.f;  // greater rift: elapsed share of the 15 min limit (0..1), -1 unknown
+    uint8_t minimapOpen = 0;  // the game's minimap is shown
+    UiRect minimapRect;       // its arrow region: the circle the icons live in (centre, radius = half the width)
 };
 
 // The rift progress bar's marker slides along the bar: its left edge is the bar's left edge at
@@ -270,7 +272,7 @@ static_assert(std::is_trivially_copyable_v<WorldSnapshot>, "snapshots must be me
 // UiLayout: 4 + 16 * (2 + kEquipSlots) + 8 = 268.
 static_assert(sizeof(ActorSnapshot) == 80, "ActorSnapshot layout changed");
 static_assert(sizeof(ItemSnapshot) == 120, "ItemSnapshot layout changed");
-static_assert(sizeof(UiLayout) == 496, "UiLayout layout changed");
+static_assert(sizeof(UiLayout) == 516, "UiLayout layout changed");
 static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 80 + kMaxItems * 120,
               "WorldSnapshot layout changed");
 
