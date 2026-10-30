@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 rift_watch*.txt
 rift_timer_watch*.txt
+rift_normal_watch*.txt
