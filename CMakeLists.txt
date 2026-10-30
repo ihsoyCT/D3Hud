@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(D3Hud VERSION 0.1.0 LANGUAGES CXX)
 
+# The release folder must run on a machine without the Visual C++ redistributable: link the
+# MSVC runtime statically (must be set before any target is created, imgui included).
+option(D3HUD_STATIC_RUNTIME "Link the MSVC runtime statically (self-contained exes)" ON)
+if(MSVC AND D3HUD_STATIC_RUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -54,3 +61,28 @@ target_link_libraries(d3hud_tests PRIVATE d3hud_core d3hud_reader)
 
 enable_testing()
 add_test(NAME core COMMAND d3hud_tests)
+
+# --- install: one relocatable folder -------------------------------------------------------
+# cmake --install build --config Release            -> <source>/dist
+# cmake --install build --config Release --prefix X -> X
+# The exes find their data files, d3hud.ini and reader.log next to themselves, so the folder
+# can be moved anywhere (keep it somewhere writable). `cpack -C Release` (run in build/) makes
+# a zip of the same layout.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/dist" CACHE PATH "Install prefix" FORCE)
+endif()
+install(TARGETS D3Hud.Overlay D3Hud.Reader RUNTIME DESTINATION .)
+install(FILES
+    analysis/sno_actors.tsv
+    analysis/items_gbid.tsv
+    analysis/scene_cells.bin
+    packaging/D3Hud.cmd
+    README.md
+    DESTINATION .)
+install(FILES third_party/imgui/LICENSE.txt DESTINATION licenses RENAME imgui-LICENSE.txt)
+
+set(CPACK_GENERATOR ZIP)
+set(CPACK_PACKAGE_NAME D3Hud)
+set(CPACK_PACKAGE_FILE_NAME "D3Hud-${PROJECT_VERSION}-win64")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+include(CPack)

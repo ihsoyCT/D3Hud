@@ -1,75 +1,247 @@
 # D3Hud
 
-Minimal, fully-auditable overlay for Diablo III. Strictly read-only: it reads
-game memory and draws; it never sends input.
+A heads-up display for Diablo III (Windows, x64). A small background **reader**
+reads the game's memory; a transparent **overlay** draws on top of the game window:
+a minimap with markers, labels for good drops, rift progress, a stash search,
+statistics, and an optional **auto salvage**.
 
-## Status
+> **Read this first**
+> - The reader reads another process's memory, and auto salvage sends **real mouse
+>   clicks** into the game window. Use it at your own risk; it may be against the
+>   game's rules for your account or realm.
+> - Everything is built for the current game client. After a game patch some things
+>   may stop working until the reader is updated.
 
-- **M0 (current)** — full pipeline with synthetic data: transparent click-through
-  ImGui overlay, deterministic scene generator, record/replay, unit tests.
-- M1 — live reader: attach, AOB offsets, player position.
-- M2 — actor list -> minimap dots live (reader side done: `--actors`, `--publish`).
-- M3 — item brain: unided reveal (type + ancient/primal) and salvage grading.
+## Contents
 
-## Architecture
+- [Quick start](#quick-start)
+- [Features](#features)
+- [Settings](#settings)
+- [Hotkeys](#hotkeys)
+- [Command line](#command-line)
+- [Files the program uses and creates](#files-the-program-uses-and-creates)
+- [Build, install and package](#build-install-and-package)
+- [Troubleshooting](#troubleshooting)
+- [Project layout and further reading](#project-layout-and-further-reading)
 
-- `D3Hud.Reader` (later) — attaches to the game, publishes `WorldSnapshot`s.
-- `D3Hud.Overlay` — Win32 + DX11 + DirectComposition, ImGui UI. Sources:
-  synthetic (default), `--replay file`, (later) live shared memory.
-- `D3Hud.Core` — `WorldSnapshot` POD model (frozen ABI, see `Snapshot.h`),
-  scene generator, replay file I/O, world->minimap math.
+## Quick start
 
-## Build (VS2022 + CMake)
+You need the release folder (see [Build, install and package](#build-install-and-package)
+to make one). It is self-contained and can live anywhere you can write to, for
+example `C:\Games\D3Hud`. No installer and no extra runtimes.
+
+1. Start Diablo III in **windowed** or **windowed fullscreen** mode (an overlay cannot
+   draw over exclusive fullscreen) and get into the game world.
+2. Run `D3Hud.cmd` from the folder. It starts the overlay on top of the game and lets it
+   launch the reader.
+3. After a few seconds the minimap markers appear. The first start scans the game's
+   memory (a few seconds up to ~15 s); later starts against the same running game
+   are much faster because the found addresses are cached.
+4. Hover the small tabs in the bottom-right corner to peek at the panels. Press **F8**
+   to make the overlay clickable, click a tab to pin its panel open, and open
+   **Settings** to configure everything.
+
+To quit, press **End**. The reader stops with the overlay.
+
+The minimap draws its markers over the game's own minimap by default. If they do not sit
+exactly on the game's icons, calibrate once in **Settings > Minimap** (position, radius, zoom).
+
+## Features
+
+**Minimap and map**
+- Markers for monsters (trash, champions, rares, minions, bosses), pylons and shrines
+  (with names, distance and a pulsing ring), chests, portals, health globes, ground items
+  and the **progress orbs** of rifts (blue for normal rifts, yellow for greater rifts).
+- Map prediction: the walkable level layout (also unexplored parts), entrance/exit labels.
+- The same markers on the game's big TAB map.
+- An arrow on the rim to the nearest unused pylon when it is off the map, and a ring around the
+  nearest rare or champion.
+- Every kind can be switched off, recoloured, resized, reshaped or limited by distance.
+
+**Items and drops**
+- Labels over legendary and set items on the ground, with *Ancient* / *Primal* in front;
+  filters, colours and size are configurable.
+- **Item badges** on inventory and stash icons: `A` (ancient), `P` (primal), with the
+  Caldesann's augment rank in front (`125A`).
+- A card for **unidentified** items that shows what they really are (name, ancient/primal)
+  when the game shows their tooltip.
+- **Drops panel**: a session log, drops per hour, ancient/primal counts, a list of runs
+  (one per world visit) with their own counts, optional sound/flash alert for primal or
+  ancient drops, CSV export.
+- Optional run timer at the top of the screen.
+
+**Rifts**
+- **Rift progress** (percent) and an **ETA** for normal and greater rifts.
+- Greater rifts: the real 15 minute timer and your pace compared with the time left.
+
+**Stash search**
+- A search box below the stash grid. Type words (`inna`, `ancient ring`, `primal`,
+  `unidentified`); matching items are outlined and the rest dimmed, and the stash tabs
+  and pages that hold matches are marked with a count.
+- The game only exposes the stash tab that is open, so the overlay remembers each tab as
+  you open it (this session only). Tabs it has not seen yet are tinted red; open them
+  once to include them.
+
+**Auto salvage** (sends mouse clicks to the game; Esc or moving the mouse stops it)
+- A **Salvage** button appears under the anvil while the blacksmith's salvage tab is open;
+  it works without F8.
+- You mark a **safe area** of backpack cells that are never touched. The safe area and its
+  editor are shown only at the salvage tab (can be turned off).
+- Rules: which rarities, keep every ancient / primal, keep ancient and primal versions of
+  worn items, never-salvage item types, a limit per run, extra delay, a confirm step.
+- Uses the game's own **salvage all blue / yellow** buttons when it is safe (no protected
+  item of that colour in the bag), then clicks the rest quickly, with legendary and set items
+  confirmed automatically.
+- Items marked for salvage get a red mark while the tab is open.
+
+**The HUD itself**
+- Panels (Info, Drops, Items, Actors, Settings) start as small tabs in a screen corner.
+  Hover to peek, F8 + click to pin, drag a title bar to move; positions are remembered.
+- Rebindable hotkeys, profiles (save/load whole setups), UI scale, dock options,
+  compact mode, reader autostart and on-screen diagnostics.
+
+## Settings
+
+Open the **Settings** tab (pin it with F8 + click; it does not open on hover). The window
+can be resized by dragging its bottom-right corner, and the size is remembered.
+
+| Page | What is there |
+|---|---|
+| General | UI scale, dock corner / opacity / auto-hide, panel opacity, compact mode |
+| Hotkeys | Rebind every hotkey, including a toggle for each panel |
+| Profiles | Save, load and delete whole setups (`d3hud.<name>.ini`) |
+| Info / Drops / Items / Actors | Show in dock, pin, reset position; plus drop alerts, run timer and rift options (Drops) and badges, hover card and stash search (Items) |
+| Minimap | Placement and zoom, global marker options, a table with every actor kind |
+| Ground labels | Which items get labels, text size, colours |
+| Auto salvage | Safe area, rules, speed options, run safety, preview colour |
+| Reader / diagnostics | Autostart the reader, publish rate, on-screen diagnostics, open the settings folder, reset everything |
+
+Most changes are saved immediately; on the Minimap page press **Save**.
+
+## Hotkeys
+
+Defaults (all can be changed in Settings > Hotkeys). They are global, so they work while
+the game has the focus.
+
+| Key | Action |
+|---|---|
+| F7 | Cycle the map orientation |
+| F8 | Make the overlay clickable / click-through |
+| F9 | Show or hide the panels |
+| End | Quit |
+| Esc / moving the mouse | Stop a running auto salvage |
+
+Typing into a text field (stash search, profile name) works: the overlay takes the
+keyboard while a field is active and gives it back to the game afterwards.
+
+## Command line
+
+```
+D3Hud.Overlay.exe [options]
+  --target <title substring>   track and cover that window (e.g. "Diablo III")
+  --live                       use the live reader (shared-memory ring)
+  --start-reader               --live, and launch D3Hud.Reader in the background
+  --replay <file>              play a recorded .bin instead
+  --record <file> [--seconds N]  record the synthetic scene
+  --colorkey                   fallback if DirectComposition is not available
+  --selftest <frames>          run N frames and exit (smoke test)
+  --help
+```
+
+Without any option the overlay shows a synthetic demo scene over the whole screen.
+
+```
+D3Hud.Reader.exe --attach "Diablo III64" --publish     # live snapshots for the overlay
+        [--hz N]                                       #   publish rate (default 60)
+        [--sno <path>]                                 #   actor table (default: next to the exe)
+D3Hud.Reader.exe --attach "Diablo III64" --actors      # one-shot dump of drawable actors
+D3Hud.Reader.exe --attach "Diablo III64" --items       # equipped and backpack items
+D3Hud.Reader.exe --attach "Diablo III64" --ui <text>   # list UI controls whose path contains <text>
+D3Hud.Reader.exe --attach "Diablo III64" --ui-watch <text> [--seconds N]
+                                                       # watch what changes in those controls
+D3Hud.Reader.exe --list [filter]                       # list processes
+```
+
+`--ui-watch` is a research tool: run it while playing to find which memory field of a UI
+control follows something on screen (this is how the rift progress was found).
+
+## Files the program uses and creates
+
+Next to the exes (the folder is relocatable, nothing is written elsewhere):
+
+| File | |
+|---|---|
+| `sno_actors.tsv`, `items_gbid.tsv`, `scene_cells.bin` | Data tables the program needs (shipped) |
+| `d3hud.ini` | All settings, panel positions, hotkeys and the safe area (created on first save) |
+| `d3hud.<name>.ini` | Saved profiles |
+| `reader.log` | Output of the background reader |
+| `d3hud_drops.csv` | Created by *Export session to CSV* in the Drops settings |
+| `dumps\` | Created by the reader's F10 actor dump |
+
+Keep the folder somewhere your user can write to (not `Program Files`).
+
+## Build, install and package
+
+Requirements: Windows, Visual Studio 2022 (C++ desktop workload), CMake 3.20 or newer.
+Dear ImGui is vendored in `third_party/imgui`.
 
 ```
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
-cd build && ctest -C Release
+cd build && ctest -C Release            # unit tests
 ```
 
-## Run
+Binaries are in `build\Release\`. To run from the build tree: `build\Release\D3Hud.Overlay.exe --live --target "Diablo III" --start-reader`.
+
+**A relocatable release folder**
 
 ```
-build\Release\D3Hud.Overlay.exe                     # synthetic, whole primary screen
-build\Release\D3Hud.Overlay.exe --target Notepad    # track & cover a window
-build\Release\D3Hud.Overlay.exe --record demo.bin --seconds 10
-build\Release\D3Hud.Overlay.exe --replay demo.bin
-build\Release\D3Hud.Overlay.exe --live              # consume live reader snapshots
-build\Release\D3Hud.Overlay.exe --colorkey          # legacy fallback (DComp unavailable)
-build\Release\D3Hud.Overlay.exe --selftest 120      # headless smoke test
-build\Release\D3Hud.Overlay.exe --selftest-hit      # automated click-through check
+cmake --install build --config Release                # -> .\dist
+cmake --install build --config Release --prefix D:\D3Hud
 ```
 
-Live pipeline (game running, player in-world):
+The folder contains `D3Hud.Overlay.exe`, `D3Hud.Reader.exe`, the three data files,
+`D3Hud.cmd`, this README and `licenses\`. It runs on a machine without the Visual C++
+redistributable, because the C runtime is linked statically (the default; turn it off
+with `-DD3HUD_STATIC_RUNTIME=OFF`). To get a zip of the same layout:
 
 ```
-build\Release\D3Hud.Reader.exe --attach "Diablo III64" --publish
-build\Release\D3Hud.Overlay.exe --live --target "Diablo III"
+cd build
+cpack -C Release                                      # -> D3Hud-<version>-win64.zip
 ```
 
-Or let the overlay run the reader: `--live` shows a **Start reader** button in
-the Info panel (F8 to click it), `--start-reader` launches it right away. The
-reader then runs without a console, logs to `reader.log` next to the exe, and
-is stopped when the overlay quits. The overlay reconnects whenever a reader
-(re)starts.
+Close a running overlay before rebuilding: Windows does not let the linker replace a
+running exe.
 
-The reader finds the game's actor array by its record shape (no hardcoded
-offsets) and publishes the player plus monsters, bosses, pylons, shrines,
-chests and ground items. Labels come from `sno_actors.tsv` (copied next to the
-exe at build time; override with `--sno <path>`). If the array is not found it
-falls back to player-only tracking (stand still ~2 s at start).
+## Troubleshooting
+
+- **No markers, "reader stopped"**: the game must be running and you must be in the game
+  world. Open the Info panel and use *Start reader*; check `reader.log` next to the exes.
+- **Nothing draws over the game**: switch the game to windowed or windowed fullscreen.
+- **Markers are offset from the game's minimap**: Settings > Minimap, adjust the
+  position, radius and zoom; press Save. If the markers are rotated, press F7 to cycle the orientation.
+- **The first start takes long**: the reader scans the game's memory once; the result is
+  cached for the running game.
+- **Salvage stops with "an item did not salvage"**: the game missed a click. Raise
+  *extra delay between clicks* or turn off *fast mode* in Settings > Auto salvage.
+- **Stash search shows red tabs**: those tabs have not been opened since the overlay started.
+- **A key does nothing**: another program may have registered it as a global hotkey;
+  rebind it in Settings > Hotkeys.
+- **Start over**: Settings > Reader / diagnostics > *Reset everything*, or delete `d3hud.ini`.
+
+## Project layout and further reading
 
 ```
-build\Release\D3Hud.Reader.exe --attach "Diablo III64" --actors   # one-shot dump of drawable actors
+src/core      snapshot model (frozen ABI), replay I/O, shared-memory ring, rules (salvage, search)
+src/reader    the memory reader (process attach, actor / item / UI / scene discovery)
+src/overlay   Win32 + DirectX 11 + DirectComposition window, ImGui renderer, salvage runner
+src/tests     unit tests (ctest)
+analysis      data tables the program loads, plus notes on the game's memory layout
+tools         Python scripts used to mine those tables (not needed at runtime)
+packaging     files that go into the release folder
 ```
 
-Hotkeys: **F7** map orientation, **F8** click-through on/off (interactive mode
-shows the *Minimap layout* panel), **F9** panels on/off, **END** quit; reader:
-**F10** dumps the actor list to `build\Release\dumps\`.
-
-The minimap draws its dots over the game's own minimap (top-right). Calibrate
-once in F8 mode: move/scale until a pylon or waypoint dot sits on the game's
-icon, then *Save* (stored in `d3hud.ini` next to the overlay exe, relative to
-window height so it survives resolution changes).
-
-See `TESTING.md` for the manual test matrix and the replay-first workflow.
+- `TESTING.md` — manual test matrix and the replay-first workflow
+- `FEATURE_IDEAS.md` — ideas and investigations
+- `PLUGIN_PLAN.md` — a plan for a plugin system
+- `analysis/ENGINE_MINING.md` — how the game's data structures were found
