@@ -22,6 +22,7 @@
 #include "HudRenderer.h"
 #include "ReplayIO.h"
 #include "SceneGen.h"
+#include "Paths.h"
 #include "ReaderProcess.h"
 #include "SalvageRunner.h"
 #include "SharedRing.h"
@@ -394,14 +395,9 @@ int main(int argc, char** argv) {
 
     HudRenderer renderer;
     {
-        char ini[MAX_PATH];
-        GetModuleFileNameA(nullptr, ini, MAX_PATH);
-        char* slash = strrchr(ini, '\\');
-        if (slash != nullptr) strcpy_s(slash + 1, MAX_PATH - (slash + 1 - ini), "d3hud.ini");
-        renderer.SetLayoutPath(ini);
+        renderer.SetLayoutPath(ExeDir() / "d3hud.ini");
         // map prediction shapes, next to the exe like d3hud.ini (copied by the build)
-        if (slash != nullptr) strcpy_s(slash + 1, MAX_PATH - (slash + 1 - ini), "scene_cells.bin");
-        if (!renderer.LoadSceneCells(ini)) std::print(stderr, "no scene_cells.bin - map prediction off\n");
+        if (!renderer.LoadSceneCells(ExeDir() / "scene_cells.bin")) std::print(stderr, "no scene_cells.bin - map prediction off\n");
     }
     HudOptions opts;
     opts.showPanels = g_showPanels;

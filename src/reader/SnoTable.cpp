@@ -8,7 +8,7 @@
 
 namespace d3hud {
 
-bool SnoTable::Load(const std::string& path) {
+bool SnoTable::Load(const std::filesystem::path& path) {
     std::ifstream in(path);
     if (!in) return false;
     std::string line;
@@ -31,7 +31,7 @@ const SnoInfo* SnoTable::Find(uint32_t sno) const {
     return it == table_.end() ? nullptr : &it->second;
 }
 
-bool ItemNameTable::Load(const std::string& path) {
+bool ItemNameTable::Load(const std::filesystem::path& path) {
     std::ifstream in(path);
     if (!in) return false;
     std::string line;

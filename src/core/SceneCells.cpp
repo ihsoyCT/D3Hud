@@ -3,12 +3,14 @@
 #include <cstdio>
 #include <cstring>
 
+#include "Paths.h"
+
 namespace d3hud {
 
-bool SceneCells::Load(const std::string& path) {
+bool SceneCells::Load(const std::filesystem::path& path) {
     scenes_.clear();
     flags_.clear();
-    FILE* f = fopen(path.c_str(), "rb");
+    FILE* f = OpenFile(path, L"rb");
     if (f == nullptr) return false;
     char magic[4];
     uint32_t version = 0, count = 0;

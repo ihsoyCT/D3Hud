@@ -1,6 +1,8 @@
 #include "BasesCache.h"
 
 #include <charconv>
+
+#include "Paths.h"
 #include <string_view>
 
 namespace d3hud {
@@ -23,9 +25,8 @@ bool ParseList(const std::string& line, std::vector<uint64_t>* out) {
 
 }  // namespace
 
-bool BasesCache::Save(const std::string& path) const {
-    FILE* f = nullptr;
-    fopen_s(&f, path.c_str(), "w");
+bool BasesCache::Save(const std::filesystem::path& path) const {
+    FILE* f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     fprintf(f, "pid=%u\ncreated=%llu\nactor=%llX\n", pid, static_cast<unsigned long long>(created),
             static_cast<unsigned long long>(actorBase));
@@ -42,9 +43,8 @@ bool BasesCache::Save(const std::string& path) const {
     return true;
 }
 
-bool BasesCache::Load(const std::string& path) {
-    FILE* f = nullptr;
-    fopen_s(&f, path.c_str(), "r");
+bool BasesCache::Load(const std::filesystem::path& path) {
+    FILE* f = OpenFile(path, L"r");
     if (f == nullptr) return false;
     char line[8192];
     uint32_t filePid = 0;

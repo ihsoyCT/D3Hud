@@ -5,6 +5,7 @@
 
 #include "Win32.h"
 
+#include <filesystem>
 #include <string>
 
 namespace d3hud {
@@ -26,7 +27,7 @@ public:
     const std::string& LastLogLine();
 
 private:
-    std::string dir_;  // exe directory, trailing backslash
+    std::filesystem::path dir_;  // exe directory
     HANDLE job_ = nullptr;
     HANDLE process_ = nullptr;
     DWORD pid_ = 0;

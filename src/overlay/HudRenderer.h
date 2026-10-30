@@ -2,6 +2,7 @@
 // snapshots from any source, owns no state beyond options.
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -129,8 +130,8 @@ struct MinimapLayout {
     static constexpr int kHotkeyCount = kHkPanelFirst + kPanelCount;
     uint8_t hotkeys[kHotkeyCount] = {0x77, 0x78, 0x23, 0x76, 0, 0, 0, 0, 0};  // F8 F9 END F7
 
-    [[nodiscard]] bool Load(const char* path);
-    [[nodiscard]] bool Save(const char* path) const;
+    [[nodiscard]] bool Load(const std::filesystem::path& path);
+    [[nodiscard]] bool Save(const std::filesystem::path& path) const;
 };
 
 // Panels of the HUD: collapsed tabs docked at the bottom-right. Hovering a tab
@@ -186,9 +187,9 @@ class HudRenderer {
 public:
     void Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName);
     // Loads the layout from `path` (defaults if missing); the calibration panel saves there.
-    void SetLayoutPath(const char* path);
+    void SetLayoutPath(const std::filesystem::path& path);
     // Scene shapes for the map prediction (scene_cells.bin); false if missing.
-    bool LoadSceneCells(const char* path) { return sceneCells_.Load(path); }
+    bool LoadSceneCells(const std::filesystem::path& path) { return sceneCells_.Load(path); }
     // Hotkey bindings for main.cpp: re-register when TakeHotkeysDirty(); while a key is being
     // captured in Settings the owner must ignore hotkey presses.
     const uint8_t* hotkeys() const { return layout_.hotkeys; }
@@ -244,7 +245,7 @@ private:
     void DrawReaderSettings();
     void DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps);
     double resetArmedUntil_ = 0.0;  // first click of "reset everything"
-    bool ExportDropsCsv(const char* path) const;
+    bool ExportDropsCsv(const std::filesystem::path& path) const;
     double flashUntil_ = 0.0;   // drop alert: screen-border flash
     uint32_t flashRgb_ = 0;
     std::vector<std::string> profiles_;  // names of d3hud.<name>.ini next to d3hud.ini
@@ -292,7 +293,7 @@ private:
     int selectedRow_ = -1;
     ImGuiTextFilter filter_;
     MinimapLayout layout_;
-    char layoutPath_[260] = {};
+    std::filesystem::path layoutPath_;
     const char* layoutStatus_ = "";
 };
 

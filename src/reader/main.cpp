@@ -33,6 +33,7 @@
 #include "SceneTable.h"
 #include "AobScanner.h"
 #include "Offsets.h"
+#include "Paths.h"
 #include "PlayerTracker.h"
 #include "Process.h"
 #include "SharedRing.h"
@@ -64,13 +65,11 @@ static int RunMarkerChild() {
 static int Selftest() {
     // Spawn a child of ourselves carrying the marker, attach, scan, verify the
     // address match is exact. Proves: OpenProcess, region walk, RPM, scanner.
-    char self[MAX_PATH];
-    GetModuleFileNameA(nullptr, self, MAX_PATH);
-    std::string cmd = std::string(self) + " --marker-child";
-    STARTUPINFOA si = {};
+    std::wstring cmd = L"\"" + ExePath().wstring() + L"\" --marker-child";  // quoted: the path may contain spaces
+    STARTUPINFOW si = {};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi = {};
-    if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NEW_CONSOLE, nullptr,
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NEW_CONSOLE, nullptr,
                         nullptr, &si, &pi)) {
         std::print(stderr, "FATAL: cannot spawn marker child\n");
         return 1;
@@ -184,19 +183,9 @@ static int Capture(Process& proc, const char* outDir) {
     return 0;
 }
 
-static std::string DefaultSnoPath() {
-    char self[MAX_PATH];
-    GetModuleFileNameA(nullptr, self, MAX_PATH);
-    std::string dir = self;
-    return dir.substr(0, dir.find_last_of("\\/") + 1) + "sno_actors.tsv";
-}
+static std::filesystem::path DefaultSnoPath() { return ExeDir() / "sno_actors.tsv"; }
 
-static std::string ExeSiblingPath(const char* file) {
-    char self[MAX_PATH];
-    GetModuleFileNameA(nullptr, self, MAX_PATH);
-    std::string dir = self;
-    return dir.substr(0, dir.find_last_of("\\/") + 1) + file;
-}
+static std::filesystem::path ExeSiblingPath(const char* file) { return ExeDir() / file; }
 
 // Classified, drawable actors -> snapshot. The local player is the Player actor
 // nearest to `hint` (single-player: the only one); *player receives it.
@@ -349,20 +338,20 @@ static int BuildInventory(const Process& proc, const AcdTable& acds, const Attri
 }
 
 // items_gbid.tsv lives next to sno_actors.tsv (both copied next to the exe).
-static void LoadItemNames(const std::string& snoPath, ItemNameTable* names) {
-    const std::string path = snoPath.substr(0, snoPath.find_last_of("\\/") + 1) + "items_gbid.tsv";
+static void LoadItemNames(const std::filesystem::path& snoPath, ItemNameTable* names) {
+    const std::filesystem::path path = snoPath.parent_path() / "items_gbid.tsv";
     if (names->Load(path))
-        std::print("item names: {} items ({})\n", names->size(), path.c_str());
+        std::print("item names: {} items ({})\n", names->size(), Utf8(path));
     else
-        std::print(stderr, "cannot load item names '{}' - showing internal names\n", path.c_str());
+        std::print(stderr, "cannot load item names '{}' - showing internal names\n", Utf8(path));
 }
 
-static bool LoadSno(const std::string& path, SnoTable* sno) {
+static bool LoadSno(const std::filesystem::path& path, SnoTable* sno) {
     if (sno->Load(path)) {
-        std::print("sno table: {} actors ({})\n", sno->size(), path.c_str());
+        std::print("sno table: {} actors ({})\n", sno->size(), Utf8(path));
         return true;
     }
-    std::print(stderr, "cannot load sno table '{}' (use --sno <path>)\n", path.c_str());
+    std::print(stderr, "cannot load sno table '{}' (use --sno <path>)\n", Utf8(path));
     return false;
 }
 
@@ -370,7 +359,7 @@ static void WriteActorDump(const Process& proc, const AcdTable* acds, const Attr
                            const std::vector<RawActor>& raw, const SnoTable& sno, Vec2 player,
                            uint64_t base);
 
-static int DumpActors(const Process& proc, const std::string& snoPath) {
+static int DumpActors(const Process& proc, const std::filesystem::path& snoPath) {
     SnoTable sno;
     if (!LoadSno(snoPath, &sno)) return 1;
     uint64_t base = 0;
@@ -424,21 +413,18 @@ static const char* HiddenReason(const SnoInfo* info, const RawActor& a) {
 static void WriteActorDump(const Process& proc, const AcdTable* acds, const AttribTable* attribs,
                            const std::vector<RawActor>& raw, const SnoTable& sno, Vec2 player,
                            uint64_t base) {
-    char self[MAX_PATH];
-    GetModuleFileNameA(nullptr, self, MAX_PATH);
-    std::string dir = self;
-    dir = dir.substr(0, dir.find_last_of("\\/") + 1) + "dumps";
-    CreateDirectoryA(dir.c_str(), nullptr);
+    const std::filesystem::path dir = ExeDir() / "dumps";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
     SYSTEMTIME t;
     GetLocalTime(&t);
     char name[64];
     snprintf(name, sizeof(name), "\\actors_%04u%02u%02u_%02u%02u%02u.tsv", t.wYear, t.wMonth,
              t.wDay, t.wHour, t.wMinute, t.wSecond);
-    const std::string path = dir + name;
-    FILE* f = nullptr;
-    fopen_s(&f, path.c_str(), "w");
+    const std::filesystem::path path = dir / (name + 1);  // name starts with a backslash
+    FILE* f = OpenFile(path, L"w");
     if (f == nullptr) {
-        std::print(stderr, "cannot write dump {}\n", path.c_str());
+        std::print(stderr, "cannot write dump {}\n", Utf8(path));
         return;
     }
     int shown = 0;
@@ -484,7 +470,7 @@ static void WriteActorDump(const Process& proc, const AcdTable* acds, const Attr
                 a.state, qtext, gtext, a.x, a.z, a.y, dist, hex.c_str());
     }
     fclose(f);
-    std::print("dump: {} ({} actors, {} drawn)\n", path.c_str(), raw.size(), shown);
+    std::print("dump: {} ({} actors, {} drawn)\n", Utf8(path), raw.size(), shown);
 }
 
 // Game UI controls the overlay needs; indices below. Equipment slots are listed
@@ -644,13 +630,13 @@ struct AcdScanJob {
     Vec2 player;  // scene scans: keeps the block of the scene the player stands in
     const ActorList* actors = nullptr;  // cache refresh after a complete UI scan
     UiControls* ui = nullptr;
-    std::string cachePath;
+    std::filesystem::path cachePath;
     std::atomic<bool> busy;
 };
 
 static void SaveBasesCache(const Process& proc, const ActorList& actors, const AcdTable& acds,
                            const AttribTable& attribs, const SceneTable& scenes, const UiControls& ui,
-                           const std::string& path) {
+                           const std::filesystem::path& path) {
     BasesCache cache;
     cache.pid = proc.pid();
     cache.created = proc.creationTime();
@@ -659,7 +645,7 @@ static void SaveBasesCache(const Process& proc, const ActorList& actors, const A
     cache.attrib = attribs.GetBases();
     cache.scene = scenes.GetBases();
     cache.ui = ui.GetControls();
-    if (!cache.Save(path)) std::print(stderr, "warning: cannot write the bases cache {}\n", path);
+    if (!cache.Save(path)) std::print(stderr, "warning: cannot write the bases cache {}\n", Utf8(path));
 }
 
 static DWORD WINAPI AcdScanThread(LPVOID param) {
@@ -705,7 +691,7 @@ struct StartupScanJob {
     const SnoTable* sno;
     const ItemNameTable* itemNames;
     const UiControls* ui;
-    std::string cachePath;
+    std::filesystem::path cachePath;
     uint32_t pid = 0;
     uint64_t created = 0;
     std::atomic<bool> busy;
@@ -743,7 +729,7 @@ static DWORD WINAPI StartupScanThread(LPVOID param) {
     cache.attrib = job->attribs->GetBases();
     cache.scene = job->scenes->GetBases();
     cache.ui = job->ui->GetControls();
-    if (!cache.Save(job->cachePath)) std::print(stderr, "warning: cannot write the bases cache {}\n", job->cachePath);
+    if (!cache.Save(job->cachePath)) std::print(stderr, "warning: cannot write the bases cache {}\n", Utf8(job->cachePath));
     std::print("startup discovery done - bases cached\n");
     job->busy = false;
     return 0;
@@ -772,7 +758,7 @@ static void CurrentWorldScenes(const std::vector<SceneRecord>& all, Vec2 player,
 // standing-cluster player tracker (player only). F10 writes a debug dump.
 static double g_publishHz = 60.0;  // --hz
 
-static int RunPublish(const Process& proc, double seconds, const std::string& snoPath) {
+static int RunPublish(const Process& proc, double seconds, const std::filesystem::path& snoPath) {
     SnoTable sno;
     const bool haveSno = LoadSno(snoPath, &sno);
     ActorList actors;
@@ -787,7 +773,7 @@ static int RunPublish(const Process& proc, double seconds, const std::string& sn
     // Startup fast paths: a cached result for this exact game process, else ONE
     // shared sweep for the actor array + UI controls so the dots appear after a
     // single pass; ACD/attribute/scene discovery then runs in the background.
-    const std::string cachePath = ExeSiblingPath("d3hud_bases.ini");
+    const std::filesystem::path cachePath = ExeSiblingPath("d3hud_bases.ini");
     const uint64_t created = proc.creationTime();
     bool fromCache = false;
     BasesCache cache;
@@ -879,7 +865,7 @@ static int RunPublish(const Process& proc, double seconds, const std::string& sn
     std::vector<uint32_t> itemGroups;  // attribute group ids of the current inventory + stash
     // map prediction: scene shapes (file) + the scenes in memory (found in the background)
     SceneCells sceneCells;
-    if (sceneCells.Load(snoPath.substr(0, snoPath.find_last_of("\\/") + 1) + "scene_cells.bin"))
+    if (sceneCells.Load(snoPath.parent_path() / "scene_cells.bin"))
         std::print("scene shapes: {} scenes\n", sceneCells.sceneCount());
     else
         std::print(stderr, "cannot load scene_cells.bin - no map prediction\n");
@@ -1156,7 +1142,7 @@ static int RunPublish(const Process& proc, double seconds, const std::string& sn
 }
 
 // One-shot: equipped + backpack items (what the overlay's Items panel shows).
-static int DumpItems(const Process& proc, const std::string& snoPath) {
+static int DumpItems(const Process& proc, const std::filesystem::path& snoPath) {
     SnoTable sno;
     if (!LoadSno(snoPath, &sno)) return 1;
     uint64_t base = 0;
@@ -1196,9 +1182,9 @@ static int DumpItems(const Process& proc, const std::string& snoPath) {
 
 // --scenes: every self-consistent scene record in memory, grouped by world,
 // with the block base each implies (diagnostics for the map prediction).
-static int DumpScenes(const Process& proc, const std::string& snoPath) {
+static int DumpScenes(const Process& proc, const std::filesystem::path& snoPath) {
     SceneCells cells;
-    if (!cells.Load(snoPath.substr(0, snoPath.find_last_of("\\/") + 1) + "scene_cells.bin")) {
+    if (!cells.Load(snoPath.parent_path() / "scene_cells.bin")) {
         std::print(stderr, "cannot load scene_cells.bin\n");
         return 1;
     }
@@ -1300,7 +1286,7 @@ int main(int argc, char** argv) {
             std::print("  0x{:016X} {:8} KB  {}\n", static_cast<unsigned long long>(m.base),
                    static_cast<unsigned long long>(m.size >> 10), m.name.c_str());
 
-        const std::string sno = snoPath != nullptr ? snoPath : DefaultSnoPath();
+        const std::filesystem::path sno = snoPath != nullptr ? std::filesystem::path(snoPath) : DefaultSnoPath();
         if (dumpActors) return DumpActors(*proc, sno);
         if (dumpItems) return DumpItems(*proc, sno);
         if (dumpScenes) return DumpScenes(*proc, sno);

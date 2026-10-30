@@ -13,6 +13,7 @@
 
 #include "imgui.h"
 #include "ItemSearch.h"
+#include "Paths.h"
 #include "imgui_internal.h"
 
 #include "Win32.h"
@@ -119,8 +120,8 @@ void MinimapLayout::ResetMarkers() {
     set(ActorKind::RiftOrbTiered, 0xFFE150, 4.5f, MarkerShape::Dot, 1.0f, false, true);  // yellow (greater rifts)
 }
 
-bool MinimapLayout::Load(const char* path) {
-    FILE* f = fopen(path, "r");
+bool MinimapLayout::Load(const std::filesystem::path& path) {
+    FILE* f = OpenFile(path, L"r");
     if (f == nullptr) return false;
     char line[128];
     while (fgets(line, sizeof(line), f) != nullptr) {
@@ -260,8 +261,8 @@ bool MinimapLayout::Load(const char* path) {
     return true;
 }
 
-bool MinimapLayout::Save(const char* path) const {
-    FILE* f = fopen(path, "w");
+bool MinimapLayout::Save(const std::filesystem::path& path) const {
+    FILE* f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     std::print(f, "# D3Hud minimap layout (positions/radius = fraction of window height)\n");
     std::print(f, "autoMinimap={}\n", autoMinimap ? 1 : 0);
@@ -318,8 +319,8 @@ bool MinimapLayout::Save(const char* path) const {
 // Writes d3hud.ini; the status line in Settings says when that failed.
 void HudRenderer::SaveLayout() { layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed"; }
 
-void HudRenderer::SetLayoutPath(const char* path) {
-    strncpy_s(layoutPath_, path, _TRUNCATE);
+void HudRenderer::SetLayoutPath(const std::filesystem::path& path) {
+    layoutPath_ = path;
     layoutStatus_ = layout_.Load(layoutPath_) ? "loaded" : "defaults (no d3hud.ini yet)";
 }
 
@@ -708,7 +709,7 @@ void HudRenderer::DrawMinimapSettings() {
         layout_.ResetMarkers();
         layoutStatus_ = "markers reset (not saved)";
     }
-    ImGui::TextDisabled("%s  -  %s", layoutStatus_, layoutPath_);
+    ImGui::TextDisabled("%s  -  %s", layoutStatus_, Utf8(layoutPath_).c_str());
 }
 
 // Debug view: every actor the minimap receives this frame, nearest first.
@@ -1263,8 +1264,8 @@ void HudRenderer::DrawRunTimer(const WorldSnapshot& snap) {
     }
 }
 
-bool HudRenderer::ExportDropsCsv(const char* path) const {
-    FILE* f = fopen(path, "w");
+bool HudRenderer::ExportDropsCsv(const std::filesystem::path& path) const {
+    FILE* f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     fprintf(f, "time,name,type,rarity,ancient,primal,bonus%s", "\n");
     for (const DropEntry& d : drops_) {
@@ -1639,8 +1640,8 @@ void HudRenderer::DrawHotkeySettings() {
 // d3hud.<name>.ini files next to d3hud.ini.
 void HudRenderer::DrawProfileSettings() {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::path(layoutPath_).parent_path();
-    auto pathOf = [&](const std::string& name) { return (dir / ("d3hud." + name + ".ini")).string(); };
+    const fs::path dir = layoutPath_.parent_path();
+    auto pathOf = [&](const std::string& name) { return dir / ("d3hud." + name + ".ini"); };  // names are plain ASCII (see below)
     if (profilesDirty_) {
         profilesDirty_ = false;
         profiles_.clear();
@@ -1661,7 +1662,7 @@ void HudRenderer::DrawProfileSettings() {
         for (const char* c = profileName_; *c != '\0'; ++c)
             if (isalnum(static_cast<unsigned char>(*c)) || *c == '-' || *c == '_') name += *c;
         if (!name.empty()) {
-            layoutStatus_ = layout_.Save(pathOf(name).c_str()) ? "profile saved" : "profile save failed";
+            layoutStatus_ = layout_.Save(pathOf(name)) ? "profile saved" : "profile save failed";
             profilesDirty_ = true;
         }
     }
@@ -1674,7 +1675,7 @@ void HudRenderer::DrawProfileSettings() {
         ImGui::SameLine(220.0f * layout_.uiScale);
         if (ImGui::SmallButton("Load")) {
             MinimapLayout fresh;
-            if (fresh.Load(pathOf(name).c_str())) {
+            if (fresh.Load(pathOf(name))) {
                 layout_ = fresh;
                 hotkeysDirty_ = true;
                 layoutStatus_ = layout_.Save(layoutPath_) ? "profile loaded" : "profile loaded (save failed)";
@@ -1703,10 +1704,9 @@ void HudRenderer::DrawReaderSettings() {
     ch |= ImGui::Checkbox("fps and actor/item counts", &layout_.diagFps);
     ch |= ImGui::Checkbox("reader state, last log line and errors", &layout_.diagReader);
     ImGui::SeparatorText("Files");
-    ImGui::TextDisabled("%s", layoutPath_);
+    ImGui::TextDisabled("%s", Utf8(layoutPath_).c_str());
     if (ImGui::Button("Open settings folder"))
-        ShellExecuteA(nullptr, "open", std::filesystem::path(layoutPath_).parent_path().string().c_str(), nullptr,
-                      nullptr, SW_SHOWNORMAL);
+        ShellExecuteW(nullptr, L"open", layoutPath_.parent_path().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     ImGui::SameLine();
     const bool armed = ImGui::GetTime() < resetArmedUntil_;
     ImGui::PushStyleColor(ImGuiCol_Button, armed ? ImVec4(0.75f, 0.2f, 0.2f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
@@ -1937,8 +1937,8 @@ void HudRenderer::DrawDropSettings() {
     if (ImGui::Button("Reset session stats")) ResetSession();
     ImGui::SameLine();
     if (ImGui::Button("Export session to CSV")) {
-        const std::string path = (std::filesystem::path(layoutPath_).parent_path() / "d3hud_drops.csv").string();
-        layoutStatus_ = ExportDropsCsv(path.c_str()) ? "exported d3hud_drops.csv next to d3hud.ini" : "export failed";
+        const std::filesystem::path path = layoutPath_.parent_path() / "d3hud_drops.csv";
+        layoutStatus_ = ExportDropsCsv(path) ? "exported d3hud_drops.csv next to d3hud.ini" : "export failed";
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear log")) {
