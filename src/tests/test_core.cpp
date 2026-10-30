@@ -252,6 +252,9 @@ static void TestClassifyActor() {
     CHECK(ClassifyActor("Monster", "X1_LR_Boss_sniperAngel", true, kAlive, &k) && k == ActorKind::Boss);
     CHECK(ClassifyActor("Monster", "Goatman_Ranged_A", true, kAlive, &k) && k == ActorKind::Trash);
     CHECK(!ClassifyActor("Monster", "Skeleton_A", false, kDead, &k));  // corpse
+    // town vendors contain "Unique" in their name but are not unique monsters
+    CHECK(ClassifyActor("Monster", "A2_UniqueVendor_Miner_InTown_01", true, kAlive, &k) && k == ActorKind::Trash);
+    CHECK(ClassifyActor("Monster", "Skeleton_Unique_Foo", true, kAlive, &k) && k == ActorKind::Boss);
     // rift progress orbs: their own kinds, with or without an ACD; the flippy effects are not actors we show
     CHECK(ClassifyActor("Item", "p1_normal_rifts_Orb", false, kAlive, &k) && k == ActorKind::RiftOrb);
     CHECK(ClassifyActor("Item", "Challenge_Rifts_Orb", true, kAlive, &k) && k == ActorKind::RiftOrb);
