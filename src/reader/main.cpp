@@ -76,6 +76,7 @@ static int Selftest() {
     }
     // Read the child's stdout? Simpler: poll our own... no — child prints to its
     // console. Instead: scan first, then validate the marker reads back correctly.
+    const UniqueHandle childProcess(pi.hProcess), childThread(pi.hThread);  // closed on every return below
     Sleep(500);
     auto proc = Process::OpenByPid(pi.dwProcessId);
     if (!proc) {
@@ -101,8 +102,6 @@ static int Selftest() {
     std::print("selftest: {} hit(s), marker {} at 0x{:X}\n", hits.size(), ok ? "VERIFIED" : "FAILED",
            static_cast<unsigned long long>(markerAddr));
     TerminateProcess(pi.hProcess, 0);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
     return ok ? 0 : 2;
 }
 
@@ -422,7 +421,7 @@ static void WriteActorDump(const Process& proc, const AcdTable* acds, const Attr
     snprintf(name, sizeof(name), "\\actors_%04u%02u%02u_%02u%02u%02u.tsv", t.wYear, t.wMonth,
              t.wDay, t.wHour, t.wMinute, t.wSecond);
     const std::filesystem::path path = dir / (name + 1);  // name starts with a backslash
-    FILE* f = OpenFile(path, L"w");
+    File f = OpenFile(path, L"w");
     if (f == nullptr) {
         std::print(stderr, "cannot write dump {}\n", Utf8(path));
         return;
@@ -469,7 +468,6 @@ static void WriteActorDump(const Process& proc, const AcdTable* acds, const Attr
                 info ? info->kind.c_str() : "?", info ? info->name.c_str() : "?", a.acd, a.tag90,
                 a.state, qtext, gtext, a.x, a.z, a.y, dist, hex.c_str());
     }
-    fclose(f);
     std::print("dump: {} ({} actors, {} drawn)\n", Utf8(path), raw.size(), shown);
 }
 

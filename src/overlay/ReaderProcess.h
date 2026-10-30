@@ -28,8 +28,8 @@ public:
 
 private:
     std::filesystem::path dir_;  // exe directory
-    HANDLE job_ = nullptr;
-    HANDLE process_ = nullptr;
+    UniqueHandle job_;      // kill-on-close job: the reader ends with the overlay
+    UniqueHandle process_;
     DWORD pid_ = 0;
     std::string error_;
     std::string lastLine_;

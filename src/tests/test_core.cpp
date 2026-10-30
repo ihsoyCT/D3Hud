@@ -459,6 +459,31 @@ static void TestPaths() {
     fs::remove_all(dir, ec);
 }
 
+static void TestRaii() {
+    HANDLE raw = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    {
+        UniqueHandle a(raw);
+        UniqueHandle b = std::move(a);
+        CHECK(!a && b && b.get() == raw);  // moved from: empty; the new owner holds it
+        CHECK(!UniqueHandle(INVALID_HANDLE_VALUE));  // CreateFile's failure value counts as empty
+    }
+    DWORD flags = 0;
+    CHECK(!GetHandleInformation(raw, &flags));  // closed when the owner went out of scope
+
+    namespace fs = std::filesystem;
+    const fs::path tmp = fs::temp_directory_path() / L"d3hud-raii-test.bin";
+    {
+        File f = OpenFile(tmp, L"wb");
+        CHECK(f != nullptr);
+        fputs("abc", f);
+    }  // closed (and flushed) here, no fclose
+    std::error_code ec;
+    CHECK(fs::file_size(tmp, ec) == 3);
+    File missing = OpenFile(tmp.parent_path() / L"no-such-dir" / L"x", L"rb");
+    CHECK(missing == nullptr);
+    fs::remove(tmp, ec);
+}
+
 static void TestRiftTimer() {
     // measured in a greater rift: bar 1505..1827 (322 units), marker moved 25 units in 70 s
     CHECK(std::fabs(RiftTimerFractionFromRects(1505.f, 1827.f, 1507.2f) - 0.0068f) < 1e-3f);
@@ -742,6 +767,7 @@ int main() {
     TestSalvageAll();
     TestRiftTimer();
     TestPaths();
+    TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();
     TestMapOrientation();

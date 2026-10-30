@@ -26,7 +26,7 @@ bool ParseList(const std::string& line, std::vector<uint64_t>* out) {
 }  // namespace
 
 bool BasesCache::Save(const std::filesystem::path& path) const {
-    FILE* f = OpenFile(path, L"w");
+    File f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     fprintf(f, "pid=%u\ncreated=%llu\nactor=%llX\n", pid, static_cast<unsigned long long>(created),
             static_cast<unsigned long long>(actorBase));
@@ -39,12 +39,11 @@ bool BasesCache::Save(const std::filesystem::path& path) const {
     list("attrib", attrib);
     list("scene", scene);
     list("ui", ui);
-    fclose(f);
     return true;
 }
 
 bool BasesCache::Load(const std::filesystem::path& path) {
-    FILE* f = OpenFile(path, L"r");
+    File f = OpenFile(path, L"r");
     if (f == nullptr) return false;
     char line[8192];
     uint32_t filePid = 0;
@@ -68,7 +67,6 @@ bool BasesCache::Load(const std::filesystem::path& path) {
         else if (key == "scene") { ParseList(std::string(val), &fileScene); }
         else if (key == "ui") { haveUi = ParseList(std::string(val), &fileUi); }
     }
-    fclose(f);
     if (filePid != pid || fileCreated != created || !haveActor || !haveUi || actorBase == 0) {
         actorBase = 0;
         return false;  // stale: another (or restarted) game process

@@ -121,7 +121,7 @@ void MinimapLayout::ResetMarkers() {
 }
 
 bool MinimapLayout::Load(const std::filesystem::path& path) {
-    FILE* f = OpenFile(path, L"r");
+    File f = OpenFile(path, L"r");
     if (f == nullptr) return false;
     char line[128];
     while (fgets(line, sizeof(line), f) != nullptr) {
@@ -257,12 +257,11 @@ bool MinimapLayout::Load(const std::filesystem::path& path) {
             }
         }
     }
-    fclose(f);
     return true;
 }
 
 bool MinimapLayout::Save(const std::filesystem::path& path) const {
-    FILE* f = OpenFile(path, L"w");
+    File f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     std::print(f, "# D3Hud minimap layout (positions/radius = fraction of window height)\n");
     std::print(f, "autoMinimap={}\n", autoMinimap ? 1 : 0);
@@ -312,7 +311,6 @@ bool MinimapLayout::Save(const std::filesystem::path& path) const {
                labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
     std::print(f, "labels.colLegendary={}\nlabels.colSet={}\nlabels.colPrimal={}\nlabels.colBonus={}\n",
                labels.colLegendary, labels.colSet, labels.colPrimal, labels.colBonus);
-    fclose(f);
     return true;
 }
 
@@ -1265,14 +1263,13 @@ void HudRenderer::DrawRunTimer(const WorldSnapshot& snap) {
 }
 
 bool HudRenderer::ExportDropsCsv(const std::filesystem::path& path) const {
-    FILE* f = OpenFile(path, L"w");
+    File f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     fprintf(f, "time,name,type,rarity,ancient,primal,bonus%s", "\n");
     for (const DropEntry& d : drops_) {
         fprintf(f, "%s,\"%s\",%s,%s,%d,%d,%d%s", d.time, d.item.name, d.item.typeName, RarityName(d.item.rarity),
                 d.item.ancient ? 1 : 0, d.item.primal ? 1 : 0, d.item.bonus ? 1 : 0, "\n");
     }
-    fclose(f);
     return true;
 }
 

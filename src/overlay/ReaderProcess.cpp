@@ -9,25 +9,21 @@ namespace d3hud {
 
 ReaderProcess::ReaderProcess() {
     dir_ = ExeDir();
-    job_ = CreateJobObjectA(nullptr, nullptr);
-    if (job_ != nullptr) {
+    job_.reset(CreateJobObjectA(nullptr, nullptr));
+    if (job_) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {};
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        SetInformationJobObject(job_, JobObjectExtendedLimitInformation, &info, sizeof(info));
+        SetInformationJobObject(job_.get(), JobObjectExtendedLimitInformation, &info, sizeof(info));
     }
 }
 
 ReaderProcess::~ReaderProcess() {
-    Stop();
-    if (job_ != nullptr) CloseHandle(job_);
+    Stop();  // the job handle closes with the object and takes the reader down with it
 }
 
 bool ReaderProcess::Start(int hz) {
     if (Running()) return true;
-    if (process_ != nullptr) {
-        CloseHandle(process_);
-        process_ = nullptr;
-    }
+    process_.reset();
     const std::filesystem::path exe = dir_ / L"D3Hud.Reader.exe";
     if (!std::filesystem::exists(exe)) {
         error_ = "D3Hud.Reader.exe not found next to the overlay";
@@ -56,10 +52,10 @@ bool ReaderProcess::Start(int hz) {
         error_ = "CreateProcess failed (" + std::to_string(GetLastError()) + ")";
         return false;
     }
-    if (job_ != nullptr) AssignProcessToJobObject(job_, pi.hProcess);  // before it runs
+    if (job_) AssignProcessToJobObject(job_.get(), pi.hProcess);  // before it runs
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
-    process_ = pi.hProcess;
+    process_.reset(pi.hProcess);
     pid_ = pi.dwProcessId;
     error_.clear();
     lastLine_.clear();
@@ -69,26 +65,26 @@ bool ReaderProcess::Start(int hz) {
 
 void ReaderProcess::Stop() {
     if (Running()) {
-        TerminateProcess(process_, 0);
-        WaitForSingleObject(process_, 2000);
+        TerminateProcess(process_.get(), 0);
+        WaitForSingleObject(process_.get(), 2000);
     }
 }
 
 bool ReaderProcess::Running() const {
-    return process_ != nullptr && WaitForSingleObject(process_, 0) == WAIT_TIMEOUT;
+    return process_ && WaitForSingleObject(process_.get(), 0) == WAIT_TIMEOUT;
 }
 
 DWORD ReaderProcess::exitCode() const {
     DWORD code = STILL_ACTIVE;
-    if (process_ != nullptr) GetExitCodeProcess(process_, &code);
+    if (process_) GetExitCodeProcess(process_.get(), &code);
     return code;
 }
 
 const std::string& ReaderProcess::LastLogLine() {
     const ULONGLONG now = GetTickCount64();
-    if (process_ == nullptr || now - lastLineAt_ < 500) return lastLine_;
+    if (!process_ || now - lastLineAt_ < 500) return lastLine_;
     lastLineAt_ = now;
-    FILE* f = _wfsopen((dir_ / L"reader.log").c_str(), L"rb", _SH_DENYNO);
+    File f(_wfsopen((dir_ / L"reader.log").c_str(), L"rb", _SH_DENYNO));
     if (f == nullptr) return lastLine_;
     char buf[2048];
     _fseeki64(f, 0, SEEK_END);
@@ -96,7 +92,6 @@ const std::string& ReaderProcess::LastLogLine() {
     const long long from = size > static_cast<long long>(sizeof(buf)) ? size - sizeof(buf) : 0;
     _fseeki64(f, from, SEEK_SET);
     const size_t n = fread(buf, 1, sizeof(buf), f);
-    fclose(f);
     // last non-empty line, skipping the per-5-s throughput stats
     size_t end = n;
     while (end > 0) {

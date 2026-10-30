@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <string>
+#include <utility>
 
 #include "Win32.h"
 
@@ -34,10 +35,37 @@ inline std::string Utf8(const std::filesystem::path& p) {
     return std::string(reinterpret_cast<const char*>(u.data()), u.size());
 }
 
-// FILE* for a path with any characters (mode is a wide string: L"rb", L"w", ...); nullptr on failure.
-[[nodiscard]] inline FILE* OpenFile(const std::filesystem::path& p, const wchar_t* mode) {
+// An open FILE* that is closed when it goes out of scope (also on early returns). Converts to FILE*
+// so it can be passed to fprintf, fgets, std::print...; compare with nullptr to test for failure.
+class File {
+public:
+    File() = default;
+    explicit File(FILE* f) : f_(f) {}
+    File(File&& o) noexcept : f_(std::exchange(o.f_, nullptr)) {}
+    File& operator=(File&& o) noexcept {
+        if (this != &o) {
+            close();
+            f_ = std::exchange(o.f_, nullptr);
+        }
+        return *this;
+    }
+    File(const File&) = delete;
+    File& operator=(const File&) = delete;
+    ~File() { close(); }
+    operator FILE*() const { return f_; }  // NOLINT: intentionally implicit
+
+private:
+    void close() {
+        if (f_ != nullptr) fclose(f_);
+        f_ = nullptr;
+    }
+    FILE* f_ = nullptr;
+};
+
+// Opens a path with any characters (mode is a wide string: L"rb", L"w", ...); empty File on failure.
+[[nodiscard]] inline File OpenFile(const std::filesystem::path& p, const wchar_t* mode) {
     FILE* f = nullptr;
-    return _wfopen_s(&f, p.c_str(), mode) == 0 ? f : nullptr;
+    return _wfopen_s(&f, p.c_str(), mode) == 0 ? File(f) : File();
 }
 
 }  // namespace d3hud

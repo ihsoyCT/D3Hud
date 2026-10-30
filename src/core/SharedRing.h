@@ -35,7 +35,7 @@ private:
         uint32_t capacity;
         volatile uint64_t writeIndex;
     };
-    HANDLE map_ = nullptr;
+    UniqueHandle map_;
     Header* header_ = nullptr;
     WorldSnapshot* slots_ = nullptr;
     uint64_t nextRead_ = 0;
