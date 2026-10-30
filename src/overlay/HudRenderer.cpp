@@ -565,14 +565,15 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
     panelSize_[i] = win->Rect().GetSize();
     const bool moving = ImGui::GetCurrentContext()->MovingWindow == win;
     ImGui::End();
-    // a title-bar drag ends with the button release: remember where the panel was dropped
+    // Follow the title-bar drag in the layout every frame, so the forced position of the
+    // next frame (PanelOpen) is where the panel was dropped; write the file on release.
     if (moving) {
-        panelMoved_[i] = true;
-    } else if (panelMoved_[i]) {
-        panelMoved_[i] = false;
         const ImVec2 display = ImGui::GetIO().DisplaySize;
         layout_.panelX[i] = panelPos_[i].x / display.x;
         layout_.panelY[i] = panelPos_[i].y / display.y;
+        panelMoved_[i] = true;
+    } else if (panelMoved_[i]) {
+        panelMoved_[i] = false;
         layout_.Save(layoutPath_);
     }
 }
