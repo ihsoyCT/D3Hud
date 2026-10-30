@@ -3,6 +3,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -186,8 +187,20 @@ struct HudOptions {
     bool mouseLive = false;  // the overlay receives mouse input right now (F8, or over a hot rect)
 };
 
+// One page of the Settings window. The built-in pages are registered like any other, so
+// plugins can add theirs later: the host owns the window, the list and the persistence.
+struct SettingsPage {
+    std::string id;     // stable key, e.g. "minimap" or "<plugin>.options"
+    std::string title;  // shown in the list and as the page heading
+    std::string group;  // list section heading; pages of one group sit together
+    int order = 0;      // sort key within the list (stable)
+    std::function<void()> draw;
+};
+
 class HudRenderer {
 public:
+    HudRenderer();
+    void AddSettingsPage(SettingsPage page);
     void Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName);
     // Loads the layout from `path` (defaults if missing); the calibration panel saves there.
     void SetLayoutPath(const std::filesystem::path& path);
@@ -228,6 +241,9 @@ private:
     };
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
+    void RegisterBuiltinSettingsPages();
+    void DrawGeneralSettings();
+    void DrawPanelSettings(int panel);  // the shared "show in dock / pinned / reset position" part
     void SaveLayout();  // layout_.Save + status line
     void DrawMinimapSettings();
     bool minimapFound_ = false;  // last frame: the game's minimap control was used for placement
@@ -283,7 +299,8 @@ private:
     float panelHoverUntil_[kPanels] = {};  // linger after the cursor leaves
     bool panelResizable_[kPanels] = {};
     bool panelMoved_[kPanels] = {};        // title-bar drag in progress; saved on release
-    int settingsTab_ = 0;
+    int settingsTab_ = 0;  // index into settingsPages_
+    std::vector<SettingsPage> settingsPages_;
     ImVec2 dockPos_ = {}, dockSize_ = {};  // last frame's dock rect (auto-hide keeps testing it)
 
     void DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt);

@@ -1961,68 +1961,92 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     PanelScope panel(*this, PanelId::Settings, opt, "Settings",
                      ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f)));
     if (!panel) return;
-    // entries: the four panel pages (PanelId order) sit together; the rest are feature pages
-    enum Entry { kGeneral, kHotkeys, kProfiles, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kReader, kEntryCount };
-    static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Profiles", "Info", "Drops", "Items", "Actors",
-                                                "Minimap", "Ground labels", "Auto salvage", "Reader / diagnostics"};
     ImGui::BeginChild("##settings_list", ImVec2(150.0f * layout_.uiScale, 0.0f), true);
-    for (int i = 0; i < kEntryCount; ++i)
-        if (ImGui::Selectable(kEntries[i], settingsTab_ == i)) settingsTab_ = i;
+    const std::string* group = nullptr;
+    for (int i = 0; i < static_cast<int>(settingsPages_.size()); ++i) {
+        const SettingsPage& p = settingsPages_[i];
+        if (group == nullptr || *group != p.group) {
+            if (group != nullptr) ImGui::Spacing();
+            ImGui::TextDisabled("%s", p.group.c_str());
+            group = &p.group;
+        }
+        if (ImGui::Selectable(p.title.c_str(), settingsTab_ == i)) settingsTab_ = i;
+    }
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("##settings_detail", ImVec2(0.0f, 0.0f), true);  // fills the window
-    if (settingsTab_ != kHotkeys) captureHotkey_ = -1;
-    ImGui::TextUnformatted(kEntries[settingsTab_]);
+    settingsTab_ = std::clamp(settingsTab_, 0, static_cast<int>(settingsPages_.size()) - 1);
+    const SettingsPage& page = settingsPages_[settingsTab_];
+    if (page.id != "hotkeys") captureHotkey_ = -1;
+    ImGui::TextUnformatted(page.title.c_str());
     ImGui::Separator();
-    if (settingsTab_ == kGeneral) {
-        ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) SaveLayout();
-        ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
-        ImGui::SeparatorText("Dock");
-        bool ch = ImGui::Combo("corner", &layout_.dockCorner, "Bottom right\0Bottom left\0Top right\0Top left\0");
-        ch |= ImGui::Checkbox("auto-hide (show near the cursor or while a panel is open)", &layout_.dockAutoHide);
-        ImGui::SliderFloat("dock opacity", &layout_.dockAlpha, 0.0f, 1.0f, "%.2f");
-        ch |= ImGui::IsItemDeactivatedAfterEdit();
-        ImGui::SeparatorText("Panels");
-        ImGui::SliderFloat("panel opacity", &layout_.panelAlpha, 0.2f, 1.0f, "%.2f");
-        ch |= ImGui::IsItemDeactivatedAfterEdit();
-        ch |= ImGui::Checkbox("compact (tighter padding)", &layout_.compact);
-        if (ch) SaveLayout();
-    } else if (settingsTab_ == kHotkeys) {
-        DrawHotkeySettings();
-    } else if (settingsTab_ == kProfiles) {
-        DrawProfileSettings();
-    } else if (settingsTab_ >= kInfo && settingsTab_ <= kActors) {
-        const int i = settingsTab_ - kInfo;
-        bool changed = false;
-        bool shown = !layout_.panelHidden[i];
-        changed |= ImGui::Checkbox("show in dock", &shown);
-        layout_.panelHidden[i] = !shown;
-        changed |= ImGui::Checkbox("keep open (pinned)", &layout_.panelPinned[i]);
-        if (ImGui::Button("reset position")) {
-            layout_.panelX[i] = layout_.panelY[i] = -1.f;
-            changed = true;
-        }
-        ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
-        if (changed) SaveLayout();
-        if (settingsTab_ == kDrops) {
-            ImGui::SeparatorText("Drop log and alerts");
-            DrawDropSettings();
-        }
-        if (settingsTab_ == kItems) {
-            ImGui::SeparatorText("Inventory overlays");
-            DrawItemSettings();
-        }
-    } else if (settingsTab_ == kMinimap) {
-        DrawMinimapSettings();
-    } else if (settingsTab_ == kReader) {
-        DrawReaderSettings();
-    } else if (settingsTab_ == kLabels) {
-        DrawLabelSettings();
-    } else {
-        DrawSalvageSettings();
-    }
+    if (page.draw) page.draw();
     ImGui::EndChild();
+}
+
+void HudRenderer::DrawGeneralSettings() {
+    ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
+    if (ImGui::IsItemDeactivatedAfterEdit()) SaveLayout();
+    ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
+    ImGui::SeparatorText("Dock");
+    bool ch = ImGui::Combo("corner", &layout_.dockCorner, "Bottom right\0Bottom left\0Top right\0Top left\0");
+    ch |= ImGui::Checkbox("auto-hide (show near the cursor or while a panel is open)", &layout_.dockAutoHide);
+    ImGui::SliderFloat("dock opacity", &layout_.dockAlpha, 0.0f, 1.0f, "%.2f");
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SeparatorText("Panels");
+    ImGui::SliderFloat("panel opacity", &layout_.panelAlpha, 0.2f, 1.0f, "%.2f");
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    ch |= ImGui::Checkbox("compact (tighter padding)", &layout_.compact);
+    if (ch) SaveLayout();
+}
+
+void HudRenderer::DrawPanelSettings(int i) {
+    bool changed = false;
+    bool shown = !layout_.panelHidden[i];
+    changed |= ImGui::Checkbox("show in dock", &shown);
+    layout_.panelHidden[i] = !shown;
+    changed |= ImGui::Checkbox("keep open (pinned)", &layout_.panelPinned[i]);
+    if (ImGui::Button("reset position")) {
+        layout_.panelX[i] = layout_.panelY[i] = -1.f;
+        changed = true;
+    }
+    ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
+    if (changed) SaveLayout();
+}
+
+HudRenderer::HudRenderer() { RegisterBuiltinSettingsPages(); }
+
+void HudRenderer::AddSettingsPage(SettingsPage page) {
+    const auto at = std::upper_bound(settingsPages_.begin(), settingsPages_.end(), page,
+                                     [](const SettingsPage& a, const SettingsPage& b) { return a.order < b.order; });
+    settingsPages_.insert(at, std::move(page));
+}
+
+// The built-in pages, in list order; plugin pages go through the same AddSettingsPage.
+void HudRenderer::RegisterBuiltinSettingsPages() {
+    int order = 0;
+    auto add = [&](const char* id, const char* title, const char* group, std::function<void()> draw) {
+        AddSettingsPage({id, title, group, order += 10, std::move(draw)});
+    };
+    add("general", "General", "Interface", [this] { DrawGeneralSettings(); });
+    add("hotkeys", "Hotkeys", "Interface", [this] { DrawHotkeySettings(); });
+    add("profiles", "Profiles", "Interface", [this] { DrawProfileSettings(); });
+    add("panel.info", "Info", "Panels", [this] { DrawPanelSettings(static_cast<int>(PanelId::Info)); });
+    add("panel.drops", "Drops", "Panels", [this] {
+        DrawPanelSettings(static_cast<int>(PanelId::Drops));
+        ImGui::SeparatorText("Drop log and alerts");
+        DrawDropSettings();
+    });
+    add("panel.items", "Items", "Panels", [this] {
+        DrawPanelSettings(static_cast<int>(PanelId::Items));
+        ImGui::SeparatorText("Inventory overlays");
+        DrawItemSettings();
+    });
+    add("panel.actors", "Actors", "Panels", [this] { DrawPanelSettings(static_cast<int>(PanelId::Actors)); });
+    add("minimap", "Minimap", "Features", [this] { DrawMinimapSettings(); });
+    add("labels", "Ground labels", "Features", [this] { DrawLabelSettings(); });
+    add("salvage", "Auto salvage", "Features", [this] { DrawSalvageSettings(); });
+    add("reader", "Reader / diagnostics", "Features", [this] { DrawReaderSettings(); });
 }
 
 // While the game shows the tooltip of an UNIDENTIFIED item: a compact card left
