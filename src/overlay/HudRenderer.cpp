@@ -1772,54 +1772,69 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
                     for (int c : perTab) total += c;
                     ImGui::TextDisabled("%d match(es) in the stash%s", total - inBags, inBags ? ", + some in the bags" : "");
                 }
-                // coverage: the search only knows the tabs that were opened this session
-                char seen[160] = {};
-                int nSeen = 0, nOpen = 0;
-                for (int t = 0; t < 64; ++t) {
-                    if (!stashSeen_[t]) continue;
-                    ++nSeen;
-                    if (nOpen < 12) {
-                        const size_t len = strlen(seen);
-                        snprintf(seen + len, sizeof(seen) - len, "%s%d.%d", nOpen ? " " : "", t / 5 + 1, t % 5 + 1);
-                        ++nOpen;
-                    }
-                }
-                if (nSeen == 0) ImGui::TextDisabled("open stash tabs to include them in the search");
-                else ImGui::TextDisabled("tabs searched (page.tab): %s%s - open the others to include them", seen,
-                                         nSeen > nOpen ? " ..." : "");
                 const ImVec2 p = ImGui::GetWindowPos(), sz = ImGui::GetWindowSize();
                 opt.AddHot(p.x, p.y, p.x + sz.x, p.y + sz.y);
             }
             ImGui::End();
         }
     }
-    if (!active) return;
-
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    // stash buttons: every page (chest at the top) and, on the shown page, every tab that holds matches
+    // Stash buttons: red = the search has indexed it (a page: all five tabs, faint when only some),
+    // yellow + count = matches. The game's button rects overlap their neighbours, so each box is
+    // limited to the pitch between buttons.
     if (snap.ui.stashOpen) {
-        auto mark = [&](const UiRect& ui, int count) {
-            const UiRect r = UiToScreen(ui, display.x, display.y);
-            if (r.x1 - r.x0 < 4.0f || r.y1 - r.y0 < 4.0f) return;  // control not laid out
-            dl->AddRect(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), outline, 0.f, 0, 3.0f);
-            char n[16];
-            snprintf(n, sizeof(n), "%d", count);
-            const ImVec2 ts = ImGui::CalcTextSize(n);
-            const ImVec2 at(r.x1 - ts.x - 4.0f, r.y0 + 1.0f);
-            dl->AddRectFilled(ImVec2(at.x - 2, at.y), ImVec2(at.x + ts.x + 2, at.y + ts.y), IM_COL32(0, 0, 0, 200), 3.f);
-            dl->AddText(at, outline, n);
+        auto screen = [&](const UiRect& ui) { return UiToScreen(ui, display.x, display.y); };
+        auto pitch = [&](const UiRect* rects, int n, bool horizontal) {
+            float c[8], best = 0.0f;
+            int m = 0;
+            for (int i = 0; i < n; ++i) {
+                const UiRect r = screen(rects[i]);
+                if (r.x1 - r.x0 >= 4.0f && r.y1 - r.y0 >= 4.0f) c[m++] = horizontal ? (r.x0 + r.x1) * 0.5f : (r.y0 + r.y1) * 0.5f;
+            }
+            std::sort(c, c + m);
+            for (int i = 1; i < m; ++i) best = (best == 0.0f) ? c[i] - c[i - 1] : std::min(best, c[i] - c[i - 1]);
+            return best;
+        };
+        const float pitchX = pitch(snap.ui.stashPageRect, 4, true), pitchY = pitch(snap.ui.stashTabRect, 5, false);
+        auto box = [&](const UiRect& ui, float px, float py, float inset, ImVec2* a, ImVec2* b) {
+            const UiRect r = screen(ui);
+            if (r.x1 - r.x0 < 4.0f || r.y1 - r.y0 < 4.0f) return false;  // control not laid out
+            const float cx = (r.x0 + r.x1) * 0.5f, cy = (r.y0 + r.y1) * 0.5f;
+            const float w = (px > 0.0f ? std::min(r.x1 - r.x0, px - 4.0f) : r.x1 - r.x0) * 0.5f - inset;
+            const float h = (py > 0.0f ? std::min(r.y1 - r.y0, py - 4.0f) : r.y1 - r.y0) * 0.5f - inset;
+            *a = ImVec2(cx - w, cy - h);
+            *b = ImVec2(cx + w, cy + h);
+            return w > 1.0f && h > 1.0f;
+        };
+        const ImU32 red = IM_COL32(230, 50, 50, 255), redFaint = IM_COL32(230, 50, 50, 120);
+        auto mark = [&](const UiRect& ui, float px, float py, ImU32 indexedCol, bool indexed, int count) {
+            ImVec2 a, b;
+            if (indexed && S.markIndexed && box(ui, px, py, 4.0f, &a, &b)) dl->AddRect(a, b, indexedCol, 0.f, 0, 2.0f);
+            if (count > 0 && box(ui, px, py, 1.0f, &a, &b)) {
+                dl->AddRect(a, b, outline, 0.f, 0, 3.0f);
+                char n[16];
+                snprintf(n, sizeof(n), "%d", count);
+                const ImVec2 ts = ImGui::CalcTextSize(n);
+                const ImVec2 at(b.x - ts.x - 3.0f, a.y + 1.0f);
+                dl->AddRectFilled(ImVec2(at.x - 2, at.y), ImVec2(at.x + ts.x + 2, at.y + ts.y), IM_COL32(0, 0, 0, 200), 3.f);
+                dl->AddText(at, outline, n);
+            }
         };
         const int shownPage = snap.ui.stashPage >= 0 ? snap.ui.stashPage : (snap.ui.stashTab >= 0 ? snap.ui.stashTab / 5 : 0);
-        int perPage[4] = {};
-        for (int g = 0; g < 64; ++g)
-            if (perTab[g] > 0 && g / 5 < 4) perPage[g / 5] += perTab[g];
-        for (int pg = 0; pg < 4; ++pg)
-            if (perPage[pg] > 0) mark(snap.ui.stashPageRect[pg], perPage[pg]);
+        for (int pg = 0; pg < 4; ++pg) {
+            int seen = 0, matches = 0;
+            for (int t = 0; t < 5; ++t) {
+                seen += stashSeen_[pg * 5 + t] ? 1 : 0;
+                matches += perTab[pg * 5 + t];
+            }
+            mark(snap.ui.stashPageRect[pg], pitchX, 0.0f, seen == 5 ? red : redFaint, seen > 0, matches);
+        }
         for (int t = 0; t < 5; ++t) {
             const int g = shownPage * 5 + t;
-            if (g < 64 && perTab[g] > 0) mark(snap.ui.stashTabRect[t], perTab[g]);
+            mark(snap.ui.stashTabRect[t], 0.0f, pitchY, red, g < 64 && stashSeen_[g], g < 64 ? perTab[g] : 0);
         }
     }
+    if (!active) return;
 
     // items on screen: matches outlined, the rest dimmed
     for (uint16_t i = 0; i < snap.itemCount; ++i) {
