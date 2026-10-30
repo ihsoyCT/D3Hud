@@ -21,6 +21,7 @@
 #include "SceneCells.h"
 #include "SceneTable.h"
 #include "HostApi.h"
+#include "MonsterAffixes.h"
 #include "LuaPlugin.h"
 #include "PluginSettings.h"
 #include "Settings.h"
@@ -445,6 +446,18 @@ static void TestSalvageRules() {
 extern "C" int HostApiCCheck(void);
 
 // The C API mirrors a few engine enums by number; plugins depend on those values.
+static void TestMonsterAffixes() {
+    static_assert(kMonsterAffixCount == 30, "the game's MonsterAffixes table has 30 entries");
+    for (size_t i = 0; i < kMonsterAffixCount; ++i) {
+        const MonsterAffixInfo& a = kMonsterAffixes[i];
+        CHECK(a.gbid != 0 && a.key[0] != '\0' && a.name[0] != '\0');
+        CHECK(FindMonsterAffix(a.gbid) == &a);
+        for (size_t j = 0; j < i; ++j) CHECK(kMonsterAffixes[j].gbid != a.gbid && strcmp(kMonsterAffixes[j].key, a.key) != 0);
+    }
+    CHECK(FindMonsterAffix(1799201764) != nullptr && strcmp(FindMonsterAffix(1799201764)->name, "Health Link") == 0);
+    CHECK(FindMonsterAffix(0) == nullptr && FindMonsterAffix(12345) == nullptr);
+}
+
 static void TestHostApi() {
     static_assert(D3H_ACTOR_PLAYER == static_cast<int>(ActorKind::Player));
     static_assert(D3H_ACTOR_PORTAL == static_cast<int>(ActorKind::Portal));
@@ -1243,6 +1256,7 @@ int main() {
     TestPaths();
     TestSettingsTable();
     TestHostApi();
+    TestMonsterAffixes();
     TestPluginSettings();
     TestLuaSandbox();
     TestTimeTracker();

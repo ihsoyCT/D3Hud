@@ -26,9 +26,9 @@ Used pylons/shrines are hidden via Gizmo_State (464) / Gizmo_Has_Been_Operated
 
 ## Smaller follow-ups
 
-- Elite affixes (Mortar, Frozen, ...) next to champion/rare dots - affix
-  actors (`x1_monsteraffix_*`) exist near the pack; per-monster affixes are
-  probably in the ACD/attribute layer.
+- Elite affixes (Mortar, Frozen, ...) next to champion/rare dots and under the health bars. The 30 affixes
+  are catalogued in `analysis/MONSTER_AFFIXES.md` / `src/core/MonsterAffixes.h`; where a monster's own list
+  lives is still to be measured with `D3Hud.Reader.exe --attach "Diablo III64.exe" --affixes` next to elites.
 - Validate the player heading arrow in-game (quaternion at +0xA0).
 - Dead monsters are detected by the cleared acd link (+0x88 == -1); if a
   live monster ever goes missing, F10-dump it - +0x2E0 / +0x16C are backups.

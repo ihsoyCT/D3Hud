@@ -184,6 +184,7 @@ D3Hud.Reader.exe --attach "Diablo III64" --publish     # live snapshots for the 
         [--sno <path>]                                 #   actor table (default: next to the exe)
 D3Hud.Reader.exe --attach "Diablo III64" --actors      # one-shot dump of drawable actors
 D3Hud.Reader.exe --attach "Diablo III64" --items       # equipped and backpack items
+D3Hud.Reader.exe --attach "Diablo III64" --affixes     # research: where do elites keep their affixes (see analysis/MONSTER_AFFIXES.md)
 D3Hud.Reader.exe --attach "Diablo III64" --ui <text>   # list UI controls whose path contains <text>
 D3Hud.Reader.exe --attach "Diablo III64" --ui-watch <text> [--seconds N]
                                                        # watch what changes in those controls

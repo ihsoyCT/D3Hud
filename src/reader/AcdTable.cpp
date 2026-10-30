@@ -126,6 +126,22 @@ bool AcdTable::ReadItem(const Process& proc, uint32_t acdId, AcdItemRecord* out)
     return false;
 }
 
+bool AcdTable::ReadRaw(const Process& proc, uint32_t acdId, uint8_t* out) const {
+    std::vector<uint64_t> bases;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        bases = bases_;
+    }
+    const uint64_t off = static_cast<uint64_t>(acdId & 0xFFFF) * kAcdStride;
+    for (uint64_t base : bases) {
+        if (!proc.Read(base + off, out, kAcdStride)) continue;
+        uint32_t id;
+        memcpy(&id, out, 4);
+        if (id == acdId) return true;
+    }
+    return false;
+}
+
 bool AcdTable::ReadPlaced(const Process& proc, std::vector<AcdItemRecord>* out) const {
     out->clear();
     std::vector<uint64_t> bases;

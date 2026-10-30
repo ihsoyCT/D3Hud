@@ -29,6 +29,7 @@
 #include "AcdTable.h"
 #include "ActorList.h"
 #include "AttribTable.h"
+#include "MonsterAffixes.h"
 #include "BasesCache.h"
 #include "SceneTable.h"
 #include "AobScanner.h"
@@ -431,6 +432,61 @@ static int DumpActors(const Process& proc, const std::filesystem::path& snoPath)
     FillActors(proc, &acds, &attribs, raw, sno, player, &snap, &p, &havePlayer);
     if (havePlayer) player = {p.x, p.z};
     WriteActorDump(proc, &acds, &attribs, raw, sno, player, base);
+    return 0;
+}
+
+// Research probe (--affixes): for every champion / rare / boss in view, scan its ACD record for the
+// GBIDs of the known monster affixes (MonsterAffixes.h) and say at which offsets they sit. The affix
+// list of a monster is not decoded yet; run this next to elites and read the offsets. The raw record of
+// each elite is also written to dumps/acd_<id>.bin for offline comparison.
+static int ProbeAffixes(const Process& proc, const std::filesystem::path& snoPath) {
+    SnoTable sno;
+    if (!LoadSno(snoPath, &sno)) return 1;
+    uint64_t base = 0;
+    int votes = 0;
+    if (!ActorList::FindBase(proc, &base, &votes, true)) {
+        std::print(stderr, "actor array not found (in menus? try again in-world)\n");
+        return 1;
+    }
+    ActorList list;
+    list.setBase(base);
+    std::vector<RawActor> raw;
+    if (!list.Read(proc, &raw)) std::print(stderr, "warning: the actor list is not readable\n");
+    const std::unordered_set<uint32_t> snoIds = sno.Ids();
+    AcdTable acds;
+    acds.Discover(proc, raw, &snoIds, false);
+    std::filesystem::create_directories(ExeDir() / "dumps");
+    int elites = 0, withAffixes = 0;
+    for (const RawActor& a : raw) {
+        const SnoInfo* info = sno.Find(a.sno);
+        ActorKind kind;
+        uint32_t quality;
+        bool unresolved;
+        if (!ClassifyWithQuality(proc, &acds, info, a, &kind, &quality, &unresolved)) continue;
+        if (kind != ActorKind::Champion && kind != ActorKind::Rare && kind != ActorKind::Boss) continue;
+        ++elites;
+        std::vector<uint8_t> rec(kAcdStride);
+        if (!a.hasAcd() || !acds.ReadRaw(proc, a.acd, rec.data())) {
+            std::print("{:<8} {:<40} acd {:08X}: record not found\n", ActorKindName(kind), info->name, a.acd);
+            continue;
+        }
+        std::print("{:<8} {:<40} acd {:08X} quality {}\n", ActorKindName(kind), info->name, a.acd, quality);
+        bool any = false;
+        for (uint32_t off = 0; off + 4 <= kAcdStride; off += 4) {
+            uint32_t w;
+            memcpy(&w, rec.data() + off, 4);
+            if (const MonsterAffixInfo* af = FindMonsterAffix(w)) {
+                std::print("    +0x{:03X}  {} ({})\n", off, af->name, w);
+                any = true;
+            }
+        }
+        withAffixes += any;
+        if (!any) std::print("    no known affix id in the record\n");
+        const std::filesystem::path out = ExeDir() / "dumps" / std::format("acd_{:08X}.bin", a.acd);
+        if (File f = OpenFile(out, L"wb")) fwrite(rec.data(), 1, rec.size(), f);
+    }
+    std::print("{} elites in view, {} with affix ids found in their ACD record\n", elites, withAffixes);
+    if (elites == 0) std::print("stand near a champion pack or rare and run this again\n");
     return 0;
 }
 
@@ -1281,6 +1337,7 @@ int main(int argc, char** argv) {
     bool dumpActors = false;
     bool dumpItems = false;
     bool dumpScenes = false;
+    bool probeAffixes = false;
     const char* uiFilter = nullptr;
     const char* uiWatch = nullptr;  // --ui-watch <substring>
     double publishSeconds = 0;  // 0 = forever
@@ -1295,6 +1352,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--actors")) dumpActors = true;
         else if (!strcmp(argv[i], "--items")) dumpItems = true;
         else if (!strcmp(argv[i], "--scenes")) dumpScenes = true;
+        else if (!strcmp(argv[i], "--affixes")) probeAffixes = true;
         else if (!strcmp(argv[i], "--ui") && i + 1 < argc) uiFilter = argv[++i];
         else if (!strcmp(argv[i], "--ui-watch") && i + 1 < argc) uiWatch = argv[++i];
         else if (!strcmp(argv[i], "--sno") && i + 1 < argc) snoPath = argv[++i];
@@ -1356,6 +1414,7 @@ int main(int argc, char** argv) {
         if (dumpActors) return DumpActors(*proc, sno);
         if (dumpItems) return DumpItems(*proc, sno);
         if (dumpScenes) return DumpScenes(*proc, sno);
+        if (probeAffixes) return ProbeAffixes(*proc, sno);
         if (uiWatch != nullptr) {
             // --ui-watch <substring> [--seconds N]: poll the memory of the matching UI controls
             // and report which 4-byte fields change (and how often). A value that only ever
