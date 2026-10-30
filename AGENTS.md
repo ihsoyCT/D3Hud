@@ -17,9 +17,11 @@ A Diablo III HUD for Windows x64, C++23, CMake + Visual Studio 2022.
 ## Layout
 
 ```
-src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h (pure, unit-tested)
+src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h (pure, unit-tested),
+              HostApi.h (the plain-C plugin API)
+src/plugins   LuaPlugin (sandboxed Lua + host API binding), PluginSettings (no UI, unit-tested)
 src/reader    Process, AobScanner, ActorList, AcdTable, AttribTable, UiControls, SceneTable, SnoTable, BasesCache, main.cpp
-src/overlay   main.cpp (window, loop, hotkeys), HudRenderer.{h,cpp} (all drawing, settings, panels),
+src/overlay   main.cpp (window, loop, hotkeys), HudRenderer.{h,cpp} (all drawing, settings, panels), PluginHost (host API on ImGui),
               SalvageRunner (real mouse clicks), ReaderProcess (launches the reader)
 src/tests     test_core.cpp (CHECK macro; run via ctest)
 analysis      shipped data tables (*.tsv, scene_cells.bin) + notes (ENGINE_MINING.md: how structures were found)
@@ -78,12 +80,22 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 9. **Install layout**: the exes find their data files, `d3hud.ini`, `reader.log` next to themselves.
    Keep `cmake --install` and the CPack zip in sync with that (CI checks the files). The MSVC runtime
    is linked statically on purpose.
+10. **Plugin API** (`src/core/HostApi.h`) is plain C and versioned: structs start with `size`, additions go at the
+   END, `D3H_API_VERSION` only grows. Never expose the Snapshot structs directly; copy into the API structs
+   (PluginHost.cpp). A new host function needs: the table entry, the implementation in `PluginHost.cpp`, the Lua
+   binding in `LuaPlugin.cpp` (registered only if the host provides it), a line in `plugins/README.md`, and a
+   test against the fake host in `test_core.cpp`. `HostApi.h` must keep compiling as C (`host_api_c.c`).
+11. **Plugin sandbox.** Lua gets only base (whitelisted), string, table, math, utf8, coroutine; text chunks only; a
+   memory cap and an instruction budget per call. Do not add io/os/debug/package, `load`, or any function that
+   reaches game memory, injects input, or touches files or the network; plugins stay unable to play the game.
 
 ## Safety boundaries (do not weaken without asking)
 
 - The reader only reads memory. The only code that sends input is `SalvageRunner`, and it must keep
   its abort conditions (Esc, mouse moved, game lost focus, salvage tab closed, item did not vanish).
   Do not add other input injection or any automation that plays the game.
+- Plugins cannot weaken the salvage rules: a plugin verdict may only make a decision more conservative, and
+  "junk" is honoured only for items the built-in rules already allow (enforced in C++, not in the plugin).
 - Salvage rules are conservative: unknown items are never destroyed, and the game's "salvage all"
   buttons are used only when every item of that quality is allowed (`CanSalvageAllOfQuality`).
 

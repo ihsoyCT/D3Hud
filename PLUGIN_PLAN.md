@@ -9,6 +9,12 @@ only for items `IsSalvageCandidate`/`CanSalvageAllOfQuality` already allow, enfo
 
 Progress: step 0b part 1 done: `src/core/Settings.h` (`SettingsTable`) replaces the hand-written
 `MinimapLayout::Load`/`Save`; the built-ins register through `MinimapLayout::Describe`.
+Milestones 2-4 done (the goal of the plugin PR): `src/core/HostApi.h` (plain C), the sandboxed Lua runtime
+(`src/plugins/`), the overlay host (`PluginHost`) and the first plugin, `plugins/timetracker` (time per area). Deviations
+from the plan: the manifest is `plugin.lua` (a table, run with no globals) instead of `plugin.json`, to avoid a
+JSON parser; plugin settings live in `plugins.ini` (separate from `d3hud.ini`); dock panels, hot rects, plugin
+hotkeys, the drawing shapes, the `drop` event and the salvage policy hook are in the header but not provided yet.
+
 Step 0b part 2 done: the Settings window lists `SettingsPage` entries (`AddSettingsPage`); the built-in pages are
 registered the same way, grouped Interface / Panels / Features.
 
@@ -133,9 +139,9 @@ and DLLs both get it.
 
 1. Typed settings store (`SettingsTable`) and settings page registry (both done), then split
    HudRenderer into features, no behaviour change.
-2. Write the host API header; bind it to the built-ins.
-3. Lua runtime, loader, sandbox, manifest.
-4. Port Drops and the marker styles to Lua as the proof.
+2. Write the host API header (done).
+3. Lua runtime, loader, sandbox, manifest (done).
+4. A first plugin as the proof (done: time tracker). Later: port Drops and the marker styles to Lua.
 5. Move salvage rules to a Lua policy hook.
 6. Plugin manager UI and hot reload.
 7. DLL loader.

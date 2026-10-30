@@ -180,6 +180,16 @@ struct LuaBinding {
         return 1;
     }
 
+    // d3hud.world_to_screen(x, y [, height]) -> sx, sy  (nil when off screen)
+    static int WorldToScreenFn(lua_State* L) {
+        const d3h_vec2 w{static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2))};
+        d3h_vec2 out{};
+        if (!Self(L)->host_.world_to_screen(w, static_cast<float>(luaL_optnumber(L, 3, 0.0)), &out)) return 0;
+        lua_pushnumber(L, out.x);
+        lua_pushnumber(L, out.y);
+        return 2;
+    }
+
     static int DrawText(lua_State* L) {
         const d3h_vec2 pos{static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2))};
         const auto color = static_cast<d3h_color>(luaL_checkinteger(L, 3));
@@ -598,6 +608,8 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
     if (D3H_HOST_HAS(&host, get_frame)) LuaBinding::Register(L, p.get(), "frame", LuaBinding::Frame);
     if (D3H_HOST_HAS(&host, get_actor)) LuaBinding::Register(L, p.get(), "actor", LuaBinding::Actor);
     if (D3H_HOST_HAS(&host, get_item)) LuaBinding::Register(L, p.get(), "item", LuaBinding::Item);
+    if (D3H_HOST_HAS(&host, world_to_screen) && host.world_to_screen != nullptr)
+        LuaBinding::Register(L, p.get(), "world_to_screen", LuaBinding::WorldToScreenFn);
     if (D3H_HOST_HAS(&host, draw_text)) LuaBinding::Register(L, p.get(), "draw_text", LuaBinding::DrawText);
     if (D3H_HOST_HAS(&host, define_setting)) {
         LuaBinding::Register(L, p.get(), "setting", LuaBinding::Setting);

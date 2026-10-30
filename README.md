@@ -17,6 +17,7 @@ statistics, and an optional **auto salvage**.
 - [Quick start](#quick-start)
 - [Features](#features)
 - [Settings](#settings)
+- [Plugins](#plugins)
 - [Hotkeys](#hotkeys)
 - [Command line](#command-line)
 - [Files the program uses and creates](#files-the-program-uses-and-creates)
@@ -120,8 +121,23 @@ can be resized by dragging its bottom-right corner, and the size is remembered.
 | Ground labels | Which items get labels, text size, colours |
 | Auto salvage | Safe area, rules, speed options, run safety, preview colour |
 | Reader / diagnostics | Autostart the reader, publish rate, on-screen diagnostics, open the settings folder, reset everything |
+| Plugins | Every loaded plugin with its status and log; plugins add their own pages and options here |
 
 Most changes are saved immediately; on the Minimap page press **Save**.
+
+## Plugins
+
+Small Lua scripts in the `plugins` folder add features without rebuilding the program. One is included:
+
+- **Time tracker** (`plugins/timetracker`) records where your play time goes and shows it as percentages
+  per area, for this session and all time. Rifts and greater rifts are detected automatically. For
+  everything else you stand in a world once, open *Settings > Time tracker* and say which area it belongs
+  to (for example *Town* or *Bounties*); the answer is remembered. Areas are renamed or added on the
+  *timetracker options* page, which can also show the session split on screen.
+
+Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
+read game memory, press keys, or touch files. To write one see `plugins/README.md`. Restart the overlay
+after adding or changing a plugin.
 
 ## Hotkeys
 
@@ -150,6 +166,7 @@ D3Hud.Overlay.exe [options]        no options = cover "Diablo III", manage the r
   --record <file> [--seconds N]  record the synthetic scene
   --colorkey                   fallback if DirectComposition is not available
   --selftest <frames>          run N frames and exit (smoke test)
+  --settings-page <id>         start with Settings open on that page (e.g. minimap, timetracker.timetracker)
   --help
 ```
 
@@ -181,6 +198,7 @@ Next to the exes (the folder is relocatable, nothing is written elsewhere):
 | `sno_actors.tsv`, `items_gbid.tsv`, `scene_cells.bin` | Data tables the program needs (shipped) |
 | `d3hud.ini` | All settings, panel positions, hotkeys and the safe area (created on first save) |
 | `d3hud.<name>.ini` | Saved profiles |
+| `plugins/`, `plugins.ini` | Lua plugins (shipped) and the settings and data they keep |
 | `reader.log` | Output of the background reader |
 | `d3hud_drops.csv` | Created by *Export session to CSV* in the Drops settings |
 | `dumps\` | Created by the reader's F10 actor dump |
@@ -253,7 +271,8 @@ running exe.
 ## Project layout and further reading
 
 ```
-src/core      snapshot model (frozen ABI), replay I/O, shared-memory ring, rules (salvage, search)
+src/core      snapshot model (frozen ABI), replay I/O, shared-memory ring, rules (salvage, search), host API (HostApi.h)
+src/plugins   Lua plugin runtime (sandbox, host API binding) and the plugin settings store
 src/reader    the memory reader (process attach, actor / item / UI / scene discovery)
 src/overlay   Win32 + DirectX 11 + DirectComposition window, ImGui renderer, salvage runner
 src/tests     unit tests (ctest)
@@ -263,5 +282,5 @@ tools         Python scripts used to mine those tables (not needed at runtime)
 
 - `TESTING.md` — manual test matrix and the replay-first workflow
 - `FEATURE_IDEAS.md` — ideas and investigations
-- `PLUGIN_PLAN.md` — a plan for a plugin system
+- `plugins/README.md` — writing a Lua plugin; `PLUGIN_PLAN.md` — the design and what is still planned
 - `analysis/ENGINE_MINING.md` — how the game's data structures were found
