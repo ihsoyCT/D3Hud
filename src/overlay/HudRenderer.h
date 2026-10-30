@@ -16,13 +16,37 @@ namespace d3hud {
 // of the window height (resolution independent), anchored to the top-right
 // corner where D3 draws its own minimap; zoom is the world distance shown at
 // the rim. Calibrate in F8 mode against icons on the game's minimap.
+enum class MarkerShape : uint8_t { Dot = 0, Ring, Diamond, DiamondFilled };
+
+// How one actor kind looks on the minimap / TAB map; all editable in Settings > Minimap.
+struct KindStyle {
+    bool show = true;
+    uint32_t rgb = 0xFFFFFF;  // 0xRRGGBB
+    float size = 2.2f;        // marker radius in px (before the global scale)
+    MarkerShape shape = MarkerShape::Dot;
+    float alpha = 1.0f;
+    bool label = false;       // name next to the marker (shrines/pylons; "pylon?" for spawns)
+    bool pulse = false;       // expanding ring (pylons)
+};
+
 struct MinimapLayout {
+    MinimapLayout();
     bool onGameMap = true;       // dots only, over the game's minimap (else own disc, bottom-right)
     float rightOffset = 0.110f;  // centre distance from the right edge / window height
     float topOffset = 0.115f;    // centre distance from the top edge / window height
     float radius = 0.100f;       // / window height
     float worldRadius = 120.0f;  // world units from centre to rim
     bool beyondRim = true;       // also draw actors outside the circle (faded)
+    // marker look
+    static constexpr int kKindCount = static_cast<int>(ActorKind::PylonSpawn) + 1;
+    KindStyle kinds[kKindCount];
+    float markerScale = 1.0f;
+    bool outline = true;         // dark outline behind dots
+    bool bigMapMarkers = true;   // markers on the TAB map too
+    bool showScenes = true;      // map prediction (walkable cells)
+    float sceneAlpha = 1.0f;
+    bool sceneLabels = true;     // "Entrance" / "Exit" on the prediction
+    void ResetMarkers();
     // auto salvage (stored in the same ini)
     SafeArea safeArea;
     SalvageRules salvageRules;

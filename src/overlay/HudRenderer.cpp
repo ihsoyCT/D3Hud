@@ -66,6 +66,31 @@ const char* VerdictName(SalvageVerdict v) {
     return "?";
 }
 
+MinimapLayout::MinimapLayout() { ResetMarkers(); }
+
+void MinimapLayout::ResetMarkers() {
+    markerScale = 1.0f;
+    outline = bigMapMarkers = showScenes = sceneLabels = true;
+    sceneAlpha = 1.0f;
+    auto set = [&](ActorKind k, uint32_t rgb, float size, MarkerShape shape, float alpha = 1.0f,
+                   bool label = false, bool pulse = false) {
+        kinds[static_cast<int>(k)] = KindStyle{true, rgb, size, shape, alpha, label, pulse};
+    };
+    set(ActorKind::Player,     0xFFFFFF, 2.2f, MarkerShape::Dot);  // not drawn: the centre arrow is the player
+    set(ActorKind::Trash,      0xD2D2D2, 2.2f, MarkerShape::Dot, 0.86f);
+    set(ActorKind::Champion,   0x5082FF, 3.6f, MarkerShape::Dot);
+    set(ActorKind::Rare,       0xFFD700, 5.0f, MarkerShape::Dot);
+    set(ActorKind::Minion,     0xC8AA28, 2.6f, MarkerShape::Dot, 0.86f);
+    set(ActorKind::Boss,       0xBE46FF, 5.0f, MarkerShape::Dot);
+    set(ActorKind::Pylon,      0x00F0FF, 8.0f, MarkerShape::DiamondFilled, 1.0f, true, true);
+    set(ActorKind::Shrine,     0x50FF78, 6.0f, MarkerShape::DiamondFilled, 1.0f, true);
+    set(ActorKind::Chest,      0xFFAA28, 2.2f, MarkerShape::Dot);
+    set(ActorKind::Globe,      0xFF4646, 2.2f, MarkerShape::Dot);
+    set(ActorKind::GroundItem, 0xFF8000, 2.2f, MarkerShape::Dot);
+    set(ActorKind::Portal,     0xFF3CDC, 5.0f, MarkerShape::Ring);
+    set(ActorKind::PylonSpawn, 0x00F0FF, 6.0f, MarkerShape::Diamond, 0.6f, true);
+}
+
 bool MinimapLayout::Load(const char* path) {
     FILE* f = fopen(path, "r");
     if (f == nullptr) return false;
@@ -86,7 +111,30 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "worldRadius")) worldRadius = v;
         else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
         else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
-        else {
+        else if (!strcmp(key, "markerScale")) markerScale = v;
+        else if (!strcmp(key, "outline")) outline = v != 0.f;
+        else if (!strcmp(key, "bigMapMarkers")) bigMapMarkers = v != 0.f;
+        else if (!strcmp(key, "showScenes")) showScenes = v != 0.f;
+        else if (!strcmp(key, "sceneAlpha")) sceneAlpha = v;
+        else if (!strcmp(key, "sceneLabels")) sceneLabels = v != 0.f;
+        else if (!strncmp(key, "kind.", 5)) {
+            // kind.<Name>.<show|color|size|shape|alpha|label|pulse> = v
+            char kname[16], what[16] = {};
+            if (sscanf(key, "kind.%15[^.].%15s", kname, what) == 2) {
+                for (int k = 0; k < kKindCount; ++k) {
+                    if (strcmp(kname, ActorKindName(static_cast<ActorKind>(k))) != 0) continue;
+                    KindStyle& ks = kinds[k];
+                    if (!strcmp(what, "show")) ks.show = v != 0.f;
+                    else if (!strcmp(what, "color")) ks.rgb = static_cast<uint32_t>(v) & 0xFFFFFF;
+                    else if (!strcmp(what, "size")) ks.size = v;
+                    else if (!strcmp(what, "shape")) ks.shape = static_cast<MarkerShape>(std::clamp(static_cast<int>(v), 0, 3));
+                    else if (!strcmp(what, "alpha")) ks.alpha = v;
+                    else if (!strcmp(what, "label")) ks.label = v != 0.f;
+                    else if (!strcmp(what, "pulse")) ks.pulse = v != 0.f;
+                    break;
+                }
+            }
+        } else {
             static const char* kNames[MinimapLayout::kPanelCount] = {"Info", "Drops", "Items", "Actors",
                                                                      "Settings"};
             char pname[16], what[16] = {};
@@ -117,6 +165,16 @@ bool MinimapLayout::Save(const char* path) const {
     std::print(f, "safeCells={:x}\nprotectEquipped={}\n",
                static_cast<unsigned long long>(safeArea.cells),
                salvageRules.protectEquippedAncients ? 1 : 0);
+    std::print(f, "# marker look (color = 0xRRGGBB as decimal; shape 0 dot,1 ring,2 diamond,3 filled)\n");
+    std::print(f, "markerScale={:.2f}\noutline={}\nbigMapMarkers={}\nshowScenes={}\nsceneAlpha={:.2f}\nsceneLabels={}\n",
+               markerScale, outline ? 1 : 0, bigMapMarkers ? 1 : 0, showScenes ? 1 : 0, sceneAlpha, sceneLabels ? 1 : 0);
+    for (int k = 0; k < kKindCount; ++k) {
+        const KindStyle& ks = kinds[k];
+        std::print(f, "kind.{0}.show={1}\nkind.{0}.color={2}\nkind.{0}.size={3:.2f}\nkind.{0}.shape={4}\n"
+                      "kind.{0}.alpha={5:.2f}\nkind.{0}.label={6}\nkind.{0}.pulse={7}\n",
+                   ActorKindName(static_cast<ActorKind>(k)), ks.show ? 1 : 0, ks.rgb, ks.size,
+                   static_cast<int>(ks.shape), ks.alpha, ks.label ? 1 : 0, ks.pulse ? 1 : 0);
+    }
     static const char* kNames[kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
     std::print(f, "# panels: pinned open, hidden from the dock, position (fraction of window; <0 = docked)\n");
     for (int i = 0; i < kPanelCount; ++i)
@@ -131,65 +189,70 @@ void HudRenderer::SetLayoutPath(const char* path) {
     layoutStatus_ = layout_.Load(layoutPath_) ? "loaded" : "defaults (no d3hud.ini yet)";
 }
 
-// Pylon/shrine diamond, portal ring or (outlined) dot in the kind's colour.
-static void DrawMarker(ImDrawList* dl, ActorKind kind, Vec2 px, int alpha) {
-    const ImU32 col = (KindColor(kind) & 0x00FFFFFF) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT);
-    const float r = KindRadius(kind);
-    if (kind == ActorKind::Pylon || kind == ActorKind::Shrine) {
-        dl->AddQuad(ImVec2(px.x, px.y - r), ImVec2(px.x + r, px.y), ImVec2(px.x, px.y + r), ImVec2(px.x - r, px.y),
-                    col, 2.0f);
-    } else if (kind == ActorKind::Portal) {
-        dl->AddCircle(ImVec2(px.x, px.y), r, col, 16, 2.0f);
-    } else {
-        // dark outline keeps dots readable on top of the game's map
-        dl->AddCircleFilled(ImVec2(px.x, px.y), r + 1.0f, IM_COL32(0, 0, 0, 140), 10);
-        dl->AddCircleFilled(ImVec2(px.x, px.y), r, col, 10);
-    }
+static ImU32 Rgba(uint32_t rgb, int alpha) {
+    return IM_COL32((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, std::clamp(alpha, 0, 255));
 }
 
-// One map marker. Unused pylons/shrines get a big filled diamond, a pulsing
-// ring and their name ("Conduit Pylon"); used ones are not drawn at all.
-static void DrawActorMarker(ImDrawList* dl, const ActorSnapshot& a, Vec2 px, int alpha) {
-    if (a.kind == ActorKind::PylonSpawn) {
-        const ImU32 col = IM_COL32(0, 240, 255, 0) | (static_cast<ImU32>(alpha * 3 / 5) << IM_COL32_A_SHIFT);
-        const float r = 6.0f;
-        dl->AddQuad(ImVec2(px.x, px.y - r), ImVec2(px.x + r, px.y), ImVec2(px.x, px.y + r), ImVec2(px.x - r, px.y),
-                    col, 1.5f);
-        dl->AddText(ImVec2(px.x + r + 2.f, px.y - 7.f), col, "pylon?");
-        return;
+// One map marker, drawn from its kind's style (Settings > Minimap). Used
+// pylons/shrines are not drawn at all.
+static void DrawActorMarker(ImDrawList* dl, const ActorSnapshot& a, Vec2 px, int alpha, const MinimapLayout& L) {
+    const KindStyle& st = L.kinds[static_cast<int>(a.kind)];
+    if (!st.show) return;
+    if ((a.kind == ActorKind::Pylon || a.kind == ActorKind::Shrine) && (a.itemFlags & kActorFlagUsed)) return;
+    alpha = static_cast<int>(alpha * st.alpha);
+    if (alpha <= 0) return;
+    const ImU32 col = Rgba(st.rgb, alpha);
+    const ImU32 dark = IM_COL32(0, 0, 0, L.outline ? alpha * 3 / 4 : 0);
+    const float r = st.size * L.markerScale;
+    const ImVec2 c(px.x, px.y);
+    const ImVec2 t(c.x, c.y - r), rt(c.x + r, c.y), b(c.x, c.y + r), l(c.x - r, c.y);
+    switch (st.shape) {
+        case MarkerShape::Dot:
+            // dark outline keeps dots readable on top of the game's map
+            if (L.outline) dl->AddCircleFilled(c, r + 1.0f, IM_COL32(0, 0, 0, alpha * 140 / 255), 10);
+            dl->AddCircleFilled(c, r, col, 10);
+            break;
+        case MarkerShape::Ring:
+            dl->AddCircle(c, r, col, 16, 2.0f);
+            break;
+        case MarkerShape::Diamond:
+            dl->AddQuad(t, rt, b, l, col, 2.0f);
+            break;
+        case MarkerShape::DiamondFilled:
+            if (L.outline)
+                dl->AddQuadFilled(ImVec2(t.x, t.y - 1.5f), ImVec2(rt.x + 1.5f, rt.y), ImVec2(b.x, b.y + 1.5f),
+                                  ImVec2(l.x - 1.5f, l.y), dark);
+            dl->AddQuadFilled(t, rt, b, l, col);
+            break;
     }
-    if (a.kind != ActorKind::Pylon && a.kind != ActorKind::Shrine) {
-        DrawMarker(dl, a.kind, px, alpha);
-        return;
-    }
-    if (a.itemFlags & kActorFlagUsed) return;
-    const bool pylon = a.kind == ActorKind::Pylon;
-    const ImU32 rgb = pylon ? IM_COL32(0, 240, 255, 0) : IM_COL32(80, 255, 120, 0);  // cyan / green
-    const ImU32 col = rgb | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT);
-    const float r = pylon ? 8.0f : 6.0f;
-    const ImVec2 t(px.x, px.y - r), rt(px.x + r, px.y), b(px.x, px.y + r), l(px.x - r, px.y);
-    dl->AddQuadFilled(ImVec2(t.x, t.y - 1.5f), ImVec2(rt.x + 1.5f, rt.y), ImVec2(b.x, b.y + 1.5f),
-                      ImVec2(l.x - 1.5f, l.y), IM_COL32(0, 0, 0, alpha * 3 / 4));
-    dl->AddQuadFilled(t, rt, b, l, col);
-    if (pylon) {
+    if (st.pulse) {
         const float phase = static_cast<float>(fmod(ImGui::GetTime(), 1.2) / 1.2);  // 0..1
         const int ringAlpha = static_cast<int>((1.f - phase) * alpha);
-        dl->AddCircle(ImVec2(px.x, px.y), r + 4.f + phase * 14.f, rgb | (static_cast<ImU32>(ringAlpha) << IM_COL32_A_SHIFT),
-                      24, 2.0f);
+        dl->AddCircle(c, r + 4.f + phase * 14.f, Rgba(st.rgb, ringAlpha), 24, 2.0f);
+    }
+    if (!st.label) return;
+    if (a.kind == ActorKind::PylonSpawn) {
+        dl->AddText(ImVec2(c.x + r + 2.f, c.y - 7.f), col, "pylon?");
+        return;
     }
     const char* label = ShrineLabel(a.name);
     if (label == nullptr) return;
     const ImVec2 sz = ImGui::CalcTextSize(label);
-    const ImVec2 at(px.x - sz.x * 0.5f, px.y + r + 3.f);
+    const ImVec2 at(c.x - sz.x * 0.5f, c.y + r + 3.f);
     dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + sz.x + 3, at.y + sz.y + 1),
                       IM_COL32(0, 0, 0, alpha * 2 / 3), 3.f);
-    dl->AddText(at, (rgb & 0x00FFFFFF) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT), label);
+    dl->AddText(at, col, label);
 }
 
 template <typename ToPx, typename Keep>
 void HudRenderer::DrawScenes(const WorldSnapshot& snap, ImDrawList* dl, ToPx toPx, Keep keep) {
-    const ImU32 kFill = IM_COL32(175, 190, 215, 55);
-    const ImU32 kEntranceFill = IM_COL32(90, 230, 120, 75), kExitFill = IM_COL32(255, 140, 40, 95);
+    if (!layout_.showScenes) return;
+    auto fade = [&](ImU32 c) {  // scale the alpha channel by the prediction opacity
+        const int a = std::clamp(static_cast<int>(((c >> IM_COL32_A_SHIFT) & 255) * layout_.sceneAlpha), 0, 255);
+        return (c & 0x00FFFFFF) | (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
+    };
+    const ImU32 kFill = fade(IM_COL32(175, 190, 215, 55));
+    const ImU32 kEntranceFill = fade(IM_COL32(90, 230, 120, 75)), kExitFill = fade(IM_COL32(255, 140, 40, 95));
     const uint32_t n = std::min<uint32_t>(snap.sceneCount, kMaxScenes);
     for (uint32_t s = 0; s < n; ++s) {
         const SceneSnapshot& sc = snap.scenes[s];
@@ -208,7 +271,7 @@ void HudRenderer::DrawScenes(const WorldSnapshot& snap, ImDrawList* dl, ToPx toP
             const Vec2 p0 = toPx(a), p1 = toPx({b.x, a.y}), p2 = toPx(b), p3 = toPx({a.x, b.y});
             dl->AddQuadFilled(ImVec2(p0.x, p0.y), ImVec2(p1.x, p1.y), ImVec2(p2.x, p2.y), ImVec2(p3.x, p3.y), fill);
         }
-        if (role != 0 && keep(mid, 0.f)) {
+        if (role != 0 && layout_.sceneLabels && keep(mid, 0.f)) {
             const char* label = (role & kSceneExit) ? "Exit" : "Entrance";
             const Vec2 c = toPx(mid);
             const ImVec2 sz = ImGui::CalcTextSize(label);
@@ -233,13 +296,14 @@ void HudRenderer::DrawBigMap(const WorldSnapshot& snap, const HudOptions& opt) {
         const float m = slack * display.y / 1200.0f;  // world size -> px
         return p.x > -m && p.y > -m && p.x < display.x + m && p.y < display.y + m;
     });
+    if (!layout_.bigMapMarkers) return;
     for (uint16_t i = 0; i < snap.actorCount; ++i) {
         const ActorSnapshot& a = snap.actors[i];
         if (a.kind == ActorKind::Player) continue;  // the game marks the player itself
         const Vec2 px = WorldToBigMap(a.world, snap.playerPos, snap.ui.bigMapPan, display.x, display.y,
                                       opt.mapOrientation);
         if (px.x < 0.f || px.y < 0.f || px.x > display.x || px.y > display.y) continue;
-        DrawActorMarker(dl, a, px, 255);
+        DrawActorMarker(dl, a, px, 255, layout_);
     }
 }
 
@@ -302,7 +366,7 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
             WorldToMinimap(a.world, snap.playerPos, unitsPerPx, center, 1e9f, &px, nullptr,
                            opt.mapOrientation);
         }
-        DrawActorMarker(dl, a, px, inside ? 255 : 170);
+        DrawActorMarker(dl, a, px, inside ? 255 : 170, layout_);
     }
 
     // Player arrow (own minimap only - the game's minimap draws its own player marker).
@@ -328,15 +392,85 @@ void HudRenderer::DrawMinimapSettings() {
     ImGui::SliderFloat("from top edge", &layout_.topOffset, 0.0f, 0.5f, "%.3f");
     ImGui::SliderFloat("radius", &layout_.radius, 0.03f, 0.4f, "%.3f");
     ImGui::SliderFloat("zoom (world units to rim)", &layout_.worldRadius, 20.0f, 400.0f, "%.0f");
+
+    ImGui::SeparatorText("Markers");
+    ImGui::SliderFloat("marker size", &layout_.markerScale, 0.5f, 3.0f, "x%.2f");
+    ImGui::Checkbox("dark outline", &layout_.outline);
+    ImGui::SameLine();
+    ImGui::Checkbox("markers on the TAB map", &layout_.bigMapMarkers);
+    ImGui::Checkbox("map prediction", &layout_.showScenes);
+    ImGui::SameLine();
+    ImGui::Checkbox("Entrance/Exit labels", &layout_.sceneLabels);
+    ImGui::SliderFloat("prediction opacity", &layout_.sceneAlpha, 0.0f, 2.0f, "x%.2f");
+    if (ImGui::BeginTable("kinds", 7,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
+                          ImVec2(0.0f, 190.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("Show", ImGuiTableColumnFlags_WidthFixed, 38.0f);
+        ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+        ImGui::TableSetupColumn("Shape", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Opacity", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Extras", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        for (int k = 1; k < MinimapLayout::kKindCount; ++k) {  // 0 = player: the centre arrow, no marker
+            KindStyle& st = layout_.kinds[k];
+            ImGui::PushID(k);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(Rgba(st.rgb, 255)), "%s",
+                               ActorKindName(static_cast<ActorKind>(k)));
+            ImGui::TableNextColumn();
+            ImGui::Checkbox("##show", &st.show);
+            ImGui::TableNextColumn();
+            float rgb[3] = {((st.rgb >> 16) & 255) / 255.f, ((st.rgb >> 8) & 255) / 255.f, (st.rgb & 255) / 255.f};
+            if (ImGui::ColorEdit3("##color", rgb, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
+                st.rgb = (static_cast<uint32_t>(rgb[0] * 255.f + 0.5f) << 16) |
+                         (static_cast<uint32_t>(rgb[1] * 255.f + 0.5f) << 8) |
+                         static_cast<uint32_t>(rgb[2] * 255.f + 0.5f);
+            }
+            ImGui::TableNextColumn();
+            int shape = static_cast<int>(st.shape);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::Combo("##shape", &shape, "Dot Ring Diamond Filled diamond "))
+                st.shape = static_cast<MarkerShape>(shape);
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::DragFloat("##size", &st.size, 0.1f, 0.5f, 16.0f, "%.1f");
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::DragFloat("##alpha", &st.alpha, 0.01f, 0.0f, 1.0f, "%.2f");
+            ImGui::TableNextColumn();
+            if (k == static_cast<int>(ActorKind::Pylon) || k == static_cast<int>(ActorKind::Shrine) ||
+                k == static_cast<int>(ActorKind::PylonSpawn)) {
+                ImGui::Checkbox("name", &st.label);
+                ImGui::SameLine();
+            }
+            ImGui::Checkbox("pulse", &st.pulse);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
     if (ImGui::Button("Save")) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save FAILED";
     ImGui::SameLine();
-    if (ImGui::Button("Reset")) {
-        layout_ = MinimapLayout();
-        layoutStatus_ = "defaults (not saved)";
+    if (ImGui::Button("Reset placement")) {
+        const MinimapLayout d;
+        layout_.onGameMap = d.onGameMap;
+        layout_.rightOffset = d.rightOffset;
+        layout_.topOffset = d.topOffset;
+        layout_.radius = d.radius;
+        layout_.worldRadius = d.worldRadius;
+        layout_.beyondRim = d.beyondRim;
+        layoutStatus_ = "placement reset (not saved)";
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", layoutStatus_);
-    ImGui::TextDisabled("%s", layoutPath_);
+    if (ImGui::Button("Reset markers")) {
+        layout_.ResetMarkers();
+        layoutStatus_ = "markers reset (not saved)";
+    }
+    ImGui::TextDisabled("%s  -  %s", layoutStatus_, layoutPath_);
 }
 
 // Debug view: every actor the minimap receives this frame, nearest first.
@@ -900,12 +1034,12 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     if (!PanelOpen(PanelId::Settings, opt, "Settings")) return;
     static const char* kEntries[] = {"Info", "Drops", "Items", "Actors", "Minimap", "Auto salvage"};
     constexpr int kEntryCount = 6;  // first four are panels (PanelId order)
-    ImGui::BeginChild("##settings_list", ImVec2(130.0f, 230.0f), true);
+    ImGui::BeginChild("##settings_list", ImVec2(130.0f, 430.0f), true);
     for (int i = 0; i < kEntryCount; ++i)
         if (ImGui::Selectable(kEntries[i], settingsTab_ == i)) settingsTab_ = i;
     ImGui::EndChild();
     ImGui::SameLine();
-    ImGui::BeginChild("##settings_detail", ImVec2(360.0f, 230.0f), true);
+    ImGui::BeginChild("##settings_detail", ImVec2(560.0f, 430.0f), true);
     ImGui::TextUnformatted(kEntries[settingsTab_]);
     ImGui::Separator();
     if (settingsTab_ < 4) {
