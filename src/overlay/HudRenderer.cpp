@@ -56,10 +56,9 @@ float KindRadius(ActorKind k) {
 }
 
 // Drop log / world label colour: bonus drops cyan, set green, legendary orange.
-ImU32 DropColor(ItemRarity rarity, bool bonus) {
-    if (bonus) return IM_COL32(90, 230, 255, 255);
-    if (rarity == ItemRarity::Set) return IM_COL32(80, 255, 80, 255);
-    return IM_COL32(255, 140, 25, 255);
+ImU32 DropColor(const LabelStyle& L, ItemRarity rarity, bool bonus) {
+    const uint32_t rgb = bonus ? L.colBonus : rarity == ItemRarity::Set ? L.colSet : L.colLegendary;
+    return IM_COL32((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, 255);
 }
 
 }  // namespace
@@ -136,6 +135,18 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
         else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
         else if (!strcmp(key, "uiScale")) uiScale = std::clamp(v, 0.5f, 3.0f);
+        else if (!strncmp(key, "labels.", 7)) {
+            const char* k = key + 7;
+            if (!strcmp(k, "enabled")) labels.enabled = v != 0.f;
+            else if (!strcmp(k, "mode")) labels.mode = std::clamp(static_cast<int>(v), 0, 2);
+            else if (!strcmp(k, "showBonus")) labels.showBonus = v != 0.f;
+            else if (!strcmp(k, "scale")) labels.scale = std::clamp(v, 0.5f, 3.0f);
+            else if (!strcmp(k, "bgAlpha")) labels.bgAlpha = std::clamp(v, 0.f, 1.f);
+            else if (!strcmp(k, "colLegendary")) labels.colLegendary = static_cast<uint32_t>(v) & 0xFFFFFF;
+            else if (!strcmp(k, "colSet")) labels.colSet = static_cast<uint32_t>(v) & 0xFFFFFF;
+            else if (!strcmp(k, "colPrimal")) labels.colPrimal = static_cast<uint32_t>(v) & 0xFFFFFF;
+            else if (!strcmp(k, "colBonus")) labels.colBonus = static_cast<uint32_t>(v) & 0xFFFFFF;
+        }
         else if (!strncmp(key, "hotkey.", 7)) {
             for (int h = 0; h < kHotkeyCount; ++h)
                 if (!strcmp(key + 7, kHotkeyIds[h])) hotkeys[h] = static_cast<uint8_t>(std::clamp(v, 0.f, 254.f));
@@ -214,6 +225,10 @@ bool MinimapLayout::Save(const char* path) const {
                    kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i], panelW[i], panelH[i]);
     std::print(f, "uiScale={:.2f}\n", uiScale);
     for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
+    std::print(f, "labels.enabled={}\nlabels.mode={}\nlabels.showBonus={}\nlabels.scale={:.2f}\nlabels.bgAlpha={:.2f}\n",
+               labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
+    std::print(f, "labels.colLegendary={}\nlabels.colSet={}\nlabels.colPrimal={}\nlabels.colBonus={}\n",
+               labels.colLegendary, labels.colSet, labels.colPrimal, labels.colBonus);
     fclose(f);
     return true;
 }
@@ -844,15 +859,29 @@ void HudRenderer::DrawInfo(const WorldSnapshot& snap, const HudOptions& opt, dou
 // Labels above legendary/set/bonus items lying in the world, like the game's own
 // item labels but with what the item really is: "Ancient Puzzle Ring".
 void HudRenderer::DrawGroundLabels(const WorldSnapshot& snap, const HudOptions& opt) {
+    const LabelStyle& L = layout_.labels;
+    if (!L.enabled) return;
     const Vec2 center = opt.haveLabelCenter ? opt.labelCenter : snap.playerPos;
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    const float fontSize = ImGui::GetFontSize() * L.scale;
     for (uint16_t i = 0; i < snap.actorCount; ++i) {
         const ActorSnapshot& a = snap.actors[i];
         if (a.kind != ActorKind::GroundItem || a.itemRarity == ItemRarity::Unknown || a.name[0] == '\0')
             continue;
         const bool bonus = (a.itemFlags & kItemFlagBonus) != 0;
-        if (!bonus && a.itemRarity != ItemRarity::Legendary && a.itemRarity != ItemRarity::Set) continue;
+        const bool isSet = a.itemRarity == ItemRarity::Set, isLegendary = a.itemRarity == ItemRarity::Legendary;
+        const bool anc = (a.itemFlags & (kItemFlagAncient | kItemFlagPrimal)) != 0;
+        bool pass = bonus && L.showBonus;
+        if (!pass) {
+            switch (L.mode) {
+                case 1:  pass = (isSet || isLegendary) && anc; break;
+                case 2:  pass = isSet; break;
+                default: pass = isSet || isLegendary; break;
+            }
+        }
+        if (!pass) continue;
         Vec2 p;
         if (!WorldToScreen(a.world, 0.f, center, display.x, display.y, &p)) continue;
         char label[kNameLen + 16];
@@ -860,13 +889,15 @@ void HudRenderer::DrawGroundLabels(const WorldSnapshot& snap, const HudOptions& 
                                                : (a.itemFlags & kItemFlagAncient) ? "Ancient "
                                                                                   : "",
                  a.name);
-        const ImVec2 ts = ImGui::CalcTextSize(label);
+        const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
         const ImVec2 tl(p.x - ts.x * 0.5f, p.y - ts.y - 6.0f);  // centred just above the item
         dl->AddRectFilled(ImVec2(tl.x - 4.0f, tl.y - 2.0f), ImVec2(tl.x + ts.x + 4.0f, tl.y + ts.y + 2.0f),
-                          IM_COL32(0, 0, 0, 175), 3.0f);
-        const ImU32 col = (a.itemFlags & kItemFlagPrimal) ? IM_COL32(255, 70, 70, 255)
-                                                          : DropColor(a.itemRarity, bonus);
-        dl->AddText(tl, col, label);
+                          IM_COL32(0, 0, 0, static_cast<int>(L.bgAlpha * 255.f)), 3.0f);
+        const uint32_t prgb = L.colPrimal;
+        const ImU32 col = (a.itemFlags & kItemFlagPrimal)
+                              ? IM_COL32((prgb >> 16) & 255, (prgb >> 8) & 255, prgb & 255, 255)
+                              : DropColor(L, a.itemRarity, bonus);
+        dl->AddText(font, fontSize, tl, col, label);
     }
 }
 
@@ -926,7 +957,7 @@ void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& op
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(drops_[k].time);
             ImGui::TableNextColumn();
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(DropColor(it.rarity, it.bonus != 0)), "%s",
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(DropColor(layout_.labels, it.rarity, it.bonus != 0)), "%s",
                                it.name);
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%s", it.typeName);
@@ -1136,15 +1167,44 @@ void HudRenderer::DrawHotkeySettings() {
     }
 }
 
+// Settings > Ground labels.
+void HudRenderer::DrawLabelSettings() {
+    LabelStyle& L = layout_.labels;
+    ImGui::Checkbox("label items on the ground", &L.enabled);
+    ImGui::Combo("which items", &L.mode, "Legendary + set\0Ancient / primal only\0Sets only\0");
+    ImGui::Checkbox("always label bonus drops", &L.showBonus);
+    ImGui::SliderFloat("text size", &L.scale, 0.6f, 2.5f, "x%.2f");
+    ImGui::SliderFloat("background darkness", &L.bgAlpha, 0.0f, 1.0f, "%.2f");
+    auto colour = [](const char* name, uint32_t* rgb) {
+        float c[3] = {((*rgb >> 16) & 255) / 255.f, ((*rgb >> 8) & 255) / 255.f, (*rgb & 255) / 255.f};
+        if (ImGui::ColorEdit3(name, c, ImGuiColorEditFlags_NoInputs))
+            *rgb = (static_cast<uint32_t>(c[0] * 255.f + 0.5f) << 16) | (static_cast<uint32_t>(c[1] * 255.f + 0.5f) << 8) |
+                   static_cast<uint32_t>(c[2] * 255.f + 0.5f);
+    };
+    colour("legendary", &L.colLegendary);
+    colour("set", &L.colSet);
+    colour("primal", &L.colPrimal);
+    colour("bonus drop", &L.colBonus);
+    ImGui::TextDisabled("Colours also apply to the Drops panel.");
+    if (ImGui::Button("Save")) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save FAILED";
+    ImGui::SameLine();
+    if (ImGui::Button("Reset labels")) {
+        L = LabelStyle();
+        layoutStatus_ = "labels reset (not saved)";
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", layoutStatus_);
+}
+
 void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     if (!PanelOpen(PanelId::Settings, opt, "Settings",
                    ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f))))
         return;
     // entries: the four panel pages (PanelId order) sit together; the rest are feature pages
-    enum Entry { kGeneral, kHotkeys, kInfo, kDrops, kItems, kActors, kMinimap, kSalvage, kEntryCount };
+    enum Entry { kGeneral, kHotkeys, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kEntryCount };
     static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Info", "Drops", "Items", "Actors",
-                                                "Minimap", "Auto salvage"};
+                                                "Minimap", "Ground labels", "Auto salvage"};
     ImGui::BeginChild("##settings_list", ImVec2(150.0f * layout_.uiScale, 0.0f), true);
     for (int i = 0; i < kEntryCount; ++i)
         if (ImGui::Selectable(kEntries[i], settingsTab_ == i)) settingsTab_ = i;
@@ -1175,6 +1235,8 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         if (changed) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
     } else if (settingsTab_ == kMinimap) {
         DrawMinimapSettings();
+    } else if (settingsTab_ == kLabels) {
+        DrawLabelSettings();
     } else {
         DrawSalvageSettings();
     }

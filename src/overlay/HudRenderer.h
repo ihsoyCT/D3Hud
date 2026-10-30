@@ -29,8 +29,19 @@ struct KindStyle {
     bool pulse = false;       // expanding ring (pylons)
 };
 
+// Labels over legendary/set items lying on the ground, and the colours of the drop log.
+struct LabelStyle {
+    bool enabled = true;
+    int mode = 0;            // 0 legendary + set, 1 ancient/primal only, 2 sets only
+    bool showBonus = true;   // bonus drops are always labelled (ignoring the mode)
+    float scale = 1.0f;      // text size multiplier
+    float bgAlpha = 0.69f;   // dark plate behind the text
+    uint32_t colLegendary = 0xFF8C19, colSet = 0x50FF50, colPrimal = 0xFF4646, colBonus = 0x5AE6FF;  // 0xRRGGBB
+};
+
 struct MinimapLayout {
     MinimapLayout();
+    LabelStyle labels;
     bool onGameMap = true;       // dots only, over the game's minimap (else own disc, bottom-right)
     float rightOffset = 0.110f;  // centre distance from the right edge / window height
     float topOffset = 0.115f;    // centre distance from the top edge / window height
@@ -140,6 +151,7 @@ private:
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
     void DrawMinimapSettings();
     void DrawHotkeySettings();
+    void DrawLabelSettings();
     bool hotkeysDirty_ = true;
     bool captureReady_ = false;  // no key held since the capture began
     int captureHotkey_ = -1;  // hotkey action waiting for a key press, or -1
