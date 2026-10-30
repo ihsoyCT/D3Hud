@@ -158,7 +158,10 @@ typedef struct d3h_setting_desc {
     double def, min, max; /* bool/int/float/choice/color (color: 0xRRGGBB) */
     const char* def_string; /* strings */
     const char* choices;
+    uint32_t flags; /* D3H_SETTING_HIDDEN: stored, but no control in the plugin's page (state a plugin keeps) */
 } d3h_setting_desc;
+
+enum { D3H_SETTING_HIDDEN = 1 };
 
 /* ---- Panels, pages, hotkeys ------------------------------------------------------------- */
 

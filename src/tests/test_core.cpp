@@ -21,6 +21,8 @@
 #include "SceneCells.h"
 #include "SceneTable.h"
 #include "HostApi.h"
+#include "LuaPlugin.h"
+#include "PluginSettings.h"
 #include "Settings.h"
 #include "SnapshotInterp.h"
 #include "SnoTable.h"
@@ -505,6 +507,251 @@ static void TestSettingsTable() {
     fs::remove_all(dir, ec);
 }
 
+// ---- plugins: settings store, Lua sandbox, the time tracker plugin ----------------------------------
+
+namespace fake {
+struct Sub { d3h_event_fn fn; void* user; };
+struct Page { std::string id, title, group; d3h_draw_fn draw; void* user; };
+struct State {
+    PluginSettings settings;
+    std::vector<std::pair<int32_t, Sub>> subs;
+    std::vector<Page> pages;
+    std::vector<std::string> logs, drawn, lines;
+    d3h_frame frame{};
+    int comboPick = 0;  // 0 = leave the combo alone, else the 1-based index to choose
+    void Reset() { *this = State(); frame.size = sizeof(frame); frame.rift_timer_fraction = -1.f; frame.hovered_item = -1; }
+};
+State g;
+
+std::string Key(const char* k) { return *CurrentPluginName() + "." + k; }
+
+void Log(int32_t, const char* m) { g.logs.emplace_back(m); }
+void GetFrame(d3h_frame* out) { *out = g.frame; }
+d3h_bool GetActor(uint32_t, d3h_actor*) { return 0; }
+void Subscribe(int32_t type, d3h_event_fn fn, void* user) { g.subs.push_back({type, {fn, user}}); }
+void DrawText(int32_t, d3h_vec2, d3h_color, const char* t, float) { g.drawn.emplace_back(t); }
+d3h_bool RegisterPage(const d3h_page_desc* d) {
+    g.pages.push_back({d->id, d->title, d->group, d->draw, d->user});
+    return 1;
+}
+d3h_bool Define(const d3h_setting_desc* d) { return g.settings.Define(*CurrentPluginName(), *d); }
+d3h_bool GetBool(const char* k, d3h_bool* o) { double v; if (!g.settings.GetNumber(Key(k), v)) return 0; *o = v != 0; return 1; }
+d3h_bool GetInt(const char* k, int32_t* o) { double v; if (!g.settings.GetNumber(Key(k), v)) return 0; *o = static_cast<int32_t>(v); return 1; }
+d3h_bool GetFloat(const char* k, float* o) { double v; if (!g.settings.GetNumber(Key(k), v)) return 0; *o = static_cast<float>(v); return 1; }
+d3h_bool GetColor(const char* k, d3h_color* o) { double v; if (!g.settings.GetNumber(Key(k), v)) return 0; *o = static_cast<d3h_color>(v); return 1; }
+d3h_bool GetString(const char* k, char* o, size_t n) {
+    std::string v;
+    if (!g.settings.GetString(Key(k), v) || n == 0) return 0;
+    strncpy_s(o, n, v.c_str(), _TRUNCATE);
+    return 1;
+}
+d3h_bool SetValue(const char* k, double v) { (void)g.settings.SetNumber(Key(k), v); return 1; }
+d3h_bool SetString(const char* k, const char* v) { (void)g.settings.SetString(Key(k), v); return 1; }
+
+d3h_host MakeHost() {
+    d3h_host h{};
+    h.size = sizeof(h);
+    h.api_version = D3H_API_VERSION;
+    h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.subscribe = Subscribe; h.draw_text = DrawText;
+    h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
+    h.get_float = GetFloat; h.get_color = GetColor; h.get_string = GetString; h.set_value = SetValue; h.set_string = SetString;
+    return h;
+}
+
+// A ui that records the text and answers the combo with g.comboPick.
+void UText(const char* t) { g.lines.emplace_back(t); }
+void UNone() {}
+d3h_bool UCombo(const char*, int32_t* idx, const char*) {
+    if (g.comboPick == 0) return 0;
+    *idx = g.comboPick - 1;
+    return 1;
+}
+d3h_bool UInput(const char*, char*, size_t) { return 0; }
+d3h_bool UButton(const char*) { return 0; }
+d3h_bool UCheckbox(const char*, d3h_bool*) { return 0; }
+d3h_ui MakeUi() {
+    d3h_ui u{};
+    u.size = sizeof(u);
+    u.text = UText; u.text_disabled = UText; u.separator = UNone; u.separator_text = UText;
+    u.same_line = UNone; u.spacing = UNone; u.button = UButton; u.checkbox = UCheckbox; u.combo = UCombo;
+    u.input_text = UInput;
+    return u;
+}
+
+void Fire(int32_t type, int32_t index = -1, int64_t value = 0, const char* text = nullptr) {
+    d3h_event ev{sizeof(ev), type, index, value, text};
+    for (const auto& s : std::vector<std::pair<int32_t, Sub>>(g.subs))
+        if (s.first == type) s.second.fn(&ev, s.second.user);
+}
+void DrawPages() {
+    const d3h_ui ui = MakeUi();
+    for (const Page& p : g.pages) p.draw(&ui, p.user);
+}
+}  // namespace fake
+
+static std::filesystem::path WritePlugin(const std::filesystem::path& root, const char* folder, const std::string& mainLua,
+                                         const char* manifest = "return { name = 'testplugin', version = '1', api = 1 }") {
+    namespace fs = std::filesystem;
+    const fs::path dir = root / folder;
+    fs::create_directories(dir);
+    File m = OpenFile(dir / L"plugin.lua", L"wb");
+    fwrite(manifest, 1, strlen(manifest), m);
+    File s = OpenFile(dir / L"main.lua", L"wb");
+    fwrite(mainLua.data(), 1, mainLua.size(), s);
+    return dir;
+}
+
+static void TestPluginSettings() {
+    PluginSettings s;
+    d3h_setting_desc d{};
+    d.size = sizeof(d);
+    d.key = "level"; d.type = D3H_SETTING_INT; d.min = 1; d.max = 5; d.def = 3;
+    CHECK(s.Define("p", d));
+    double v = 0;
+    CHECK(s.GetNumber("p.level", v) && v == 3);
+    CHECK(s.SetNumber("p.level", 99) && s.GetNumber("p.level", v) && v == 5);  // clamped
+    CHECK(!s.SetNumber("p.unknown", 1) && !s.GetNumber("q.level", v));
+    d.key = "name"; d.type = D3H_SETTING_STRING; d.def_string = "x";
+    CHECK(s.Define("p", d));
+    CHECK(s.SetString("p.name", "line1\nline2\\end"));
+
+    // a value stored before the plugin defines the key survives and is applied (within the limits)
+    PluginSettings t;
+    t.LoadText(s.SaveText() + "p.later=7\n");
+    d.key = "level"; d.type = D3H_SETTING_INT;
+    CHECK(t.Define("p", d) && t.GetNumber("p.level", v) && v == 5);
+    d.key = "name"; d.type = D3H_SETTING_STRING;
+    CHECK(t.Define("p", d));
+    std::string str;
+    CHECK(t.GetString("p.name", str) && str == "line1\nline2\\end");
+    d.key = "later"; d.type = D3H_SETTING_FLOAT; d.min = 0; d.max = 10; d.def = 1;
+    CHECK(t.Define("p", d) && t.GetNumber("p.later", v) && v == 7);
+    d.type = D3H_SETTING_BOOL;
+    CHECK(!t.Define("p", d));  // same key, other type
+    CHECK(t.Of("p").size() == 3);
+}
+
+static void TestLuaSandbox() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_é";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto load = [&](const char* folder, const std::string& code, const char* manifest = nullptr) {
+        const fs::path dir = manifest ? WritePlugin(root, folder, code, manifest) : WritePlugin(root, folder, code);
+        err.clear();
+        return LuaPlugin::Load(dir, host, err);
+    };
+
+    CHECK(load("ok", "assert(os == nil and io == nil and require == nil and dofile == nil and loadfile == nil and load == nil "
+                     "and debug == nil and package == nil and collectgarbage == nil and print == nil)\n"
+                     "assert(string.dump == nil and d3hud.api == 1)\n"
+                     "assert(string.format('%d', 3) == '3' and math.floor(2.5) == 2 and #table.concat({'a','b'}) == 2)") != nullptr);
+    CHECK(err.empty());
+
+    CHECK(load("syntax", "this is not lua") == nullptr && !err.empty());
+    CHECK(load("loop", "while true do end") == nullptr && err.find("instructions") != std::string::npos);
+    CHECK(load("memory", "local t = {} for i = 1, 1e7 do t[i] = string.rep('x', 4096) .. i end") == nullptr);
+    CHECK(load("global", "x = 1\nassert(x == 1)") != nullptr);  // globals live in the plugin's own environment
+    CHECK(load("badname", "", "return { name = '../evil', api = 1 }") == nullptr);
+    CHECK(load("badapi", "", "return { name = 'x', api = 99 }") == nullptr && err.find("api") != std::string::npos);
+    CHECK(load("manifestglobals", "", "return { name = os.getenv('PATH'), api = 1 }") == nullptr);
+    CHECK(load("nomanifest", "", "this is not a table") == nullptr);
+    (void)WritePlugin(root, "nomain", "");
+    fs::remove(root / L"nomain" / L"main.lua");
+    CHECK(LuaPlugin::Load(root / L"nomain", host, err) == nullptr && err.find("main.lua") != std::string::npos);
+
+    // errors are counted, logged with the plugin's name, and switch the plugin off after kMaxErrors
+    fake::g.Reset();
+    auto bad = load("bad", "d3hud.on('frame', function() error('boom') end)");
+    CHECK(bad != nullptr);
+    for (int i = 0; i < LuaPlugin::kMaxErrors + 3; ++i) fake::Fire(D3H_EVENT_FRAME);
+    CHECK(bad->disabled() && bad->errorCount() == LuaPlugin::kMaxErrors);
+    CHECK(!fake::g.logs.empty() && fake::g.logs[0].find("[testplugin]") == 0 && fake::g.logs[0].find("boom") != std::string::npos);
+
+    // events carry their data; settings round trip through the host
+    fake::g.Reset();
+    auto ok = load("events", "d3hud.setting{ key = 'n', type = 'int', default = 2, min = 0, max = 9 }\n"
+                             "d3hud.setting{ key = 'c', type = 'choice', default = 2, choices = {'a','b','c'} }\n"
+                             "d3hud.on('world_change', function(ev) d3hud.set('n', ev.value) end)\n"
+                             "d3hud.on('hotkey', function(ev) d3hud.set('c', 3); d3hud.log(ev.text .. d3hud.get('c') .. d3hud.get('n')) end)");
+    CHECK(ok != nullptr);
+    double v = 0;
+    CHECK(fake::g.settings.GetNumber("testplugin.c", v) && v == 1);  // Lua default 2 is index 1
+    fake::Fire(D3H_EVENT_WORLD_CHANGE, -1, 42);
+    CHECK(fake::g.settings.GetNumber("testplugin.n", v) && v == 9);  // clamped by the host
+    fake::Fire(D3H_EVENT_HOTKEY, -1, 0, "go");
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "go39");
+    fs::remove_all(root, ec);
+}
+
+// Runs plugins/timetracker against the fake host: classification, percentages, persistence.
+static void TestTimeTracker() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"timetracker", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "timetracker: %s\n", err.c_str());
+        return;
+    }
+    CHECK(p->manifest().name == "timetracker" && fake::g.pages.size() == 1);
+
+    auto tick = [&](double ms, uint32_t world, uint32_t uiFlags = 0) {
+        fake::g.frame.time_ms = ms;
+        fake::g.frame.world_sno = world;
+        fake::g.frame.ui_flags = uiFlags;
+        fake::Fire(D3H_EVENT_SNAPSHOT);
+    };
+    // 10 s in an unassigned world, then assign it to Town and stay 20 s, 30 s in a rift, a stall that is not
+    // counted, 10 s in a greater rift
+    double t = 0;
+    for (int i = 0; i <= 10; ++i, t += 1000) tick(t, 1000);
+    fake::g.comboPick = 1;  // "Town" is the first area
+    fake::DrawPages();
+    fake::g.comboPick = 0;
+    for (int i = 0; i < 20; ++i, t += 1000) tick(t, 1000);
+    for (int i = 0; i < 30; ++i, t += 1000) tick(t, 2000, D3H_UI_RIFT);
+    t += 20000;
+    tick(t, 2000);  // after the stall only the reference time moves
+    for (int i = 0; i < 10; ++i) {
+        t += 1000;
+        tick(t, 2000, D3H_UI_RIFT | D3H_UI_GREATER_RIFT);
+    }
+
+    std::string totals;
+    CHECK(fake::g.settings.GetString("timetracker.totals", totals));
+    CHECK(totals.find("Town=") != std::string::npos && totals.find("Rift=") != std::string::npos);  // saved every 30 s
+
+    fake::g.lines.clear();
+    fake::DrawPages();
+    std::string page;
+    for (const std::string& l : fake::g.lines) page += l + "\n";
+    CHECK(page.find("This session") != std::string::npos && page.find("All time") != std::string::npos);
+    CHECK(page.find("Town") != std::string::npos && page.find("Greater Rift") != std::string::npos);
+    // session: Other 10 s, Town 20 s, Rift 30 s, Greater Rift 10 s, together 70 s
+    CHECK(page.find("42.9%") != std::string::npos);  // Rift 30 / 70
+    CHECK(page.find("total 0:01:10") != std::string::npos);
+    CHECK(!p->disabled());
+
+    // the totals survive a restart: a new plugin instance reads them from the stored setting
+    fake::g.subs.clear();
+    fake::g.pages.clear();
+    p.reset();
+    p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"timetracker", host, err);
+    CHECK(p != nullptr);
+    fake::g.lines.clear();
+    fake::DrawPages();
+    page.clear();
+    for (const std::string& l : fake::g.lines) page += l + "\n";
+    CHECK(page.find("nothing recorded yet") != std::string::npos);  // this session is empty again ...
+    CHECK(page.find("Town") != std::string::npos);                  // ... but the all-time table is not
+}
+
 static void TestPaths() {
     namespace fs = std::filesystem;
     const fs::path exe = ExePath();
@@ -839,6 +1086,9 @@ int main() {
     TestPaths();
     TestSettingsTable();
     TestHostApi();
+    TestPluginSettings();
+    TestLuaSandbox();
+    TestTimeTracker();
     TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();
