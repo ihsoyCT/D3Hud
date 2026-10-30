@@ -139,6 +139,18 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
         else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
         else if (!strcmp(key, "uiScale")) uiScale = std::clamp(v, 0.5f, 3.0f);
+        else if (!strncmp(key, "salvage.", 8)) {
+            const char* k = key + 8;
+            if (!strcmp(k, "rarityMask")) salvageRules.rarityMask = static_cast<uint32_t>(v) & 0x1F;
+            else if (!strcmp(k, "keepAncient")) salvageRules.keepAncient = v != 0.f;
+            else if (!strcmp(k, "keepPrimal")) salvageRules.keepPrimal = v != 0.f;
+            else if (!strcmp(k, "neverFamilies")) salvageRules.neverFamilies = static_cast<uint32_t>(v) & ((1u << kGearFamilyCount) - 1);
+            else if (!strcmp(k, "maxPerRun")) salvageRules.maxPerRun = std::max(0, static_cast<int>(v));
+            else if (!strcmp(k, "extraDelayMs")) salvageRules.extraDelayMs = std::clamp(static_cast<int>(v), 0, 2000);
+            else if (!strcmp(k, "confirm")) salvageConfirm = v != 0.f;
+            else if (!strcmp(k, "preview")) salvagePreview = v != 0.f;
+            else if (!strcmp(k, "previewRgb")) salvagePreviewRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
+        }
         else if (!strcmp(key, "dockCorner")) dockCorner = std::clamp(static_cast<int>(v), 0, 3);
         else if (!strcmp(key, "dockAlpha")) dockAlpha = std::clamp(v, 0.f, 1.f);
         else if (!strcmp(key, "dockAutoHide")) dockAutoHide = v != 0.f;
@@ -241,6 +253,10 @@ bool MinimapLayout::Save(const char* path) const {
         std::print(f, "panel.{0}.pinned={1}\npanel.{0}.hidden={2}\npanel.{0}.x={3:.4f}\npanel.{0}.y={4:.4f}\n"
                       "panel.{0}.w={5:.4f}\npanel.{0}.h={6:.4f}\n",
                    kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i], panelW[i], panelH[i]);
+    std::print(f, "salvage.rarityMask={}\nsalvage.keepAncient={}\nsalvage.keepPrimal={}\nsalvage.neverFamilies={}\nsalvage.maxPerRun={}\nsalvage.extraDelayMs={}\n",
+               salvageRules.rarityMask, salvageRules.keepAncient ? 1 : 0, salvageRules.keepPrimal ? 1 : 0,
+               salvageRules.neverFamilies, salvageRules.maxPerRun, salvageRules.extraDelayMs);
+    std::print(f, "salvage.confirm={}\nsalvage.preview={}\nsalvage.previewRgb={}\n", salvageConfirm ? 1 : 0, salvagePreview ? 1 : 0, salvagePreviewRgb);
     std::print(f, "uiScale={:.2f}\ndockCorner={}\ndockAlpha={:.2f}\ndockAutoHide={}\npanelAlpha={:.2f}\ncompact={}\n",
                uiScale, dockCorner, dockAlpha, dockAutoHide ? 1 : 0, panelAlpha, compact ? 1 : 0);
     for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
@@ -1192,11 +1208,11 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
         const ItemSnapshot& it = snap.items[i];
         if (!IsSalvageCandidate(it, safe, layout_.salvageRules, snap.items, snap.itemCount)) continue;
         ++candidates;
-        if (!snap.ui.salvageOpen) continue;
+        if (!snap.ui.salvageOpen || !layout_.salvagePreview) continue;
         UiRect ui;
         if (!ItemScreenRect(snap.ui, it.location, it.gridX, it.gridY, it.height, &ui)) continue;
         const UiRect r = UiToScreen(ui, display.x, display.y);
-        const ImU32 red = IM_COL32(255, 50, 50, 210);
+        const ImU32 red = Rgba(layout_.salvagePreviewRgb, 210);
         dl->AddRect(ImVec2(r.x0 + 2, r.y0 + 2), ImVec2(r.x1 - 2, r.y1 - 2), red, 0.f, 0, 2.0f);
         const float m = std::min(r.x1 - r.x0, r.y1 - r.y0) * 0.25f;
         const ImVec2 c((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f);
@@ -1222,7 +1238,16 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
         } else if (candidates > 0) {
             char label[48];
             snprintf(label, sizeof(label), "Salvage %d item(s)", candidates);
-            if (ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f))) st.startClicked = true;
+            const bool armed = layout_.salvageConfirm && ImGui::GetTime() < salvageArmedUntil_;
+            if (armed) snprintf(label, sizeof(label), "Click again: salvage %d!", candidates);
+            if (ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f))) {
+                if (!layout_.salvageConfirm || armed) {
+                    st.startClicked = true;
+                    salvageArmedUntil_ = 0.0;
+                } else {
+                    salvageArmedUntil_ = ImGui::GetTime() + 4.0;  // confirm within 4 s
+                }
+            }
         } else {
             ImGui::TextDisabled("nothing to salvage");
         }
@@ -1239,13 +1264,59 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
 // Settings > Auto salvage: what is protected and where (the button itself lives
 // at the blacksmith).
 void HudRenderer::DrawSalvageSettings() {
+    SalvageRules& R = layout_.salvageRules;
+    bool ch = false;
     ImGui::Checkbox("edit safe area", &editSafeArea_);
     ImGui::SameLine();
-    ImGui::TextDisabled("(open the inventory, click backpack cells)");
-    if (ImGui::Checkbox("keep ancient/primal of equipped", &layout_.salvageRules.protectEquippedAncients))
-        layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
-    ImGui::Text("safe cells: %d", layout_.safeArea.Count());
-    ImGui::TextDisabled("The Salvage button appears under the anvil when the\nblacksmith's salvage tab is open.");
+    ImGui::TextDisabled("(open the inventory, click backpack cells; %d safe cells)", layout_.safeArea.Count());
+    ch |= ImGui::Checkbox("keep ancient/primal of equipped", &R.protectEquippedAncients);
+    ch |= ImGui::Checkbox("keep every ancient", &R.keepAncient);
+    ImGui::SameLine();
+    ch |= ImGui::Checkbox("keep every primal", &R.keepPrimal);
+
+    ImGui::SeparatorText("Rarities that may be salvaged");
+    static const char* kRarities[5] = {"Common", "Magic", "Rare", "Legendary", "Set"};
+    for (int i = 0; i < 5; ++i) {
+        bool on = ((R.rarityMask >> i) & 1) != 0;
+        if (ImGui::Checkbox(kRarities[i], &on)) {
+            R.rarityMask = on ? (R.rarityMask | (1u << i)) : (R.rarityMask & ~(1u << i));
+            ch = true;
+        }
+        if (i < 4) ImGui::SameLine();
+    }
+
+    ImGui::SeparatorText("Never salvage these item types");
+    for (int f = 0; f < kGearFamilyCount; ++f) {
+        bool never = ((R.neverFamilies >> f) & 1) != 0;
+        if (ImGui::Checkbox(GearFamilyName(f), &never)) {
+            R.neverFamilies = never ? (R.neverFamilies | (1u << f)) : (R.neverFamilies & ~(1u << f));
+            ch = true;
+        }
+        if (f % 5 != 4 && f + 1 < kGearFamilyCount) ImGui::SameLine();
+    }
+
+    ImGui::SeparatorText("Run safety");
+    ch |= ImGui::Checkbox("confirm before starting (click the anvil button twice)", &layout_.salvageConfirm);
+    ImGui::SliderInt("max items per run (0 = no limit)", &R.maxPerRun, 0, 100);
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SliderInt("extra delay between clicks (ms)", &R.extraDelayMs, 0, 500);
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+
+    ImGui::SeparatorText("Preview");
+    ch |= ImGui::Checkbox("mark items a run would salvage", &layout_.salvagePreview);
+    {
+        float c[3] = {((layout_.salvagePreviewRgb >> 16) & 255) / 255.f, ((layout_.salvagePreviewRgb >> 8) & 255) / 255.f,
+                      (layout_.salvagePreviewRgb & 255) / 255.f};
+        ImGui::SameLine();
+        if (ImGui::ColorEdit3("mark colour", c, ImGuiColorEditFlags_NoInputs)) {
+            layout_.salvagePreviewRgb = (static_cast<uint32_t>(c[0] * 255.f + 0.5f) << 16) |
+                                        (static_cast<uint32_t>(c[1] * 255.f + 0.5f) << 8) |
+                                        static_cast<uint32_t>(c[2] * 255.f + 0.5f);
+            ch = true;
+        }
+    }
+    ImGui::TextDisabled("The Salvage button appears under the anvil when the blacksmith's salvage tab is open.");
+    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
 }
 
 // Two columns: the panels on the left, the selected one's settings on the right.

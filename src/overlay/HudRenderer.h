@@ -85,6 +85,9 @@ struct MinimapLayout {
     bool dockAutoHide = false;       // dock shows only near the cursor or while a panel is open
     float panelAlpha = 0.94f;        // panel background opacity
     bool compact = false;            // tighter padding and spacing
+    bool salvageConfirm = false;     // the anvil button needs a second click before a run starts
+    bool salvagePreview = true;      // red marks on items a run would destroy
+    uint32_t salvagePreviewRgb = 0xFF3232;
 
     // global hotkeys (virtual-key codes, 0 = unbound); ids 1.. in main.cpp
     enum HotkeyAction { kHkClickThrough, kHkPanels, kHkQuit, kHkMapOrientation, kHkPanelFirst /* + PanelId */ };
@@ -170,6 +173,7 @@ private:
     bool profilesDirty_ = true;
     char profileName_[32] = {};
     bool hotkeysDirty_ = true;
+    double salvageArmedUntil_ = 0.0;  // first click of a confirmed salvage start
     bool captureReady_ = false;  // no key held since the capture began
     int captureHotkey_ = -1;  // hotkey action waiting for a key press, or -1
     void DrawSalvageSettings();

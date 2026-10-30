@@ -393,6 +393,38 @@ static void TestSalvageRules() {
     CHECK(IsSalvageCandidate(it, safe, rules, nullptr, 0));
     rules.protectEquippedAncients = false;
     CHECK(IsSalvageCandidate(it, safe, rules, worn, n));  // rule disabled
+
+    // rarity mask, ancient/primal keeps, never-salvage families
+    ItemSnapshot g;
+    g.location = kItemLocationBackpack;
+    g.gridX = 5;  // outside the safe cells above
+    g.rarity = ItemRarity::Rare;
+    strcpy_s(g.typeName, "Boots");
+    strcpy_s(g.name, "Plain Boots");
+    SalvageRules r2;
+    CHECK(IsSalvageCandidate(g, safe, r2, nullptr, 0));
+    r2.rarityMask &= ~(1u << static_cast<int>(ItemRarity::Rare));
+    CHECK(!IsSalvageCandidate(g, safe, r2, nullptr, 0));  // rares excluded
+    g.rarity = ItemRarity::Legendary;
+    CHECK(IsSalvageCandidate(g, safe, r2, nullptr, 0));
+    r2 = SalvageRules();
+    r2.keepAncient = true;
+    g.ancient = true;
+    CHECK(!IsSalvageCandidate(g, safe, r2, nullptr, 0));
+    g.ancient = false;
+    r2 = SalvageRules();
+    r2.keepPrimal = true;
+    g.primal = true;
+    CHECK(!IsSalvageCandidate(g, safe, r2, nullptr, 0));
+    g.primal = false;
+    CHECK(IsSalvageCandidate(g, safe, r2, nullptr, 0));
+    r2 = SalvageRules();
+    r2.neverFamilies = 1u << GearFamily("Boots");
+    CHECK(!IsSalvageCandidate(g, safe, r2, nullptr, 0));
+    strcpy_s(g.typeName, "Ring");
+    CHECK(IsSalvageCandidate(g, safe, r2, nullptr, 0));  // only boots are protected
+    CHECK(GearFamily("Helm_Necromancer") == GearFamily("Helm") && GearFamily("Ring") != GearFamily("Amulet"));
+    CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
 }
 
 static void TestShrineLabels() {

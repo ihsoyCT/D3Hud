@@ -98,7 +98,7 @@ void SalvageRunner::Tick(const WorldSnapshot& snap, const SafeArea& safe, const 
             QueueClick(snap.ui.salvageButton, w, h);
             status_ = "anvil";
             step_ = Step::NextItem;
-            nextAt_ = now + 350;
+            nextAt_ = now + 350 + rules.extraDelayMs;
             break;
         case Step::NextItem: {
             // column by column, top to bottom (the order the game lays items out)
@@ -109,9 +109,10 @@ void SalvageRunner::Tick(const WorldSnapshot& snap, const SafeArea& safe, const 
                 if (best == nullptr || it.gridX < best->gridX || (it.gridX == best->gridX && it.gridY < best->gridY))
                     best = &it;
             }
-            if (best == nullptr) {
+            const bool limitReached = rules.maxPerRun > 0 && done_ >= rules.maxPerRun;
+            if (best == nullptr || limitReached) {
                 step_ = Step::Idle;
-                status_ = std::format("done: {} item(s) salvaged", done_);
+                status_ = std::format("done: {} item(s) salvaged{}", done_, limitReached ? " (run limit reached)" : "");
                 return;
             }
             UiRect r;
@@ -122,7 +123,7 @@ void SalvageRunner::Tick(const WorldSnapshot& snap, const SafeArea& safe, const 
             clickedAt_ = now;
             status_ = std::format("salvaging {} ({} done)", best->name, done_);
             step_ = Step::WaitGone;
-            nextAt_ = now + 150;
+            nextAt_ = now + 150 + rules.extraDelayMs;
             break;
         }
         case Step::WaitGone: {
@@ -132,7 +133,7 @@ void SalvageRunner::Tick(const WorldSnapshot& snap, const SafeArea& safe, const 
             if (!present) {
                 ++done_;
                 step_ = Step::NextItem;
-                nextAt_ = now + 120;
+                nextAt_ = now + 120 + rules.extraDelayMs;
             } else if (now - clickedAt_ > kItemTimeoutMs) {
                 Stop("an item did not salvage (salvage cursor lost?)");
             }

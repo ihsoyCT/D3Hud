@@ -38,7 +38,41 @@ struct SalvageRules {
     // equipped piece (a possible upgrade); everything else outside the safe
     // area goes. Non-ancient dupes of worn gear are NOT protected.
     bool protectEquippedAncients = true;
+    // Which rarities may be salvaged: bit per ItemRarity (Common..Set). Default: all.
+    uint32_t rarityMask = 0x1F;
+    bool keepAncient = false;  // never salvage an ancient (or primal) item
+    bool keepPrimal = false;   // never salvage a primal item
+    uint32_t neverFamilies = 0;  // bit per GearFamily: item types that are never salvaged
+    // run safety (used by the runner, not by IsSalvageCandidate)
+    int maxPerRun = 0;       // stop after this many items; 0 = no limit
+    int extraDelayMs = 0;    // added to every wait between clicks
 };
+
+// `type` is `name` or a class variant of it ("Helm" covers "Helm_Necromancer").
+inline bool TypeIs(const char* type, const char* name) {
+    const size_t n = strlen(name);
+    return strncmp(type, name, n) == 0 && (type[n] == '\0' || type[n] == '_');
+}
+
+// Gear grouped by the slot it is worn in, for the "never salvage" setting.
+constexpr int kGearFamilyCount = 13;
+inline const char* GearFamilyName(int f) {
+    static const char* kNames[kGearFamilyCount] = {"Helm", "Chest", "Shoulders", "Gloves", "Bracers", "Belt", "Legs",
+                                                   "Boots", "Cloak", "Ring", "Amulet", "Off-hand", "Weapon"};
+    return f >= 0 && f < kGearFamilyCount ? kNames[f] : "?";
+}
+inline int GearFamily(const char* type) {
+    struct Entry { const char* name; int family; };
+    static const Entry kMap[] = {
+        {"Helm", 0}, {"GenericHelm", 0}, {"WizardHat", 0}, {"VoodooMask", 0}, {"SpiritStone_Monk", 0},
+        {"ChestArmor", 1}, {"GenericChestArmor", 1}, {"Shoulders", 2}, {"Gloves", 3}, {"Bracers", 4},
+        {"Belt", 5}, {"GenericBelt", 5}, {"Legs", 6}, {"Boots", 7}, {"Cloak", 8}, {"Ring", 9}, {"Amulet", 10},
+        {"Shield", 11}, {"CrusaderShield", 11}, {"Mojo", 11}, {"Orb", 11}, {"Quiver", 11}, {"NecromancerOffhand", 11},
+        {"TemplarSpecial", 11}, {"ScoundrelSpecial", 11}, {"EnchantressSpecial", 11}};
+    for (const Entry& e : kMap)
+        if (TypeIs(type, e.name)) return e.family;
+    return 12;  // everything else that is gear: weapons
+}
 
 // Gear item types (internal type names, items_gbid.tsv). A listed name matches
 // itself and its class variants: "Helm" covers "Helm_Necromancer".
@@ -86,6 +120,11 @@ inline bool IsSalvageCandidate(const ItemSnapshot& it, const SafeArea& safe, con
     if (it.rarity == ItemRarity::Unknown || it.bonus) return false;  // never destroy the unknown
     if (!IsGearType(it.typeName)) return false;
     if (InSafeArea(safe, it)) return false;
+    const int rarity = static_cast<int>(it.rarity);
+    if (rarity < 0 || rarity > 4 || ((rules.rarityMask >> rarity) & 1) == 0) return false;
+    if (rules.keepPrimal && it.primal) return false;
+    if (rules.keepAncient && (it.ancient || it.primal)) return false;
+    if ((rules.neverFamilies >> GearFamily(it.typeName)) & 1) return false;
     if (rules.protectEquippedAncients && IsEquippedUpgrade(it, items, itemCount)) return false;
     return true;  // identified or not: type and ancient rank are revealed
 }
