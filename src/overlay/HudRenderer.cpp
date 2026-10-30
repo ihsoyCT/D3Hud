@@ -1,0 +1,995 @@
+#include "HudRenderer.h"
+
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
+#include <print>
+#include <vector>
+
+#include "imgui.h"
+#include "imgui_internal.h"
+
+namespace d3hud {
+namespace {
+
+ImU32 KindColor(ActorKind k) {
+    switch (k) {
+        case ActorKind::Player:    return IM_COL32(255, 255, 255, 255);
+        case ActorKind::Trash:     return IM_COL32(210, 210, 210, 220);
+        case ActorKind::Champion:  return IM_COL32(80, 130, 255, 255);   // blue
+        case ActorKind::Rare:      return IM_COL32(255, 215, 0, 255);    // yellow
+        case ActorKind::Minion:    return IM_COL32(200, 170, 40, 220);
+        case ActorKind::Boss:      return IM_COL32(190, 70, 255, 255);   // purple
+        case ActorKind::Pylon:     return IM_COL32(0, 230, 230, 255);    // cyan
+        case ActorKind::Shrine:    return IM_COL32(80, 255, 120, 255);   // green
+        case ActorKind::Chest:     return IM_COL32(255, 170, 40, 255);
+        case ActorKind::Globe:     return IM_COL32(255, 70, 70, 255);
+        case ActorKind::GroundItem:return IM_COL32(255, 128, 0, 255);    // orange
+        case ActorKind::Portal:    return IM_COL32(255, 60, 220, 255);   // magenta
+        case ActorKind::PylonSpawn:return IM_COL32(0, 230, 230, 150);    // faint cyan
+    }
+    return IM_COL32(255, 255, 255, 255);
+}
+
+float KindRadius(ActorKind k) {
+    switch (k) {
+        case ActorKind::Boss:
+        case ActorKind::Rare:      return 5.0f;
+        case ActorKind::Champion:  return 3.6f;
+        case ActorKind::Minion:    return 2.6f;
+        case ActorKind::Pylon:
+        case ActorKind::Shrine:    return 4.2f;
+        case ActorKind::Portal:    return 5.0f;
+        default:                   return 2.2f;
+    }
+}
+
+// Drop log / world label colour: bonus drops cyan, set green, legendary orange.
+ImU32 DropColor(ItemRarity rarity, bool bonus) {
+    if (bonus) return IM_COL32(90, 230, 255, 255);
+    if (rarity == ItemRarity::Set) return IM_COL32(80, 255, 80, 255);
+    return IM_COL32(255, 140, 25, 255);
+}
+
+}  // namespace
+
+const char* VerdictName(SalvageVerdict v) {
+    switch (v) {
+        case SalvageVerdict::Unknown: return "-";
+        case SalvageVerdict::Junk:    return "JUNK";
+        case SalvageVerdict::Keep:    return "KEEP";
+        case SalvageVerdict::Check:   return "CHECK";
+    }
+    return "?";
+}
+
+bool MinimapLayout::Load(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (f == nullptr) return false;
+    char line[128];
+    while (fgets(line, sizeof(line), f) != nullptr) {
+        char key[64];
+        float v;
+        unsigned long long cells;
+        if (sscanf(line, " safeCells = %llx", &cells) == 1) {
+            safeArea.cells = cells & ((1ull << (kBackpackCols * kBackpackRows)) - 1);
+            continue;
+        }
+        if (sscanf(line, " %63[^=]= %f", key, &v) != 2) continue;
+        if (!strcmp(key, "onGameMap")) onGameMap = v != 0.f;
+        else if (!strcmp(key, "rightOffset")) rightOffset = v;
+        else if (!strcmp(key, "topOffset")) topOffset = v;
+        else if (!strcmp(key, "radius")) radius = v;
+        else if (!strcmp(key, "worldRadius")) worldRadius = v;
+        else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
+        else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
+        else {
+            static const char* kNames[MinimapLayout::kPanelCount] = {"Info", "Drops", "Items", "Actors",
+                                                                     "Settings"};
+            char pname[16], what[16] = {};
+            // panel.<Info|Drops|Items|Actors|Settings>.<pinned|hidden|x|y> = v
+            if (sscanf(key, "panel.%15[^.].%15s", pname, what) == 2) {
+                for (int id = 0; id < MinimapLayout::kPanelCount; ++id) {
+                    if (strcmp(pname, kNames[id]) != 0) continue;
+                    if (!strcmp(what, "pinned")) panelPinned[id] = v != 0.f;
+                    else if (!strcmp(what, "hidden")) panelHidden[id] = v != 0.f;
+                    else if (!strcmp(what, "x")) panelX[id] = v;
+                    else if (!strcmp(what, "y")) panelY[id] = v;
+                    break;
+                }
+            }
+        }
+    }
+    fclose(f);
+    return true;
+}
+
+bool MinimapLayout::Save(const char* path) const {
+    FILE* f = fopen(path, "w");
+    if (f == nullptr) return false;
+    std::print(f, "# D3Hud minimap layout (positions/radius = fraction of window height)\n");
+    std::print(f, "onGameMap={}\nrightOffset={:.4f}\ntopOffset={:.4f}\nradius={:.4f}\nworldRadius={:.1f}\nbeyondRim={}\n",
+            onGameMap ? 1 : 0, rightOffset, topOffset, radius, worldRadius, beyondRim ? 1 : 0);
+    std::print(f, "# auto salvage: safe backpack cells (bit row*10+col), protections\n");
+    std::print(f, "safeCells={:x}\nprotectEquipped={}\n",
+               static_cast<unsigned long long>(safeArea.cells),
+               salvageRules.protectEquippedAncients ? 1 : 0);
+    static const char* kNames[kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
+    std::print(f, "# panels: pinned open, hidden from the dock, position (fraction of window; <0 = docked)\n");
+    for (int i = 0; i < kPanelCount; ++i)
+        std::print(f, "panel.{0}.pinned={1}\npanel.{0}.hidden={2}\npanel.{0}.x={3:.4f}\npanel.{0}.y={4:.4f}\n",
+                   kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i]);
+    fclose(f);
+    return true;
+}
+
+void HudRenderer::SetLayoutPath(const char* path) {
+    strncpy_s(layoutPath_, path, _TRUNCATE);
+    layoutStatus_ = layout_.Load(layoutPath_) ? "loaded" : "defaults (no d3hud.ini yet)";
+}
+
+// Pylon/shrine diamond, portal ring or (outlined) dot in the kind's colour.
+static void DrawMarker(ImDrawList* dl, ActorKind kind, Vec2 px, int alpha) {
+    const ImU32 col = (KindColor(kind) & 0x00FFFFFF) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT);
+    const float r = KindRadius(kind);
+    if (kind == ActorKind::Pylon || kind == ActorKind::Shrine) {
+        dl->AddQuad(ImVec2(px.x, px.y - r), ImVec2(px.x + r, px.y), ImVec2(px.x, px.y + r), ImVec2(px.x - r, px.y),
+                    col, 2.0f);
+    } else if (kind == ActorKind::Portal) {
+        dl->AddCircle(ImVec2(px.x, px.y), r, col, 16, 2.0f);
+    } else {
+        // dark outline keeps dots readable on top of the game's map
+        dl->AddCircleFilled(ImVec2(px.x, px.y), r + 1.0f, IM_COL32(0, 0, 0, 140), 10);
+        dl->AddCircleFilled(ImVec2(px.x, px.y), r, col, 10);
+    }
+}
+
+// One map marker. Unused pylons/shrines get a big filled diamond, a pulsing
+// ring and their name ("Conduit Pylon"); used ones are not drawn at all.
+static void DrawActorMarker(ImDrawList* dl, const ActorSnapshot& a, Vec2 px, int alpha) {
+    if (a.kind == ActorKind::PylonSpawn) {
+        const ImU32 col = IM_COL32(0, 240, 255, 0) | (static_cast<ImU32>(alpha * 3 / 5) << IM_COL32_A_SHIFT);
+        const float r = 6.0f;
+        dl->AddQuad(ImVec2(px.x, px.y - r), ImVec2(px.x + r, px.y), ImVec2(px.x, px.y + r), ImVec2(px.x - r, px.y),
+                    col, 1.5f);
+        dl->AddText(ImVec2(px.x + r + 2.f, px.y - 7.f), col, "pylon?");
+        return;
+    }
+    if (a.kind != ActorKind::Pylon && a.kind != ActorKind::Shrine) {
+        DrawMarker(dl, a.kind, px, alpha);
+        return;
+    }
+    if (a.itemFlags & kActorFlagUsed) return;
+    const bool pylon = a.kind == ActorKind::Pylon;
+    const ImU32 rgb = pylon ? IM_COL32(0, 240, 255, 0) : IM_COL32(80, 255, 120, 0);  // cyan / green
+    const ImU32 col = rgb | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT);
+    const float r = pylon ? 8.0f : 6.0f;
+    const ImVec2 t(px.x, px.y - r), rt(px.x + r, px.y), b(px.x, px.y + r), l(px.x - r, px.y);
+    dl->AddQuadFilled(ImVec2(t.x, t.y - 1.5f), ImVec2(rt.x + 1.5f, rt.y), ImVec2(b.x, b.y + 1.5f),
+                      ImVec2(l.x - 1.5f, l.y), IM_COL32(0, 0, 0, alpha * 3 / 4));
+    dl->AddQuadFilled(t, rt, b, l, col);
+    if (pylon) {
+        const float phase = static_cast<float>(fmod(ImGui::GetTime(), 1.2) / 1.2);  // 0..1
+        const int ringAlpha = static_cast<int>((1.f - phase) * alpha);
+        dl->AddCircle(ImVec2(px.x, px.y), r + 4.f + phase * 14.f, rgb | (static_cast<ImU32>(ringAlpha) << IM_COL32_A_SHIFT),
+                      24, 2.0f);
+    }
+    const char* label = ShrineLabel(a.name);
+    if (label == nullptr) return;
+    const ImVec2 sz = ImGui::CalcTextSize(label);
+    const ImVec2 at(px.x - sz.x * 0.5f, px.y + r + 3.f);
+    dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + sz.x + 3, at.y + sz.y + 1),
+                      IM_COL32(0, 0, 0, alpha * 2 / 3), 3.f);
+    dl->AddText(at, (rgb & 0x00FFFFFF) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT), label);
+}
+
+template <typename ToPx, typename Keep>
+void HudRenderer::DrawScenes(const WorldSnapshot& snap, ImDrawList* dl, ToPx toPx, Keep keep) {
+    const ImU32 kFill = IM_COL32(175, 190, 215, 55);
+    const ImU32 kEntranceFill = IM_COL32(90, 230, 120, 75), kExitFill = IM_COL32(255, 140, 40, 95);
+    const uint32_t n = std::min<uint32_t>(snap.sceneCount, kMaxScenes);
+    for (uint32_t s = 0; s < n; ++s) {
+        const SceneSnapshot& sc = snap.scenes[s];
+        // whole scene off the map: skip its cells
+        const Vec2 mid{(sc.x0 + sc.x1) * 0.5f, (sc.y0 + sc.y1) * 0.5f};
+        if (!keep(mid, std::max(sc.x1 - sc.x0, sc.y1 - sc.y0))) continue;
+        const std::vector<CellRect>* cells = sceneCells_.Find(sc.sno);
+        if (cells == nullptr) continue;
+        // level entrance / exit tiles (rift exits: the next-level portal spawns there)
+        const uint32_t role = sceneCells_.Flags(sc.sno);
+        const ImU32 fill = (role & kSceneExit) ? kExitFill : (role & kSceneEntrance) ? kEntranceFill : kFill;
+        for (const CellRect& c : *cells) {
+            const Vec2 a{sc.x0 + c.x0, sc.y0 + c.y0}, b{sc.x0 + c.x1, sc.y0 + c.y1};
+            if (!keep({(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f}, 0.f)) continue;
+            // a world-axis rectangle is a rotated quad on the (isometric) map
+            const Vec2 p0 = toPx(a), p1 = toPx({b.x, a.y}), p2 = toPx(b), p3 = toPx({a.x, b.y});
+            dl->AddQuadFilled(ImVec2(p0.x, p0.y), ImVec2(p1.x, p1.y), ImVec2(p2.x, p2.y), ImVec2(p3.x, p3.y), fill);
+        }
+        if (role != 0 && keep(mid, 0.f)) {
+            const char* label = (role & kSceneExit) ? "Exit" : "Entrance";
+            const Vec2 c = toPx(mid);
+            const ImVec2 sz = ImGui::CalcTextSize(label);
+            const ImVec2 at(c.x - sz.x * 0.5f, c.y - sz.y * 0.5f);
+            dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + sz.x + 3, at.y + sz.y + 1),
+                              IM_COL32(0, 0, 0, 150), 3.f);
+            dl->AddText(at, (fill & 0x00FFFFFF) | IM_COL32(0, 0, 0, 255), label);
+        }
+    }
+}
+
+// While the game's TAB map is open: the same markers on it (centred on the
+// window, H/1200 px per world unit, following the map's pan offset).
+void HudRenderer::DrawBigMap(const WorldSnapshot& snap, const HudOptions& opt) {
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    auto toPx = [&](Vec2 w) {
+        return WorldToBigMap(w, snap.playerPos, snap.ui.bigMapPan, display.x, display.y, opt.mapOrientation);
+    };
+    DrawScenes(snap, dl, toPx, [&](Vec2 w, float slack) {
+        const Vec2 p = toPx(w);
+        const float m = slack * display.y / 1200.0f;  // world size -> px
+        return p.x > -m && p.y > -m && p.x < display.x + m && p.y < display.y + m;
+    });
+    for (uint16_t i = 0; i < snap.actorCount; ++i) {
+        const ActorSnapshot& a = snap.actors[i];
+        if (a.kind == ActorKind::Player) continue;  // the game marks the player itself
+        const Vec2 px = WorldToBigMap(a.world, snap.playerPos, snap.ui.bigMapPan, display.x, display.y,
+                                      opt.mapOrientation);
+        if (px.x < 0.f || px.y < 0.f || px.x > display.x || px.y > display.y) continue;
+        DrawActorMarker(dl, a, px, 255);
+    }
+}
+
+void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) {
+    if (snap.ui.bigMapOpen) {
+        DrawBigMap(snap, opt);
+        return;
+    }
+    const ImGuiIO& io = ImGui::GetIO();
+    const float h = io.DisplaySize.y;
+    float radiusPx, cx, cy;
+    if (layout_.onGameMap) {
+        radiusPx = layout_.radius * h;
+        cx = io.DisplaySize.x - layout_.rightOffset * h;
+        cy = layout_.topOffset * h;
+    } else {  // own minimap, bottom-right
+        radiusPx = std::max(layout_.radius * h, 60.0f) * 1.2f;
+        cx = io.DisplaySize.x - radiusPx - 24.0f;
+        cy = io.DisplaySize.y - radiusPx - 24.0f;
+    }
+    const float unitsPerPx = layout_.worldRadius / std::max(radiusPx, 1.0f);
+    const ImVec2 c(cx, cy);
+    const Vec2 center = {cx, cy};
+    // background layer: under the panels, over nothing else (the window is transparent)
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+
+    if (!layout_.onGameMap) {
+        dl->AddCircleFilled(c, radiusPx, IM_COL32(10, 12, 20, 150), 48);
+        dl->AddCircle(c, radiusPx, IM_COL32(200, 200, 220, 90), 48, 1.5f);
+        dl->AddCircle(c, radiusPx * 0.5f, IM_COL32(200, 200, 220, 45), 40, 1.0f);
+    } else if (opt.inputInteractive) {
+        // calibration aid: show the circle we think the game's minimap covers
+        dl->AddCircle(c, radiusPx, IM_COL32(255, 255, 255, 140), 64, 1.5f);
+        dl->AddLine(ImVec2(cx - 6, cy), ImVec2(cx + 6, cy), IM_COL32(255, 255, 255, 160));
+        dl->AddLine(ImVec2(cx, cy - 6), ImVec2(cx, cy + 6), IM_COL32(255, 255, 255, 160));
+    }
+
+    // Map prediction under the markers: walkable cells inside the circle only.
+    auto toPx = [&](Vec2 w) {
+        Vec2 px;
+        WorldToMinimap(w, snap.playerPos, unitsPerPx, center, 1e9f, &px, nullptr, opt.mapOrientation);
+        return px;
+    };
+    DrawScenes(snap, dl, toPx, [&](Vec2 w, float slack) {
+        const float dx = w.x - snap.playerPos.x, dy = w.y - snap.playerPos.y;
+        const float r = layout_.worldRadius + slack;
+        return dx * dx + dy * dy <= r * r;
+    });
+
+    // Actors: inside the circle at full strength; beyond the rim (optional) at
+    // their true scaled position anywhere on screen, faded.
+    for (uint16_t i = 0; i < snap.actorCount; ++i) {
+        const ActorSnapshot& a = snap.actors[i];
+        if (a.kind == ActorKind::Player) continue;  // the centre marker is the player
+        Vec2 px;
+        const bool inside = WorldToMinimap(a.world, snap.playerPos, unitsPerPx, center, radiusPx, &px,
+                                           nullptr, opt.mapOrientation);
+        if (!inside) {
+            if (!layout_.beyondRim) continue;
+            WorldToMinimap(a.world, snap.playerPos, unitsPerPx, center, 1e9f, &px, nullptr,
+                           opt.mapOrientation);
+        }
+        DrawActorMarker(dl, a, px, inside ? 255 : 170);
+    }
+
+    // Player arrow (own minimap only - the game's minimap draws its own player marker).
+    if (!layout_.onGameMap) {
+        const Vec2 dir = OrientForMap({std::cos(snap.playerHeading), std::sin(snap.playerHeading)},
+                                      opt.mapOrientation);
+        const float ang = -std::atan2(dir.y, dir.x);
+        const float s = 7.0f;
+        const ImVec2 tip(cx + s * 1.6f * std::cos(ang), cy + s * 1.6f * std::sin(ang));
+        const ImVec2 left(cx + s * cosf(ang + 2.5f), cy + s * sinf(ang + 2.5f));
+        const ImVec2 right(cx + s * cosf(ang - 2.5f), cy + s * sinf(ang - 2.5f));
+        dl->AddTriangleFilled(tip, left, right, IM_COL32(255, 255, 255, 255));
+        dl->AddTriangle(tip, left, right, IM_COL32(0, 0, 0, 160), 1.0f);
+    }
+}
+
+// Calibration (Settings > Minimap): move/scale our dots until they sit on the
+// game's own minimap icons (pylon, waypoint, ...), then Save.
+void HudRenderer::DrawMinimapSettings() {
+    ImGui::Checkbox("draw over the game's minimap", &layout_.onGameMap);
+    ImGui::Checkbox("draw actors beyond the rim", &layout_.beyondRim);
+    ImGui::SliderFloat("from right edge", &layout_.rightOffset, 0.0f, 0.5f, "%.3f");
+    ImGui::SliderFloat("from top edge", &layout_.topOffset, 0.0f, 0.5f, "%.3f");
+    ImGui::SliderFloat("radius", &layout_.radius, 0.03f, 0.4f, "%.3f");
+    ImGui::SliderFloat("zoom (world units to rim)", &layout_.worldRadius, 20.0f, 400.0f, "%.0f");
+    if (ImGui::Button("Save")) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save FAILED";
+    ImGui::SameLine();
+    if (ImGui::Button("Reset")) {
+        layout_ = MinimapLayout();
+        layoutStatus_ = "defaults (not saved)";
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", layoutStatus_);
+    ImGui::TextDisabled("%s", layoutPath_);
+}
+
+// Debug view: every actor the minimap receives this frame, nearest first.
+void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& opt) {
+    if (!PanelOpen(PanelId::Actors, opt, "Actors (minimap source)")) return;
+
+    int perKind[static_cast<int>(ActorKind::PylonSpawn) + 1] = {};
+    std::vector<std::pair<float, uint16_t>> order;
+    order.reserve(snap.actorCount);
+    for (uint16_t i = 0; i < snap.actorCount; ++i) {
+        const ActorSnapshot& a = snap.actors[i];
+        const float dx = a.world.x - snap.playerPos.x, dy = a.world.y - snap.playerPos.y;
+        order.push_back({std::sqrt(dx * dx + dy * dy), i});
+        const int k = static_cast<int>(a.kind);
+        if (k >= 0 && k <= static_cast<int>(ActorKind::PylonSpawn)) perKind[k]++;
+    }
+    std::sort(order.begin(), order.end());
+
+    // per-kind counts in their map colours
+    ImGui::Text("%u actors:", snap.actorCount);
+    for (int k = 0; k <= static_cast<int>(ActorKind::PylonSpawn); ++k) {
+        if (perKind[k] == 0) continue;
+        const ActorKind kind = static_cast<ActorKind>(k);
+        ImGui::SameLine();
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(KindColor(kind)), "%s %d",
+                           ActorKindName(kind), perKind[k]);
+    }
+    filter_.Draw("filter (name/kind, F8 to type)", 220.0f);
+
+    if (ImGui::BeginTable("actors", 5,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_Resizable,
+                          ImVec2(560.0f, 340.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Dist", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+        ImGui::TableSetupColumn("World x, y", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Id", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+        ImGui::TableHeadersRow();
+        for (const auto& [dist, i] : order) {
+            const ActorSnapshot& a = snap.actors[i];
+            if (filter_.IsActive() && !filter_.PassFilter(a.name) &&
+                !filter_.PassFilter(ActorKindName(a.kind)))
+                continue;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(KindColor(a.kind)), "%s",
+                               ActorKindName(a.kind));
+            ImGui::TableNextColumn();
+            if ((a.kind == ActorKind::Pylon || a.kind == ActorKind::Shrine) && (a.itemFlags & kActorFlagUsed))
+                ImGui::TextDisabled("%s (used)", a.name);
+            else
+                ImGui::TextUnformatted(a.name);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.0f", dist);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.1f, %.1f", a.world.x, a.world.y);
+            ImGui::TableNextColumn();
+            ImGui::Text("%08llX", static_cast<unsigned long long>(a.id));
+        }
+        ImGui::EndTable();
+    }
+    PanelEnd(PanelId::Actors, true);
+}
+
+void HudRenderer::DrawSalvagePanel(const WorldSnapshot& snap, const HudOptions& opt) {
+    if (!PanelOpen(PanelId::Items, opt, "Items")) return;
+    // live items carry a location; synthetic ones (M0 fake data) do not
+    const bool live = snap.itemCount > 0 && snap.items[0].location != kItemLocationUnknown;
+    ImGui::Text("%u items %s", snap.itemCount,
+                live ? "(equipped + backpack)" : "(synthetic M0 data)");
+    ImGui::Separator();
+
+    if (ImGui::BeginTable("items", 6,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_Resizable,
+                          ImVec2(560.0f, 300.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Where", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+        ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Type");
+        ImGui::TableSetupColumn("Rarity");
+        ImGui::TableSetupColumn("Ancient");
+        ImGui::TableSetupColumn("Verdict");
+        ImGui::TableHeadersRow();
+        for (uint16_t i = 0; i < snap.itemCount; ++i) {
+            const ItemSnapshot& it = snap.items[i];
+            // rows are labelled by item name and duplicates are normal (4x the same
+            // consumable): scope each row's widgets by its index
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (it.location == kItemLocationBackpack || it.location == kItemLocationStash)
+                ImGui::Text("%s r%u c%u", ItemLocationName(it.location), it.gridY, it.gridX);
+            else
+                ImGui::TextUnformatted(ItemLocationName(it.location));
+            ImGui::TableNextColumn();
+            // span-all-columns selectable: whole-row hover highlight + click selection
+            char label[96];
+            if (it.identified) {
+                snprintf(label, sizeof(label), "%s", it.name);
+            } else {
+                snprintf(label, sizeof(label), "(unided)");
+            }
+            if (ImGui::Selectable(label, selectedRow_ == i, ImGuiSelectableFlags_SpanAllColumns))
+                selectedRow_ = i;
+            if (!it.identified) {
+                // The unided reveal: what the item really is under the "?" - the
+                // real name when known (live), else just the type (synthetic data)
+                const char* reveal = it.name[0] != '\0' ? it.name : it.typeName;
+                if (it.ancient || it.primal) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "-> %s%s", reveal,
+                                       it.primal ? " [PRIMAL]" : " [ANCIENT]");
+                } else if (it.name[0] != '\0') {
+                    ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.1f, 1.0f), "-> %s", reveal);
+                } else {
+                    ImGui::TextDisabled("-> %s", reveal);
+                }
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(it.typeName);
+            ImGui::TableNextColumn();
+            switch (it.rarity) {  // D3's item colours
+                case ItemRarity::Legendary: ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.1f, 1.0f), "Legendary"); break;
+                case ItemRarity::Set:       ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Set"); break;
+                case ItemRarity::Rare:      ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.3f, 1.0f), "Rare"); break;
+                case ItemRarity::Magic:     ImGui::TextColored(ImVec4(0.45f, 0.55f, 1.0f, 1.0f), "Magic"); break;
+                case ItemRarity::Unknown:   ImGui::TextDisabled("..."); break;  // properties still loading
+                default:                    ImGui::TextUnformatted(RarityName(it.rarity));
+            }
+            ImGui::TableNextColumn();
+            if (it.primal)       ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Primal");
+            else if (it.ancient) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Ancient");
+            else                 ImGui::TextDisabled("-");
+            ImGui::TableNextColumn();
+            switch (it.verdict) {
+                case SalvageVerdict::Junk:  ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "JUNK");  break;
+                case SalvageVerdict::Keep:  ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "KEEP");  break;
+                case SalvageVerdict::Check: ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "CHECK"); break;
+                default: ImGui::TextDisabled("-");
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    PanelEnd(PanelId::Items, true);
+}
+
+// ---------------------------------------------------------------------------
+// Panel framework: one dock bar bottom-right with a tab per visible panel.
+// Hovering a tab (or an open panel body) expands it in place - view-only while
+// the overlay is click-through. F8 + click on the tab pins it open; dragging a
+// panel then moves it, and the position persists (fractions of window size).
+// ---------------------------------------------------------------------------
+static const char* PanelName(PanelId id) {
+    switch (id) {
+        case PanelId::Info: return "Info";
+        case PanelId::Drops: return "Drops";
+        case PanelId::Items: return "Items";
+        case PanelId::Actors: return "Actors";
+        case PanelId::Settings: return "Settings";
+    }
+    return "?";
+}
+
+bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title) {
+    const int i = static_cast<int>(id);
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 cur(opt.cursorX, opt.cursorY);
+    // hovered: cursor inside last frame's window rect or the dock tab
+    const bool inRect = opt.cursorX >= 0.f && panelSize_[i].x > 0.f &&
+                        cur.x >= panelPos_[i].x - 4 && cur.x <= panelPos_[i].x + panelSize_[i].x + 4 &&
+                        cur.y >= panelPos_[i].y - 4 && cur.y <= panelPos_[i].y + panelSize_[i].y + 4;
+    if (inRect) panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;  // linger
+    const bool expanded = layout_.panelPinned[i] || ImGui::GetTime() < panelHoverUntil_[i];
+    if (!expanded) {
+        panelSize_[i] = ImVec2(0.f, 0.f);  // no stale rect: a collapsed panel has no hover area
+        return false;
+    }
+    // docked panels open above the dock bar; moved panels keep their position.
+    // While the user drags the title bar ImGui owns the position.
+    const ImVec2 display = io.DisplaySize;
+    const ImGuiWindow* moving = ImGui::GetCurrentContext()->MovingWindow;
+    const bool beingMoved = moving != nullptr && std::strcmp(moving->Name, title) == 0;
+    if (!beingMoved) {
+        if (layout_.panelX[i] >= 0.f)
+            ImGui::SetNextWindowPos(ImVec2(layout_.panelX[i] * display.x, layout_.panelY[i] * display.y),
+                                    ImGuiCond_Always);
+        else
+            ImGui::SetNextWindowPos(ImVec2(display.x - 12.f, display.y - 44.f), ImGuiCond_Always,
+                                    ImVec2(1.0f, 1.0f));
+    }
+    ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse |
+                             ImGuiWindowFlags_NoSavedSettings;
+    if (!opt.inputInteractive) flags |= ImGuiWindowFlags_NoInputs;  // hover = view-only
+    if (!ImGui::Begin(title, nullptr, flags)) {
+        ImGui::End();
+        return false;
+    }
+    if (opt.inputInteractive) {
+        ImGui::PushStyleColor(ImGuiCol_Text, layout_.panelPinned[i] ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f)
+                                                                    : ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+        if (ImGui::SmallButton(layout_.panelPinned[i] ? "pinned" : "pin")) {
+            layout_.panelPinned[i] = !layout_.panelPinned[i];
+            layout_.Save(layoutPath_);
+        }
+        ImGui::PopStyleColor();
+        if (layout_.panelX[i] >= 0.f) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("dock")) {  // back to the bottom-right corner
+                layout_.panelX[i] = layout_.panelY[i] = -1.f;
+                layout_.Save(layoutPath_);
+            }
+        }
+        ImGui::Separator();
+    }
+    return true;
+}
+
+void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
+    if (!wasOpen) return;
+    const int i = static_cast<int>(id);
+    ImGuiWindow* win = ImGui::GetCurrentWindow();  // before End(): that pops it
+    panelPos_[i] = win->Rect().Min;
+    panelSize_[i] = win->Rect().GetSize();
+    const bool moving = ImGui::GetCurrentContext()->MovingWindow == win;
+    ImGui::End();
+    // a title-bar drag ends with the button release: remember where the panel was dropped
+    if (moving) {
+        panelMoved_[i] = true;
+    } else if (panelMoved_[i]) {
+        panelMoved_[i] = false;
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        layout_.panelX[i] = panelPos_[i].x / display.x;
+        layout_.panelY[i] = panelPos_[i].y / display.y;
+        layout_.Save(layoutPath_);
+    }
+}
+
+void HudRenderer::DrawDock(const HudOptions& opt) {
+    // a slim bar of tabs, bottom-right; a click (interactive mode) toggles pin
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(display.x - 12.f, display.y - 12.f), ImGuiCond_Always,
+                            ImVec2(1.0f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.08f, opt.inputInteractive ? 0.85f : 0.55f));
+    if (ImGui::Begin("##dock", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_AlwaysAutoResize |
+                         (opt.inputInteractive ? 0 : ImGuiWindowFlags_NoInputs))) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
+        bool first = true;
+        for (int i = 0; i < MinimapLayout::kPanelCount; ++i) {
+            if (layout_.panelHidden[i]) continue;
+            const bool pinned = layout_.panelPinned[i];
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
+            if (!first) ImGui::SameLine();
+            first = false;
+            if (ImGui::Button(PanelName(static_cast<PanelId>(i)))) {
+                layout_.panelPinned[i] = !layout_.panelPinned[i];
+                layout_.Save(layoutPath_);
+            }
+            ImGui::PopStyleColor();
+            // cursor test, not IsItemHovered: the dock ignores input while click-through
+            const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+            if (opt.cursorX >= lo.x && opt.cursorX <= hi.x && opt.cursorY >= lo.y && opt.cursorY <= hi.y)
+                panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;
+        }
+        ImGui::PopStyleColor();
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+}
+
+void HudRenderer::DrawInfo(const WorldSnapshot& snap, const HudOptions& opt, double fps,
+                           const char* sourceName) {
+    if (!PanelOpen(PanelId::Info, opt, "Info")) return;
+    ImGui::Text("D3Hud M0 | source: %s", sourceName);
+    ImGui::Text("frame %llu  %.0f fps", static_cast<unsigned long long>(snap.frameIndex), fps);
+    ImGui::Text("actors %u  items %u", snap.actorCount, snap.itemCount);
+    ImGui::Text("player (%.1f, %.1f)", snap.playerPos.x, snap.playerPos.y);
+    ImGui::Text("map orientation %d: %s (F7)", opt.mapOrientation,
+                MapOrientationName(opt.mapOrientation));
+    if (ReaderStatus* rs = opt.reader) {
+        ImGui::Separator();
+        if (rs->running) {
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "reader running (pid %lu)%s", rs->pid,
+                               rs->connected ? "" : ", connecting...");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Stop reader")) rs->stopClicked = true;
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "reader stopped");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Start reader")) rs->startClicked = true;
+            if (!opt.inputInteractive) ImGui::TextDisabled("(F8 to click)");
+        }
+        if (rs->error[0] != '\0') ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", rs->error);
+        if (rs->line[0] != '\0') ImGui::TextDisabled("%.70s", rs->line);
+    }
+    ImGui::Separator();
+    if (opt.inputInteractive) {
+        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "INPUT CAPTURED (F8: release)");
+    } else {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "INPUT PASS-THROUGH (F8: interact)");
+    }
+    ImGui::TextUnformatted("F7 map orientation | F8 click-through | F9 panels | END quit");
+    PanelEnd(PanelId::Info, true);
+}
+
+// Labels above legendary/set/bonus items lying in the world, like the game's own
+// item labels but with what the item really is: "Ancient Puzzle Ring".
+void HudRenderer::DrawGroundLabels(const WorldSnapshot& snap, const HudOptions& opt) {
+    const Vec2 center = opt.haveLabelCenter ? opt.labelCenter : snap.playerPos;
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    for (uint16_t i = 0; i < snap.actorCount; ++i) {
+        const ActorSnapshot& a = snap.actors[i];
+        if (a.kind != ActorKind::GroundItem || a.itemRarity == ItemRarity::Unknown || a.name[0] == '\0')
+            continue;
+        const bool bonus = (a.itemFlags & kItemFlagBonus) != 0;
+        if (!bonus && a.itemRarity != ItemRarity::Legendary && a.itemRarity != ItemRarity::Set) continue;
+        Vec2 p;
+        if (!WorldToScreen(a.world, 0.f, center, display.x, display.y, &p)) continue;
+        char label[kNameLen + 16];
+        snprintf(label, sizeof(label), "%s%s", (a.itemFlags & kItemFlagPrimal)    ? "Primal "
+                                               : (a.itemFlags & kItemFlagAncient) ? "Ancient "
+                                                                                  : "",
+                 a.name);
+        const ImVec2 ts = ImGui::CalcTextSize(label);
+        const ImVec2 tl(p.x - ts.x * 0.5f, p.y - ts.y - 6.0f);  // centred just above the item
+        dl->AddRectFilled(ImVec2(tl.x - 4.0f, tl.y - 2.0f), ImVec2(tl.x + ts.x + 4.0f, tl.y + ts.y + 2.0f),
+                          IM_COL32(0, 0, 0, 175), 3.0f);
+        const ImU32 col = (a.itemFlags & kItemFlagPrimal) ? IM_COL32(255, 70, 70, 255)
+                                                          : DropColor(a.itemRarity, bonus);
+        dl->AddText(tl, col, label);
+    }
+}
+
+// Record every legendary/set item the reader reports on the ground (once per item).
+void HudRenderer::UpdateDrops(const WorldSnapshot& snap) {
+    for (uint16_t i = 0; i < snap.itemCount; ++i) {
+        const ItemSnapshot& it = snap.items[i];
+        if (it.location != kItemLocationGround || dropIndex_.count(it.id)) continue;
+        DropEntry e;
+        e.item = it;
+        const std::time_t now = std::time(nullptr);
+        std::tm local{};
+        localtime_s(&local, &now);
+        std::strftime(e.time, sizeof(e.time), "%H:%M:%S", &local);
+        dropIndex_[it.id] = drops_.size();
+        drops_.push_back(e);
+    }
+}
+
+// The drop log, newest first: still on the ground, picked up (now in the
+// backpack/equipped) or gone (out of range, salvaged, despawned).
+void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& opt) {
+    if (!PanelOpen(PanelId::Drops, opt, "Drops")) return;
+    int ancients = 0, primals = 0, bonus = 0;
+    for (const DropEntry& d : drops_) {
+        ancients += d.item.ancient;
+        primals += d.item.primal;
+        bonus += d.item.bonus;
+    }
+    ImGui::Text("%zu drops this session: %zu legendary/set (%d ancient, %d primal), %d bonus",
+                drops_.size(), drops_.size() - bonus, ancients, primals, bonus);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear")) {
+        drops_.clear();
+        dropIndex_.clear();
+    }
+    if (ImGui::BeginTable("drops", 5,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_Resizable,
+                          ImVec2(560.0f, 220.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+        ImGui::TableSetupColumn("Ancient", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+        ImGui::TableHeadersRow();
+        for (size_t k = drops_.size(); k-- > 0;) {
+            const ItemSnapshot& it = drops_[k].item;
+            const char* status = "gone";
+            for (uint16_t i = 0; i < snap.itemCount; ++i) {
+                if (snap.items[i].id != it.id) continue;
+                status = snap.items[i].location == kItemLocationGround ? "on ground" : "picked up";
+                break;
+            }
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(drops_[k].time);
+            ImGui::TableNextColumn();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(DropColor(it.rarity, it.bonus != 0)), "%s",
+                               it.name);
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", it.typeName);
+            ImGui::TableNextColumn();
+            if (it.primal)       ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "PRIMAL");
+            else if (it.ancient) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Ancient");
+            else                 ImGui::TextDisabled("-");
+            ImGui::TableNextColumn();
+            if (!strcmp(status, "on ground")) ImGui::TextUnformatted(status);
+            else                              ImGui::TextDisabled("%s", status);
+        }
+        ImGui::EndTable();
+    }
+    PanelEnd(PanelId::Drops, true);
+}
+
+// "A" (ancient) / "P" (primal), with the augment rank in front ("125A"), in the
+// top-left corner of every such item icon the
+// game currently shows: backpack and equipment (inventory open) and the selected
+// stash tab (stash open). Geometry comes from the game's own UI controls.
+void HudRenderer::DrawItemBadges(const WorldSnapshot& snap) {
+    if (!snap.ui.inventoryOpen && !snap.ui.stashOpen) return;
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    for (uint16_t i = 0; i < snap.itemCount; ++i) {
+        const ItemSnapshot& it = snap.items[i];
+        if (!it.ancient && !it.primal) continue;
+        UiRect ui;
+        if (!ItemScreenRect(snap.ui, it.location, it.gridX, it.gridY, it.height, &ui)) continue;
+        const UiRect r = UiToScreen(ui, display.x, display.y);
+        const float cell = std::min(r.x1 - r.x0, r.y1 - r.y0);
+        if (cell < 8.0f) continue;  // control not laid out (yet)
+        const float size = std::clamp(cell * 0.32f, 12.0f, 28.0f);
+        const ImVec2 p(r.x0 + 3.0f, r.y0 + 2.0f);
+        // "A"/"P", prefixed by the Caldesann's augment gem rank if any ("125A")
+        char label[8];
+        if (it.augmentRank) snprintf(label, sizeof(label), "%u%s", it.augmentRank, it.primal ? "P" : "A");
+        else snprintf(label, sizeof(label), "%s", it.primal ? "P" : "A");
+        const ImU32 col = it.primal ? IM_COL32(255, 70, 70, 255) : IM_COL32(255, 175, 50, 255);
+        const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+        dl->AddRectFilled(p, ImVec2(p.x + ts.x + 4.0f, p.y + ts.y), IM_COL32(0, 0, 0, 170), 3.0f);
+        dl->AddText(font, size, ImVec2(p.x + 2.0f, p.y), col, label);
+    }
+}
+
+// Auto salvage: the safe area (green cells, never salvaged) whenever the
+// inventory is open, the items that would be salvaged (red X) while the
+// salvage tab is open, and a small control panel. Safe cells are toggled by
+// clicking them in "edit" mode (F8: the overlay must take the clicks).
+void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
+    opt.salvageButtonX0 = opt.salvageButtonY0 = opt.salvageButtonX1 = opt.salvageButtonY1 = -1.f;
+    opt.editAreaX0 = opt.editAreaY0 = opt.editAreaX1 = opt.editAreaY1 = -1.f;
+    if (opt.salvage == nullptr || !snap.ui.inventoryOpen) return;
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const UiRect grid = UiToScreen(snap.ui.backpack, display.x, display.y);
+    const float cw = (grid.x1 - grid.x0) / kBackpackCols, ch = (grid.y1 - grid.y0) / kBackpackRows;
+    if (cw < 4.0f || ch < 4.0f) return;  // not laid out
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    SafeArea& safe = layout_.safeArea;
+
+    // safe cells: edit by clicking (only while the overlay takes input)
+    if (editSafeArea_ && opt.mouseLive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        !ImGui::GetIO().WantCaptureMouse) {
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        const int cx = static_cast<int>((m.x - grid.x0) / cw), cy = static_cast<int>((m.y - grid.y0) / ch);
+        if (m.x >= grid.x0 && m.y >= grid.y0 && cx < kBackpackCols && cy < kBackpackRows) {
+            safe.Toggle(cx, cy);
+            layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        }
+    }
+    for (int y = 0; y < kBackpackRows; ++y)
+        for (int x = 0; x < kBackpackCols; ++x) {
+            const ImVec2 a(grid.x0 + x * cw + 1, grid.y0 + y * ch + 1), b(grid.x0 + (x + 1) * cw - 1, grid.y0 + (y + 1) * ch - 1);
+            if (safe.Has(x, y)) {
+                dl->AddRectFilled(a, b, IM_COL32(60, 220, 90, editSafeArea_ ? 90 : 45));
+                dl->AddRect(a, b, IM_COL32(60, 220, 90, 200), 0.f, 0, 1.5f);
+            } else if (editSafeArea_) {
+                dl->AddRect(a, b, IM_COL32(255, 255, 255, 60));
+            }
+        }
+
+    // toolbar under the backpack: the edit toggle works without F8 (hot rect, see main.cpp)
+    ImGui::SetNextWindowPos(ImVec2(grid.x0, grid.y1 + 6.0f), ImGuiCond_Always);
+    if (ImGui::Begin("##safe_toolbar", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                         ImGuiWindowFlags_NoNav)) {
+        if (ImGui::Button(editSafeArea_ ? "Done editing safe area" : "Edit safe area")) editSafeArea_ = !editSafeArea_;
+        ImGui::SameLine();
+        ImGui::TextDisabled(editSafeArea_ ? "click cells to toggle" : "%d safe cells", safe.Count());
+        const ImVec2 p = ImGui::GetWindowPos(), s = ImGui::GetWindowSize();
+        opt.editAreaX0 = editSafeArea_ ? std::min(p.x, grid.x0) : p.x;
+        opt.editAreaY0 = editSafeArea_ ? std::min(p.y, grid.y0) : p.y;
+        opt.editAreaX1 = editSafeArea_ ? std::max(p.x + s.x, grid.x1) : p.x + s.x;
+        opt.editAreaY1 = p.y + s.y;
+    }
+    ImGui::End();
+
+    // preview: what a salvage run would destroy
+    int candidates = 0;
+    for (uint16_t i = 0; i < snap.itemCount; ++i) {
+        const ItemSnapshot& it = snap.items[i];
+        if (!IsSalvageCandidate(it, safe, layout_.salvageRules, snap.items, snap.itemCount)) continue;
+        ++candidates;
+        if (!snap.ui.salvageOpen) continue;
+        UiRect ui;
+        if (!ItemScreenRect(snap.ui, it.location, it.gridX, it.gridY, it.height, &ui)) continue;
+        const UiRect r = UiToScreen(ui, display.x, display.y);
+        const ImU32 red = IM_COL32(255, 50, 50, 210);
+        dl->AddRect(ImVec2(r.x0 + 2, r.y0 + 2), ImVec2(r.x1 - 2, r.y1 - 2), red, 0.f, 0, 2.0f);
+        const float m = std::min(r.x1 - r.x0, r.y1 - r.y0) * 0.25f;
+        const ImVec2 c((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f);
+        dl->AddLine(ImVec2(c.x - m, c.y - m), ImVec2(c.x + m, c.y + m), red, 2.0f);
+        dl->AddLine(ImVec2(c.x - m, c.y + m), ImVec2(c.x + m, c.y - m), red, 2.0f);
+    }
+
+    // The salvage button sits under the game's own anvil button and only exists
+    // while the blacksmith's salvage tab is open. The owner turns the overlay
+    // interactive while the cursor is over it (salvageButton*), so no F8 needed.
+    if (!snap.ui.salvageOpen || snap.ui.salvageButton.x1 <= snap.ui.salvageButton.x0) return;
+    SalvageStatus& st = *opt.salvage;
+    const UiRect anvil = UiToScreen(snap.ui.salvageButton, display.x, display.y);
+    ImGui::SetNextWindowPos(ImVec2(anvil.x0, anvil.y1 + 6.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(std::max(anvil.x1 - anvil.x0, 160.0f), 0.0f),
+                                        ImVec2(FLT_MAX, FLT_MAX));
+    if (ImGui::Begin("##salvage_button", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                         ImGuiWindowFlags_NoNav)) {
+        if (st.running) {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "SALVAGING - Esc or move mouse to stop");
+        } else if (candidates > 0) {
+            char label[48];
+            snprintf(label, sizeof(label), "Salvage %d item(s)", candidates);
+            if (ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f))) st.startClicked = true;
+        } else {
+            ImGui::TextDisabled("nothing to salvage");
+        }
+        if (st.status[0] != '\0') ImGui::TextDisabled("%s", st.status);
+        const ImVec2 p = ImGui::GetWindowPos(), s = ImGui::GetWindowSize();
+        opt.salvageButtonX0 = p.x;
+        opt.salvageButtonY0 = p.y;
+        opt.salvageButtonX1 = p.x + s.x;
+        opt.salvageButtonY1 = p.y + s.y;
+    }
+    ImGui::End();
+}
+
+// Settings > Auto salvage: what is protected and where (the button itself lives
+// at the blacksmith).
+void HudRenderer::DrawSalvageSettings() {
+    ImGui::Checkbox("edit safe area", &editSafeArea_);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(open the inventory, click backpack cells)");
+    if (ImGui::Checkbox("keep ancient/primal of equipped", &layout_.salvageRules.protectEquippedAncients))
+        layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    ImGui::Text("safe cells: %d", layout_.safeArea.Count());
+    ImGui::TextDisabled("The Salvage button appears under the anvil when the\nblacksmith's salvage tab is open.");
+}
+
+// Two columns: the panels on the left, the selected one's settings on the right.
+void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
+    if (!PanelOpen(PanelId::Settings, opt, "Settings")) return;
+    static const char* kEntries[] = {"Info", "Drops", "Items", "Actors", "Minimap", "Auto salvage"};
+    constexpr int kEntryCount = 6;  // first four are panels (PanelId order)
+    ImGui::BeginChild("##settings_list", ImVec2(130.0f, 230.0f), true);
+    for (int i = 0; i < kEntryCount; ++i)
+        if (ImGui::Selectable(kEntries[i], settingsTab_ == i)) settingsTab_ = i;
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##settings_detail", ImVec2(360.0f, 230.0f), true);
+    ImGui::TextUnformatted(kEntries[settingsTab_]);
+    ImGui::Separator();
+    if (settingsTab_ < 4) {
+        const int i = settingsTab_;
+        bool changed = false;
+        bool shown = !layout_.panelHidden[i];
+        changed |= ImGui::Checkbox("show in dock", &shown);
+        layout_.panelHidden[i] = !shown;
+        changed |= ImGui::Checkbox("keep open (pinned)", &layout_.panelPinned[i]);
+        if (ImGui::Button("reset position")) {
+            layout_.panelX[i] = layout_.panelY[i] = -1.f;
+            changed = true;
+        }
+        ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.\nDrag the title bar (F8) to move.");
+        if (changed) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    } else if (settingsTab_ == 4) {
+        DrawMinimapSettings();
+    } else {
+        DrawSalvageSettings();
+    }
+    ImGui::EndChild();
+    PanelEnd(PanelId::Settings, true);
+}
+
+// While the game shows the tooltip of an UNIDENTIFIED item: a compact card left
+// of the cursor with what the item really is (name, set/legendary, ancient/primal).
+// Identified items are skipped - the game's own tooltip already says it all.
+void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& opt) {
+    if (snap.hoveredItemPlus1 == 0 || snap.hoveredItemPlus1 > snap.itemCount || opt.cursorX < 0.f) return;
+    const ItemSnapshot& it = snap.items[snap.hoveredItemPlus1 - 1];
+    if (it.identified) return;
+    // left of the cursor, vertically centred on it (pivot = right-middle edge),
+    // flipped to the right only if it would leave the screen
+    ImVec2 pos(opt.cursorX - 18.0f, opt.cursorY);
+    ImVec2 pivot(1.0f, 0.5f);
+    if (opt.cursorX < 280.0f) {
+        pos.x = opt.cursorX + 24.0f;
+        pivot.x = 0.0f;
+    }
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+    ImGui::SetNextWindowBgAlpha(0.88f);
+    if (!ImGui::Begin("##hovered_item", nullptr,
+                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
+                          ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+    ImVec4 col(0.85f, 0.85f, 0.85f, 1.0f);
+    switch (it.rarity) {
+        case ItemRarity::Legendary: col = ImVec4(1.0f, 0.55f, 0.1f, 1.0f); break;
+        case ItemRarity::Set:       col = ImVec4(0.3f, 1.0f, 0.3f, 1.0f); break;
+        case ItemRarity::Rare:      col = ImVec4(1.0f, 1.0f, 0.3f, 1.0f); break;
+        case ItemRarity::Magic:     col = ImVec4(0.45f, 0.55f, 1.0f, 1.0f); break;
+        default: break;
+    }
+    ImGui::TextColored(col, "%s", it.name);
+    ImGui::TextDisabled("%s %s - unidentified", RarityName(it.rarity), it.typeName);
+    if (it.primal)       ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "PRIMAL ANCIENT");
+    else if (it.ancient) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Ancient");
+    else if (it.rarity == ItemRarity::Legendary || it.rarity == ItemRarity::Set)
+        ImGui::TextDisabled("not ancient");
+    ImGui::End();
+}
+
+void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName) {
+    UpdateDrops(snap);           // the log keeps recording while the panels are hidden
+    if (!opt.showPanels)
+        for (ImVec2& s : panelSize_) s = ImVec2(0.f, 0.f);  // F9 off: nothing to hover
+    for (int i = 0; i < kPanels; ++i)
+        if (layout_.panelHidden[i]) panelSize_[i] = ImVec2(0.f, 0.f);  // hidden in Settings
+    if (opt.showPanels) {
+        DrawDock(opt);  // first: its tabs set the hover state the panels read
+        auto visible = [&](PanelId id) { return !layout_.panelHidden[static_cast<int>(id)]; };
+        if (visible(PanelId::Info)) DrawInfo(snap, opt, fps, sourceName);
+        if (visible(PanelId::Drops)) DrawDropsPanel(snap, opt);
+        if (visible(PanelId::Items)) DrawSalvagePanel(snap, opt);
+        if (visible(PanelId::Actors)) DrawActorPanel(snap, opt);
+        DrawSettings(snap, opt);  // always reachable
+    }
+    if (opt.showMinimap) DrawMinimap(snap, opt);
+    DrawGroundLabels(snap, opt); // independent of F9, like the game's own item labels
+    DrawItemBadges(snap);        // independent of F9: only while the game shows inventory/stash
+    DrawAutoSalvage(snap, opt);  // safe area + salvage preview while the inventory is open
+    DrawHoveredItem(snap, opt);  // independent of F9: it only appears while the game shows a tooltip
+}
+
+}  // namespace d3hud

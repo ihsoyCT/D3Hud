@@ -1,0 +1,93 @@
+// Auto-salvage rules (pure, unit-tested): which backpack items the salvage
+// runner may destroy. The user marks a "safe area" of backpack cells; every
+// piece of gear outside it is salvaged - INCLUDING unidentified items, whose
+// type and ancient rank the reader reveals from memory. The only extra
+// protection: ancient/primal items of something currently equipped (same
+// display name) are kept as possible upgrades. Anything not positively known
+// to be gear (materials, gems, keys, potions, unknown types or names) is
+// skipped.
+#pragma once
+
+#include <cstdint>
+#include <cstring>
+
+#include "Snapshot.h"
+
+namespace d3hud {
+
+// Backpack cells the salvage never touches: bit (row * 10 + column).
+struct SafeArea {
+    uint64_t cells = 0;
+
+    bool Has(int x, int y) const {
+        return x >= 0 && x < kBackpackCols && y >= 0 && y < kBackpackRows &&
+               ((cells >> (y * kBackpackCols + x)) & 1) != 0;
+    }
+    void Toggle(int x, int y) {
+        if (x >= 0 && x < kBackpackCols && y >= 0 && y < kBackpackRows) cells ^= 1ull << (y * kBackpackCols + x);
+    }
+    int Count() const {
+        int n = 0;
+        for (uint64_t c = cells; c != 0; c &= c - 1) ++n;
+        return n;
+    }
+};
+
+struct SalvageRules {
+    // Keep ancient/primal backpack items whose display name matches an
+    // equipped piece (a possible upgrade); everything else outside the safe
+    // area goes. Non-ancient dupes of worn gear are NOT protected.
+    bool protectEquippedAncients = true;
+};
+
+// Gear item types (internal type names, items_gbid.tsv). A listed name matches
+// itself and its class variants: "Helm" covers "Helm_Necromancer".
+inline bool IsGearType(const char* type) {
+    static const char* kGear[] = {
+        // armor / jewelry / off-hands
+        "Helm", "GenericHelm", "WizardHat", "VoodooMask", "SpiritStone_Monk", "ChestArmor",
+        "GenericChestArmor", "Cloak", "Shoulders", "Gloves", "Bracers", "Belt", "GenericBelt", "Legs",
+        "Boots", "Ring", "Amulet", "Shield", "CrusaderShield", "Mojo", "Orb", "Quiver",
+        "NecromancerOffhand", "TemplarSpecial", "ScoundrelSpecial", "EnchantressSpecial",
+        // weapons
+        "Axe", "Axe2H", "Sword", "Sword2H", "Mace", "Mace2H", "Dagger", "CeremonialDagger", "FistWeapon",
+        "Flail1H", "Flail2H", "MightyWeapon1H", "MightyWeapon2H", "Scythe1H", "Scythe2H", "Spear", "Polearm",
+        "Staff", "CombatStaff", "Wand", "Bow", "Crossbow", "HandXbow"};
+    for (const char* g : kGear) {
+        const size_t n = strlen(g);
+        if (strncmp(type, g, n) == 0 && (type[n] == '\0' || type[n] == '_')) return true;
+    }
+    return false;
+}
+
+inline bool InSafeArea(const SafeArea& safe, const ItemSnapshot& it) {
+    for (int k = 0; k < (it.height > 0 ? it.height : 1); ++k)
+        if (safe.Has(it.gridX, it.gridY + k)) return true;
+    return false;
+}
+
+// True when `it` is an ancient/primal version of an item currently worn.
+// Match by display name: the same legendary variant carries the same name in
+// every rank. Unnamed items never match (unknown items are never protected).
+inline bool IsEquippedUpgrade(const ItemSnapshot& it, const ItemSnapshot* items, uint16_t itemCount) {
+    if ((!it.ancient && !it.primal) || it.name[0] == '\0') return false;
+    for (uint16_t i = 0; i < itemCount; ++i) {
+        const ItemSnapshot& worn = items[i];
+        if (worn.location >= 1 && worn.location <= 13 && worn.name[0] != '\0' &&
+            strcmp(worn.name, it.name) == 0)
+            return true;
+    }
+    return false;
+}
+
+inline bool IsSalvageCandidate(const ItemSnapshot& it, const SafeArea& safe, const SalvageRules& rules,
+                               const ItemSnapshot* items, uint16_t itemCount) {
+    if (it.location != kItemLocationBackpack) return false;
+    if (it.rarity == ItemRarity::Unknown || it.bonus) return false;  // never destroy the unknown
+    if (!IsGearType(it.typeName)) return false;
+    if (InSafeArea(safe, it)) return false;
+    if (rules.protectEquippedAncients && IsEquippedUpgrade(it, items, itemCount)) return false;
+    return true;  // identified or not: type and ancient rank are revealed
+}
+
+}  // namespace d3hud
