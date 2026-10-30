@@ -458,6 +458,30 @@ static void TestMonsterAffixes() {
     CHECK(FindMonsterAffix(0) == nullptr && FindMonsterAffix(12345) == nullptr);
 }
 
+static void TestAffixMask() {
+    // an ACD record of a champion as measured live: the list starts at +0x1E4 (an elite marker that is not one of the
+    // 30, then four affixes, then empty slots)
+    uint32_t words[0x3C0 / 4] = {};
+    words[0x1E4 / 4] = 0x371E75AA;
+    words[0x1E8 / 4] = 1905614711;  // Orbiter
+    words[0x1EC / 4] = 3855260060u;  // Fire Chains
+    words[0x1F0 / 4] = 2206426855u;  // Knockback
+    words[0x1F4 / 4] = 4131130388u;  // Frozen
+    words[0x1F8 / 4] = words[0x1FC / 4] = words[0x200 / 4] = 0xFFFFFFFFu;
+    const uint32_t mask = AffixMaskFromAcdWords(words, std::size(words));
+    const uint32_t expected = (1u << FindMonsterAffixIndex(1905614711)) | (1u << FindMonsterAffixIndex(3855260060u)) |
+                              (1u << FindMonsterAffixIndex(2206426855u)) | (1u << FindMonsterAffixIndex(4131130388u));
+    CHECK(mask == expected);
+    CHECK(AffixMaskFromAcdWords(words, 4) == 0);  // a record too short to hold the list
+    words[0x1E8 / 4] = 0;
+    CHECK(AffixMaskFromAcdWords(words, std::size(words)) != expected);
+    // ids elsewhere in the record do not count
+    uint32_t other[0x3C0 / 4] = {};
+    other[0x100 / 4] = 1905614711;
+    CHECK(AffixMaskFromAcdWords(other, std::size(other)) == 0);
+    CHECK(FindMonsterAffixIndex(0xFFFFFFFFu) == -1 && FindMonsterAffixIndex(3775118) == 0);
+}
+
 static void TestHostApi() {
     static_assert(D3H_ACTOR_PLAYER == static_cast<int>(ActorKind::Player));
     static_assert(D3H_ACTOR_PORTAL == static_cast<int>(ActorKind::Portal));
@@ -536,6 +560,7 @@ struct State {
     std::vector<d3h_actor> actors;
     std::vector<d3h_rect> rects;
     std::vector<Page> panels;
+    size_t checkboxes = 0, swatches = 0;  // widgets a page drew
     d3h_frame frame{};
     int comboPick = 0;  // 0 = leave the combo alone, else the 1-based index to choose
     void Reset() { *this = State(); frame.size = sizeof(frame); frame.rift_timer_fraction = -1.f; frame.hovered_item = -1; }
@@ -607,13 +632,14 @@ d3h_bool UCombo(const char*, int32_t* idx, const char*) {
 }
 d3h_bool UInput(const char*, char*, size_t) { return 0; }
 d3h_bool UButton(const char*) { return 0; }
-d3h_bool UCheckbox(const char*, d3h_bool*) { return 0; }
+d3h_bool UCheckbox(const char*, d3h_bool*) { ++g.checkboxes; return 0; }
+d3h_bool UColor(const char*, d3h_color*) { ++g.swatches; return 0; }
 d3h_ui MakeUi() {
     d3h_ui u{};
     u.size = sizeof(u);
     u.text = UText; u.text_disabled = UText; u.separator = UNone; u.separator_text = UText;
     u.same_line = UNone; u.spacing = UNone; u.button = UButton; u.checkbox = UCheckbox; u.combo = UCombo;
-    u.input_text = UInput;
+    u.input_text = UInput; u.color_edit = UColor;
     return u;
 }
 
@@ -630,8 +656,9 @@ void DrawPanels() {
     const d3h_ui ui = MakeUi();
     for (const Page& p : g.panels) p.draw(&ui, p.user);
 }
-d3h_actor Actor(int32_t kind, float x, float hp, const char* name) {
+d3h_actor Actor(int32_t kind, float x, float hp, const char* name, uint32_t affixes = 0) {
     d3h_actor a{};
+    a.affix_mask = affixes;
     a.size = sizeof(a);
     a.kind = kind;
     a.pos = {x, 5.f};
@@ -770,6 +797,18 @@ static void TestLuaSandbox() {
     CHECK(lister != nullptr);
     fake::Fire(D3H_EVENT_FRAME);
     CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "2 rare Skeleton_Rare 30.0 0.25 250.0/1000.0 -1.0 Zombie nil");
+
+    // affixes: keys and names in the order of d3hud.affixes
+    fake::g.Reset();
+    fake::g.actors = {fake::Actor(D3H_ACTOR_CHAMPION, 10.f, 0.5f, "Champ",
+                                  (1u << FindMonsterAffixIndex(4131130388u)) | (1u << FindMonsterAffixIndex(106438735)))};
+    auto affixes = load("affixes", "d3hud.on('frame', function()\n"
+                                   "  local a = d3hud.actor(1)\n"
+                                   "  d3hud.log(#d3hud.affixes .. ' ' .. d3hud.affixes[2].key .. ' ' .. #a.affixes .. ' ' .. a.affixes[1] .. ' ' .. a.affix_names[2])\n"
+                                   "end)");
+    CHECK(affixes != nullptr);
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "30 molten 2 molten Frozen");
     fs::remove_all(root, ec);
 }
 
@@ -920,6 +959,41 @@ static void TestHealthBars() {
     bool cut = false;
     for (const std::string& d : fake::g.drawn) cut |= d.size() > 2 && d.ends_with("..");
     CHECK(cut);
+
+    // affixes under the bars: only the ticked ones the monster has, in the game's order
+    fake::g.actors = {fake::Actor(D3H_ACTOR_CHAMPION, 100.f, 0.5f, "Champion",
+                                  (1u << FindMonsterAffixIndex(4131130388u)) | (1u << FindMonsterAffixIndex(106438735)) |
+                                      (1u << FindMonsterAffixIndex(1905614711)))};  // frozen, molten, orbiter
+    (void)fake::g.settings.SetNumber("healthbars.champion", 1);  // some of these already have the value
+    (void)fake::g.settings.SetNumber("healthbars.over", 1);
+    (void)fake::g.settings.SetNumber("healthbars.list", 0);
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    bool molten = false, frozen = false, orbiter = false;
+    for (const std::string& d : fake::g.drawn) {  // each affix has its own colour, so each is drawn on its own
+        molten |= d == "Molten, ";
+        frozen |= d == "Frozen";
+        orbiter |= d.find("Orbiter") != std::string::npos;  // not ticked by default
+    }
+    CHECK(molten && frozen && !orbiter);
+    CHECK(fake::g.settings.SetNumber("healthbars.affixes_show", 0));
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    bool anyMolten = false;
+    for (const std::string& d : fake::g.drawn) anyMolten |= d.find("Molten") != std::string::npos;
+    CHECK(!anyMolten);
+    CHECK(!p->disabled());
+
+    // the page: ticking an affix is remembered in the hidden setting
+    CHECK(fake::g.settings.SetNumber("healthbars.affixes_show", 1));
+    CHECK(fake::g.pages.size() == 1);
+    std::string keys;
+    CHECK(fake::g.settings.GetString("healthbars.affix_keys", keys) && keys.find("molten") != std::string::npos);
+
+    // the page shows all 30 affixes with a checkbox and a colour swatch each
+    fake::g.checkboxes = fake::g.swatches = 0;
+    fake::DrawPages();
+    CHECK(fake::g.checkboxes == 30 && fake::g.swatches == 30);
 }
 
 static void TestPaths() {
@@ -1257,6 +1331,7 @@ int main() {
     TestSettingsTable();
     TestHostApi();
     TestMonsterAffixes();
+    TestAffixMask();
     TestPluginSettings();
     TestLuaSandbox();
     TestTimeTracker();

@@ -11,7 +11,7 @@
 
 namespace d3hud {
 
-constexpr uint32_t kSnapshotVersion = 11;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect
+constexpr uint32_t kSnapshotVersion = 12;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect; 12: ActorSnapshot::affixMask
 constexpr int kMaxScenes = 512;  // scenes of the current world (a rift has ~100-250)
 constexpr int kMaxActors = 256;
 constexpr int kMaxItems = 256;  // inventory + equipped + the visible stash tab (70)
@@ -91,6 +91,7 @@ struct ActorSnapshot {
     // In the former tail padding (size stays 80) - ground items only:
     ItemRarity itemRarity = ItemRarity::Unknown;
     uint8_t itemFlags = 0;     // kItemFlag* bits; pylons/shrines: kActorFlagUsed
+    uint32_t affixMask = 0;    // champions / rares / bosses: bit i = kMonsterAffixes[i] (MonsterAffixes.h)
 };
 
 constexpr uint8_t kItemFlagAncient = 1, kItemFlagPrimal = 2, kItemFlagBonus = 4, kItemFlagUnidentified = 8;
@@ -270,10 +271,10 @@ static_assert(std::is_trivially_copyable_v<WorldSnapshot>, "snapshots must be me
 // Frozen ABI for the replay format / shared-memory ring (MSVC x64), version 2:
 // Actor: 8+8+4+4+4+1+1+48+2 = 80 (align 8). Item: 8+4+1*5+48+48+6 = 119 -> 120.
 // UiLayout: 4 + 16 * (2 + kEquipSlots) + 8 = 268.
-static_assert(sizeof(ActorSnapshot) == 80, "ActorSnapshot layout changed");
+static_assert(sizeof(ActorSnapshot) == 88, "ActorSnapshot layout changed");
 static_assert(sizeof(ItemSnapshot) == 120, "ItemSnapshot layout changed");
 static_assert(sizeof(UiLayout) == 516, "UiLayout layout changed");
-static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 80 + kMaxItems * 120,
+static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 88 + kMaxItems * 120,
               "WorldSnapshot layout changed");
 
 // Map orientation: D3's isometric camera shows the world axes diagonally, so

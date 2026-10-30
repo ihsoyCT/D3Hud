@@ -1,5 +1,7 @@
 #include "AcdTable.h"
 
+#include "MonsterAffixes.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -140,6 +142,15 @@ bool AcdTable::ReadRaw(const Process& proc, uint32_t acdId, uint8_t* out) const 
         if (id == acdId) return true;
     }
     return false;
+}
+
+bool AcdTable::ReadAffixMask(const Process& proc, uint32_t acdId, uint32_t* mask) const {
+    uint8_t rec[kAcdStride];
+    if (!ReadRaw(proc, acdId, rec)) return false;
+    uint32_t words[kAcdStride / 4];
+    memcpy(words, rec, sizeof(words));
+    *mask = AffixMaskFromAcdWords(words, kAcdStride / 4);
+    return true;
 }
 
 bool AcdTable::ReadPlaced(const Process& proc, std::vector<AcdItemRecord>* out) const {

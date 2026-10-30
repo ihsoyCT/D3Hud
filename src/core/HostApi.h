@@ -98,6 +98,7 @@ typedef struct d3h_actor {
     char name[D3H_NAME_LEN];
     /* appended in API 1 before release; older plugins never see them (check `size`) */
     float hp_current, hp_max; /* life in game units; 0 when unknown */
+    uint32_t affix_mask;      /* elites: bit i = affix i of the host's affix table (d3hud.affixes in Lua) */
 } d3h_actor;
 
 typedef struct d3h_item {

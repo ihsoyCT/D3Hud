@@ -86,6 +86,7 @@ struct PluginHost::HostFns {
         r.pos = {a.world.x, a.world.y};
         r.heading = a.heading;
         r.hp_fraction = a.maxHp > 0.f ? std::clamp(a.currentHp / a.maxHp, 0.f, 1.f) : -1.f;
+        r.affix_mask = a.affixMask;
         r.hp_current = a.maxHp > 0.f ? a.currentHp : 0.f;
         r.hp_max = a.maxHp > 0.f ? a.maxHp : 0.f;
         r.kind = static_cast<int32_t>(a.kind);
@@ -272,7 +273,9 @@ struct PluginHost::HostFns {
     }
     static d3h_bool ColorEdit(const char* l, d3h_color* rgb) {
         float c[3] = {((*rgb >> 16) & 255) / 255.f, ((*rgb >> 8) & 255) / 255.f, (*rgb & 255) / 255.f};
-        if (!ImGui::ColorEdit3(l, c)) return 0;
+        // a label starting with "##" is a compact swatch (click it for the picker), for use in a row of widgets
+        const ImGuiColorEditFlags flags = l[0] == '#' && l[1] == '#' ? ImGuiColorEditFlags_NoInputs : 0;
+        if (!ImGui::ColorEdit3(l, c, flags)) return 0;
         const auto b = [](float f) { return static_cast<uint32_t>(std::clamp(f, 0.f, 1.f) * 255.f + 0.5f); };
         *rgb = (b(c[0]) << 16) | (b(c[1]) << 8) | b(c[2]);
         return 1;

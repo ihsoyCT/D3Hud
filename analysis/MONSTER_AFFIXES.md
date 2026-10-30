@@ -48,24 +48,27 @@ Other things that look like affixes but are not: `Champion_Ghostly` (attribute 5
 "Ghostly" behaviour, `Hide_Affixes` (689) hides the affix names, `EnchantedAffix*` (418-421) belong to the
 Enchantress follower.
 
-## Where a monster's affixes are stored: not yet known
+## Where a monster's affixes are stored: the ACD record, +0x1E4
 
-TurboHUD reads `IMonster.AffixSnoList` for each monster, so the list is in game memory; where exactly in the
-current client is unmeasured. The most likely place is the monster's ACD record (0x3C0 bytes, quality at
-+0xB8). The probe for it is built:
+Measured live with `D3Hud.Reader.exe --attach "Diablo III64.exe" --affixes` next to three champions of one pack
+(Spiderlings, quality 1). Their raw ACD records (0x3C0 bytes) are identical in this area:
 
 ```
-D3Hud.Reader.exe --attach "Diablo III64.exe" --affixes
++0x1D4  7            +0x1D8  4            +0x1DC  FFFFFFFF     +0x1E0  FFFFFFFF
++0x1E4  371E75AA     +0x1E8  71955F77     +0x1EC  E5CA999C     +0x1F0  838366E7
++0x1F4  F63C0C14     +0x1F8  FFFFFFFF     +0x1FC  FFFFFFFF     +0x200  FFFFFFFF
 ```
 
-Stand next to a champion pack or a rare (so they are in the actor list) and run it. For every champion,
-rare and boss it scans the ACD record for the 30 GBIDs and prints the offsets (`+0x...  Name`), and writes
-the raw record to `dumps/acd_<id>.bin`. Outcomes:
+`71955F77` = 1905614711 = Orbiter, `E5CA999C` = Fire Chains, `838366E7` = Knockback, `F63C0C14` = Frozen: all four
+are in the table above. So the list is **eight u32 slots from +0x1E4**, an unused slot is `FFFFFFFF`, and a
+champion's first slot holds an id that is not one of the 30 (`371E75AA`, probably the elite marker of the
+champion type). Not yet measured: rares (up to 6 affixes?) and bosses; the reader scans +0x1DC..+0x208, which
+covers the eight slots and a little margin, and counts only ids of the table, so an unknown id is ignored.
 
-- GBIDs found at the same offsets for several monsters: the list is in the ACD record, and the offsets give the
-  layout (an array of up to 8 GBIDs is the expected shape). Then the reader publishes the affixes and the
-  plugin can show them.
-- Nothing found: the list is elsewhere (an attribute array, or a separate structure). Next step is to compare
-  the raw records of an affixed and a plain monster, or scan memory for the GBIDs near the actor.
+`AffixMaskFromAcdWords` (`src/core/MonsterAffixes.h`) does the decoding and is unit-tested with this record;
+the reader publishes the result as `ActorSnapshot::affixMask` (snapshot version 12), bit i =
+`kMonsterAffixes[i]`. Only champions, rares and bosses are read. The health bars plugin shows the chosen
+affixes under the bars (each affix has its own colour on the plugin's page).
 
-Record the result here.
+If an elite ever shows no affixes although it has some, run `--affixes` next to it: the probe prints where the
+known ids sit in that monster's record.

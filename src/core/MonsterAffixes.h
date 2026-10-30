@@ -56,4 +56,27 @@ inline const MonsterAffixInfo* FindMonsterAffix(uint32_t gbid) {
     return nullptr;
 }
 
+// Index of the affix in kMonsterAffixes, or -1.
+inline int FindMonsterAffixIndex(uint32_t gbid) {
+    for (size_t i = 0; i < kMonsterAffixCount; ++i)
+        if (kMonsterAffixes[i].gbid == gbid) return static_cast<int>(i);
+    return -1;
+}
+
+// Where a monster keeps its affixes: eight u32 slots in its ACD record from +0x1E4 (unused slots are
+// 0xFFFFFFFF; the first slot of a champion holds an id that is not one of the 30, an elite marker).
+// Measured live on champions (analysis/MONSTER_AFFIXES.md). The scan starts a little earlier and runs a
+// little later so a shifted list is still caught; only ids of the known table count.
+constexpr uint32_t kAcdAffixFirst = 0x1DC, kAcdAffixEnd = 0x208;
+
+// Bit i of the result = the monster has kMonsterAffixes[i]. `words` = the ACD record as u32 words.
+inline uint32_t AffixMaskFromAcdWords(const uint32_t* words, size_t wordCount) {
+    uint32_t mask = 0;
+    for (uint32_t off = kAcdAffixFirst; off < kAcdAffixEnd && off / 4 < wordCount; off += 4) {
+        const int i = FindMonsterAffixIndex(words[off / 4]);
+        if (i >= 0) mask |= 1u << i;
+    }
+    return mask;
+}
+
 }  // namespace d3hud

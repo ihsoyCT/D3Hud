@@ -46,6 +46,7 @@ memory, press keys or click, touch files or the network. (See `PLUGIN_PLAN.md` f
 | `d3hud.setting{...}`, `d3hud.get(key)`, `d3hud.set(key, value)` | persisted settings (below) |
 | `d3hud.page{id, title, group, order, draw}` | a page in the Settings window; `draw(ui)` runs while it is shown. The first page of a plugin also shows its options and dock panel controls |
 | `d3hud.panel{id, title, width, height, draw}` | a dock panel: a tab in the dock, hover to peek, F8 + click to pin, drag to move; `draw(ui)` like a page. `width`/`height` > 0 make it resizable |
+| `d3hud.affixes` | all 30 monster affixes of the game: `{ {key = "molten", name = "Molten"}, ... }` |
 | `d3hud.kind` | names for the actor kind numbers: `d3hud.kind.rare`, `.champion`, `.boss`, `.pylon`, ... |
 | `d3hud.api` | the host API version |
 
@@ -56,7 +57,8 @@ memory, press keys or click, touch files or the network. (See `PLUGIN_PLAN.md` f
 **Actors** (`d3hud.actors()`, `d3hud.actor(i)`) have: `id`, `x`, `y` (world units), `dist` (from the
 player), `heading`, `kind` (number) and `kind_name`, `name` (the game's internal name), `hp` (0..1, **-1 when
 the life is not read**; only champions, rares and bosses are), `hp_current`, `hp_max`, and for ground items
-`rarity`, `ancient`, `primal`, `bonus`, `unidentified`; for pylons and shrines `used`; plus the raw `flags`. This
+`rarity`, `ancient`, `primal`, `bonus`, `unidentified`; for pylons and shrines `used`; for champions, rares
+and bosses their affixes: `affixes` (keys such as `"molten"`) and `affix_names` (`"Molten"`), plus `affix_mask`; and the raw `flags`. This
 is everything the reader publishes about an actor. Other game attributes are not part of the snapshot; making one
 available means reading it in the reader and extending the snapshot (see `AGENTS.md`, rule 1).
 
@@ -74,7 +76,7 @@ host. `choice` values are 1-based. Colours are `0xRRGGBB` numbers. Everything is
 **`ui` (inside a page's `draw(ui)`):** `text`, `text_disabled`, `text_colored(argb, text)`, `separator`,
 `separator_text`, `same_line`, `spacing`, `button(label)`, `checkbox(label, value)`,
 `slider_int(label, v, min, max)`, `slider_float(label, v, min, max [, "%.2f"])`, `combo(label, index, {items})`,
-`color_edit(label, rgb)`, `input_text(label, text)`, `collapsing_header(label)`, `is_item_hovered()`,
+`color_edit(label, rgb)` (a label starting with `##` gives a compact swatch for a row of widgets), `input_text(label, text)`, `collapsing_header(label)`, `is_item_hovered()`,
 `tooltip(text)`. Widgets that edit a value return `changed, newvalue`:
 
 ```lua

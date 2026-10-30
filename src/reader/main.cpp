@@ -14,6 +14,7 @@
 #include <timeapi.h>
 
 #include <algorithm>
+#include <bit>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -278,10 +279,17 @@ static int FillActors(const Process& proc, const AcdTable* acds, const AttribTab
         strncpy_s(s.name, info->name.c_str(), _TRUNCATE);
         s.itemFlags = 0;
         s.currentHp = s.maxHp = 0.f;  // 0 = unknown (only elites and bosses are read)
+        s.affixMask = 0;
+        s.affixCount = 0;
         if (kind == ActorKind::Champion || kind == ActorKind::Rare || kind == ActorKind::Boss) {
             uint32_t missing = 0;
             (void)MonsterHp(proc, acds, attribs, a, &s.currentHp, &s.maxHp, &missing);  // unreadable: stays unknown
             if (missing != 0 && hpMissingGroups != nullptr) hpMissingGroups->push_back(missing);
+            uint32_t affixes = 0;
+            if (acds != nullptr && a.hasAcd() && acds->ReadAffixMask(proc, a.acd, &affixes)) {
+                s.affixMask = affixes;
+                s.affixCount = static_cast<uint8_t>(std::popcount(affixes));
+            }
         }
         if ((kind == ActorKind::Pylon || kind == ActorKind::Shrine) && GizmoUsed(proc, acds, attribs, a))
             s.itemFlags = kActorFlagUsed;

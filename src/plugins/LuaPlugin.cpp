@@ -15,6 +15,7 @@ extern "C" {
 #include "lualib.h"
 }
 
+#include "MonsterAffixes.h"
 #include "Paths.h"
 
 namespace d3hud {
@@ -172,6 +173,19 @@ struct LuaBinding {
         SetBool(L, "unidentified", (a.flags & D3H_FLAG_UNIDENTIFIED) != 0);
         SetBool(L, "used", (a.flags & D3H_FLAG_USED) != 0);  // pylon / shrine already clicked
         SetStr(L, "name", a.name);
+        SetNum(L, "affix_mask", a.affix_mask);
+        lua_createtable(L, 0, 0);  // affixes: keys ("molten"), in the order of d3hud.affixes
+        lua_createtable(L, 0, 0);  // affix_names: as the game shows them
+        int n = 0;
+        for (size_t i = 0; i < kMonsterAffixCount; ++i) {
+            if ((a.affix_mask & (1u << i)) == 0) continue;
+            lua_pushstring(L, kMonsterAffixes[i].name);
+            lua_rawseti(L, -2, ++n);
+            lua_pushstring(L, kMonsterAffixes[i].key);
+            lua_rawseti(L, -3, n);
+        }
+        lua_setfield(L, -3, "affix_names");
+        lua_setfield(L, -2, "affixes");
     }
 
     // d3hud.actor(i) -> table or nil (1-based)
@@ -756,6 +770,17 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         lua_setfield(L, -2, k.first);
     }
     lua_setfield(L, -2, "kind");
+    // every monster affix of the game: { {key = "molten", name = "Molten"}, ... }
+    lua_createtable(L, static_cast<int>(kMonsterAffixCount), 0);
+    for (size_t i = 0; i < kMonsterAffixCount; ++i) {
+        lua_createtable(L, 0, 2);
+        lua_pushstring(L, kMonsterAffixes[i].key);
+        lua_setfield(L, -2, "key");
+        lua_pushstring(L, kMonsterAffixes[i].name);
+        lua_setfield(L, -2, "name");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
+    }
+    lua_setfield(L, -2, "affixes");
     if (D3H_HOST_HAS(&host, register_page)) LuaBinding::Register(L, p.get(), "page", LuaBinding::Page);
     lua_setfield(L, -2, "d3hud");
 
