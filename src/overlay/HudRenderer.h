@@ -209,6 +209,13 @@ private:
     void DrawProfileSettings();
     void DrawItemSettings();
     void DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt);
+    // The reader only reports the stash tab that is open, so the overlay remembers what it saw
+    // in each tab (global index page * 5 + tab) while the user browses; session only.
+    void UpdateStashCache(const WorldSnapshot& snap);
+    std::vector<ItemSnapshot> stashCache_[64];
+    bool stashSeen_[64] = {};
+    int lastStashTab_ = -1;
+    double stashTabSince_ = 0.0;
     char searchQuery_[64] = {};
     void DrawDropSettings();
     // Runs: one per world visit (the world id changes), with their own drop counts.

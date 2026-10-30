@@ -1695,6 +1695,39 @@ void HudRenderer::DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& o
 // rarity and flags (see ItemSearch.h); matches get an outline, everything else is
 // dimmed, in the stash tab and backpack that are on screen. Other tabs with matches
 // are listed. Typing works through the overlay's keyboard hand-off (main.cpp).
+void HudRenderer::UpdateStashCache(const WorldSnapshot& snap) {
+    if (!snap.ui.stashOpen || snap.ui.stashTab < 0) {
+        lastStashTab_ = -1;
+        return;
+    }
+    const double now = ImGui::GetTime();
+    const int tab = std::min(63, static_cast<int>(snap.ui.stashTab));
+    if (tab != lastStashTab_) {
+        lastStashTab_ = tab;
+        stashTabSince_ = now;
+    }
+    std::vector<ItemSnapshot> byTab[64];
+    for (uint16_t i = 0; i < snap.itemCount; ++i)
+        if (snap.items[i].location == kItemLocationStash)
+            byTab[std::min(63, snap.items[i].gridY / kStashRowsPerTab)].push_back(snap.items[i]);
+    for (int t = 0; t < 64; ++t)
+        if (!byTab[t].empty()) {  // the reader reports this tab: it is complete
+            stashCache_[t] = std::move(byTab[t]);
+            stashSeen_[t] = true;
+        }
+    // an empty open tab is empty only once it has been shown for a moment (the reader may still be loading)
+    if (stashCache_[tab].empty() ? !stashSeen_[tab] && now - stashTabSince_ > 1.5
+                                 : now - stashTabSince_ > 1.5 && snap.itemCount > 0) {
+        bool live = false;
+        for (uint16_t i = 0; i < snap.itemCount && !live; ++i)
+            live = snap.items[i].location == kItemLocationStash && snap.items[i].gridY / kStashRowsPerTab == tab;
+        if (!live) {  // shown for a while and the reader reports nothing there: the tab is empty
+            stashCache_[tab].clear();
+            stashSeen_[tab] = true;
+        }
+    }
+}
+
 void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
     const ItemStyle& S = layout_.items;
     if (!S.search || (!snap.ui.stashOpen && !snap.ui.inventoryOpen)) return;
@@ -1702,16 +1735,18 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
     const bool active = searchQuery_[0] != '\0';
     const ImU32 outline = Rgba(S.searchRgb, 255), dim = IM_COL32(0, 0, 0, static_cast<int>(S.searchDim * 255.f));
 
-    // matches per global stash tab (page * 5 + tab; the item's gridY / 10), and in the bags
+    UpdateStashCache(snap);
+    // matches per global stash tab (page * 5 + tab; the item's gridY / 10) from the cache, and
+    // in the bags / on the body from the live snapshot
     int perTab[64] = {};
     int inBags = 0;
-    if (active)
-        for (uint16_t i = 0; i < snap.itemCount; ++i) {
-            const ItemSnapshot& it = snap.items[i];
-            if (!ItemMatchesQuery(it, searchQuery_)) continue;
-            if (it.location == kItemLocationStash) ++perTab[std::min(63, it.gridY / kStashRowsPerTab)];
-            else ++inBags;
-        }
+    if (active) {
+        for (int t = 0; t < 64; ++t)
+            for (const ItemSnapshot& it : stashCache_[t])
+                if (ItemMatchesQuery(it, searchQuery_)) ++perTab[t];
+        for (uint16_t i = 0; i < snap.itemCount; ++i)
+            if (snap.items[i].location != kItemLocationStash && ItemMatchesQuery(snap.items[i], searchQuery_)) ++inBags;
+    }
 
     if (snap.ui.stashOpen) {
         // the box sits BELOW the stash grid: the tab and page buttons are above it
@@ -1731,6 +1766,21 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
                     for (int c : perTab) total += c;
                     ImGui::TextDisabled("%d match(es) in the stash%s", total - inBags, inBags ? ", + some in the bags" : "");
                 }
+                // coverage: the search only knows the tabs that were opened this session
+                char seen[160] = {};
+                int nSeen = 0, nOpen = 0;
+                for (int t = 0; t < 64; ++t) {
+                    if (!stashSeen_[t]) continue;
+                    ++nSeen;
+                    if (nOpen < 12) {
+                        const size_t len = strlen(seen);
+                        snprintf(seen + len, sizeof(seen) - len, "%s%d.%d", nOpen ? " " : "", t / 5 + 1, t % 5 + 1);
+                        ++nOpen;
+                    }
+                }
+                if (nSeen == 0) ImGui::TextDisabled("open stash tabs to include them in the search");
+                else ImGui::TextDisabled("tabs searched (page.tab): %s%s - open the others to include them", seen,
+                                         nSeen > nOpen ? " ..." : "");
                 const ImVec2 p = ImGui::GetWindowPos(), sz = ImGui::GetWindowSize();
                 opt.AddHot(p.x, p.y, p.x + sz.x, p.y + sz.y);
             }
@@ -1838,6 +1888,21 @@ void HudRenderer::DrawItemSettings() {
     }
     ImGui::SliderFloat("dim items that do not match", &S.searchDim, 0.0f, 0.9f, "%.2f");
     ch |= ImGui::IsItemDeactivatedAfterEdit();
+    {
+        int tabs = 0, cached = 0;
+        for (int t = 0; t < 64; ++t) {
+            tabs += stashSeen_[t] ? 1 : 0;
+            cached += static_cast<int>(stashCache_[t].size());
+        }
+        ImGui::TextDisabled("the search remembers %d item(s) from %d stash tab(s) opened this session", cached, tabs);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Forget")) {
+            for (int t = 0; t < 64; ++t) {
+                stashCache_[t].clear();
+                stashSeen_[t] = false;
+            }
+        }
+    }
     ImGui::SeparatorText("Hover card");
     ch |= ImGui::Combo("show the card for", &S.hoverMode, "Unidentified items only\0Every item\0Off\0");
     ImGui::SliderFloat("card opacity", &S.hoverAlpha, 0.2f, 1.0f, "%.2f");
