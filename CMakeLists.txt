@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(D3Hud VERSION 0.1.0 LANGUAGES CXX)
+project(D3Hud VERSION 0.1.0 LANGUAGES C CXX)
 
 # The release folder must run on a machine without the Visual C++ redistributable: link the
 # MSVC runtime statically (must be set before any target is created, imgui included).
@@ -56,7 +56,7 @@ add_custom_command(TARGET D3Hud.Reader POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/analysis/scene_cells.bin $<TARGET_FILE_DIR:D3Hud.Reader>/scene_cells.bin)
 
-add_executable(d3hud_tests src/tests/test_core.cpp)
+add_executable(d3hud_tests src/tests/test_core.cpp src/tests/host_api_c.c)
 target_link_libraries(d3hud_tests PRIVATE d3hud_core d3hud_reader)
 
 enable_testing()

@@ -20,6 +20,7 @@
 #include "Salvage.h"
 #include "SceneCells.h"
 #include "SceneTable.h"
+#include "HostApi.h"
 #include "Settings.h"
 #include "SnapshotInterp.h"
 #include "SnoTable.h"
@@ -436,6 +437,29 @@ static void TestSalvageRules() {
     CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
 }
 
+extern "C" int HostApiCCheck(void);
+
+// The C API mirrors a few engine enums by number; plugins depend on those values.
+static void TestHostApi() {
+    static_assert(D3H_ACTOR_PLAYER == static_cast<int>(ActorKind::Player));
+    static_assert(D3H_ACTOR_PORTAL == static_cast<int>(ActorKind::Portal));
+    static_assert(D3H_ACTOR_RIFT_ORB_TIERED == static_cast<int>(ActorKind::RiftOrbTiered));
+    static_assert(D3H_RARITY_LEGENDARY == static_cast<int>(ItemRarity::Legendary));
+    static_assert(D3H_RARITY_SET == static_cast<int>(ItemRarity::Set));
+    static_assert(D3H_VERDICT_JUNK == static_cast<int>(SalvageVerdict::Junk));
+    static_assert(D3H_VERDICT_CHECK == static_cast<int>(SalvageVerdict::Check));
+    static_assert(D3H_NAME_LEN == kNameLen);
+    static_assert(D3H_FLAG_ANCIENT == kItemFlagAncient && D3H_FLAG_PRIMAL == kItemFlagPrimal &&
+                  D3H_FLAG_BONUS == kItemFlagBonus && D3H_FLAG_UNIDENTIFIED == kItemFlagUnidentified &&
+                  D3H_FLAG_USED == kActorFlagUsed);
+    CHECK(HostApiCCheck() == D3H_API_VERSION);  // the header compiles as C and D3H_HOST_HAS works
+
+    // an older host without the last function is detected
+    d3h_host old{};
+    old.size = static_cast<uint32_t>(offsetof(d3h_host, set_salvage_policy));
+    CHECK(D3H_HOST_HAS(&old, register_hotkey) && !D3H_HOST_HAS(&old, set_salvage_policy));
+}
+
 static void TestSettingsTable() {
     enum class Shape : uint8_t { A, B, C };
     bool on = true;
@@ -814,6 +838,7 @@ int main() {
     TestRiftTimer();
     TestPaths();
     TestSettingsTable();
+    TestHostApi();
     TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();
