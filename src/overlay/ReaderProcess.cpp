@@ -23,7 +23,7 @@ ReaderProcess::~ReaderProcess() {
     if (job_ != nullptr) CloseHandle(job_);
 }
 
-bool ReaderProcess::Start() {
+bool ReaderProcess::Start(int hz) {
     if (Running()) return true;
     if (process_ != nullptr) {
         CloseHandle(process_);
@@ -46,7 +46,7 @@ bool ReaderProcess::Start() {
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput = log;
     si.hStdError = log;
-    std::string cmd = "\"" + exe + "\" --attach \"Diablo III64.exe\" --publish";
+    std::string cmd = "\"" + exe + "\" --attach \"Diablo III64.exe\" --publish --hz " + std::to_string(hz);
     std::vector<char> cmdBuf(cmd.begin(), cmd.end());
     cmdBuf.push_back('\0');
     PROCESS_INFORMATION pi = {};

@@ -387,7 +387,8 @@ int main(int argc, char** argv) {
         opts.reader = &readerStatus;
         opts.salvage = &salvageStatus;
     }
-    if (startReader && !reader.Start()) std::print(stderr, "{}\n", reader.lastError());
+    if ((startReader || (live && renderer.readerAutostart())) && !reader.Start(renderer.readerHz()))
+        std::print(stderr, "{}\n", reader.lastError());
 
     LARGE_INTEGER freq, tPrev, tNow;
     QueryPerformanceFrequency(&freq);
@@ -560,7 +561,7 @@ int main(int argc, char** argv) {
                 SetClickThrough(g_hwnd, true);
             }
         }
-        if (readerStatus.startClicked) reader.Start();
+        if (readerStatus.startClicked) reader.Start(renderer.readerHz());
         if (readerStatus.stopClicked) reader.Stop();
         readerStatus.startClicked = readerStatus.stopClicked = false;
         if (g_visualMark && framesDrawn >= 5 && (g_matrix || framesDrawn < 55)) {

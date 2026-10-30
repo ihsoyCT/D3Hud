@@ -107,6 +107,10 @@ struct MinimapLayout {
     bool dockAutoHide = false;       // dock shows only near the cursor or while a panel is open
     float panelAlpha = 0.94f;        // panel background opacity
     bool compact = false;            // tighter padding and spacing
+    bool readerAutostart = false;    // start D3Hud.Reader together with the overlay (live mode)
+    int readerHz = 60;               // reader publish rate, applied when the reader starts
+    bool diagFps = false;            // fps / counts line at the bottom-left
+    bool diagReader = false;         // reader state, last log line and errors at the bottom-left
     bool salvageConfirm = false;     // the anvil button needs a second click before a run starts
     bool salvagePreview = true;      // red marks on items a run would destroy
     uint32_t salvagePreviewRgb = 0xFF3232;
@@ -177,6 +181,8 @@ public:
     const uint8_t* hotkeys() const { return layout_.hotkeys; }
     bool TakeHotkeysDirty() { const bool d = hotkeysDirty_; hotkeysDirty_ = false; return d; }
     bool capturingHotkey() const { return captureHotkey_ >= 0; }
+    bool readerAutostart() const { return layout_.readerAutostart; }
+    int readerHz() const { return layout_.readerHz; }
     const SafeArea& safeArea() const { return layout_.safeArea; }
     const SalvageRules& salvageRules() const { return layout_.salvageRules; }
 
@@ -193,6 +199,9 @@ private:
     void DrawProfileSettings();
     void DrawItemSettings();
     void DrawDropSettings();
+    void DrawReaderSettings();
+    void DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps);
+    double resetArmedUntil_ = 0.0;  // first click of "reset everything"
     bool ExportDropsCsv(const char* path) const;
     double flashUntil_ = 0.0;   // drop alert: screen-border flash
     uint32_t flashRgb_ = 0;

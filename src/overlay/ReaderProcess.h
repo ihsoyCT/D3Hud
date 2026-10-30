@@ -16,9 +16,9 @@ public:
     ReaderProcess();
     ~ReaderProcess();
 
-    // Launches `D3Hud.Reader.exe --attach "Diablo III64.exe" --publish`; false
+    // Launches `D3Hud.Reader.exe --attach "Diablo III64.exe" --publish --hz <hz>`; false
     // (see lastError()) if the exe is missing or CreateProcess fails.
-    bool Start();
+    bool Start(int hz = 60);
     void Stop();
     bool Running() const;
     DWORD pid() const { return pid_; }

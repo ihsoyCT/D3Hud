@@ -20,6 +20,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 
 namespace d3hud {
 namespace {
@@ -151,6 +152,10 @@ bool MinimapLayout::Load(const char* path) {
             else if (!strcmp(k, "preview")) salvagePreview = v != 0.f;
             else if (!strcmp(k, "previewRgb")) salvagePreviewRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
         }
+        else if (!strcmp(key, "readerAutostart")) readerAutostart = v != 0.f;
+        else if (!strcmp(key, "readerHz")) readerHz = std::clamp(static_cast<int>(v), 5, 240);
+        else if (!strcmp(key, "diagFps")) diagFps = v != 0.f;
+        else if (!strcmp(key, "diagReader")) diagReader = v != 0.f;
         else if (!strcmp(key, "dockCorner")) dockCorner = std::clamp(static_cast<int>(v), 0, 3);
         else if (!strcmp(key, "dockAlpha")) dockAlpha = std::clamp(v, 0.f, 1.f);
         else if (!strcmp(key, "dockAutoHide")) dockAutoHide = v != 0.f;
@@ -276,6 +281,8 @@ bool MinimapLayout::Save(const char* path) const {
                salvageRules.rarityMask, salvageRules.keepAncient ? 1 : 0, salvageRules.keepPrimal ? 1 : 0,
                salvageRules.neverFamilies, salvageRules.maxPerRun, salvageRules.extraDelayMs);
     std::print(f, "salvage.confirm={}\nsalvage.preview={}\nsalvage.previewRgb={}\n", salvageConfirm ? 1 : 0, salvagePreview ? 1 : 0, salvagePreviewRgb);
+    std::print(f, "readerAutostart={}\nreaderHz={}\ndiagFps={}\ndiagReader={}\n",
+               readerAutostart ? 1 : 0, readerHz, diagFps ? 1 : 0, diagReader ? 1 : 0);
     std::print(f, "uiScale={:.2f}\ndockCorner={}\ndockAlpha={:.2f}\ndockAutoHide={}\npanelAlpha={:.2f}\ncompact={}\n",
                uiScale, dockCorner, dockAlpha, dockAutoHide ? 1 : 0, panelAlpha, compact ? 1 : 0);
     for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
@@ -1479,6 +1486,73 @@ void HudRenderer::DrawProfileSettings() {
     ImGui::TextDisabled("%s", layoutStatus_);
 }
 
+// Settings > Reader / diagnostics, plus the housekeeping buttons.
+void HudRenderer::DrawReaderSettings() {
+    bool ch = false;
+    ch |= ImGui::Checkbox("start the reader together with the overlay (live mode)", &layout_.readerAutostart);
+    ImGui::SliderInt("reader publish rate (Hz)", &layout_.readerHz, 15, 120);
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::TextDisabled("The rate applies the next time the reader starts (Info panel: Stop, then Start reader).");
+    ImGui::SeparatorText("On-screen diagnostics (bottom-left)");
+    ch |= ImGui::Checkbox("fps and actor/item counts", &layout_.diagFps);
+    ch |= ImGui::Checkbox("reader state, last log line and errors", &layout_.diagReader);
+    ImGui::SeparatorText("Files");
+    ImGui::TextDisabled("%s", layoutPath_);
+    if (ImGui::Button("Open settings folder"))
+        ShellExecuteA(nullptr, "open", std::filesystem::path(layoutPath_).parent_path().string().c_str(), nullptr,
+                      nullptr, SW_SHOWNORMAL);
+    ImGui::SameLine();
+    const bool armed = ImGui::GetTime() < resetArmedUntil_;
+    ImGui::PushStyleColor(ImGuiCol_Button, armed ? ImVec4(0.75f, 0.2f, 0.2f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
+    if (ImGui::Button(armed ? "Click again to reset EVERYTHING" : "Reset everything...")) {
+        if (armed) {
+            layout_ = MinimapLayout();
+            hotkeysDirty_ = true;
+            resetArmedUntil_ = 0.0;
+            layoutStatus_ = layout_.Save(layoutPath_) ? "everything reset" : "reset (save failed)";
+        } else {
+            resetArmedUntil_ = ImGui::GetTime() + 4.0;
+        }
+    }
+    ImGui::PopStyleColor();
+    ImGui::TextDisabled("Reset also clears the safe area, panel layout and hotkeys (profiles are kept).");
+    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+}
+
+// On-screen diagnostics, bottom-left: fps/counts and the reader's state.
+void HudRenderer::DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps) {
+    if (!layout_.diagFps && !(layout_.diagReader && opt.reader != nullptr)) return;
+    char lines[3][160];
+    ImU32 cols[3];
+    int n = 0;
+    if (layout_.diagFps) {
+        snprintf(lines[n], sizeof(lines[n]), "%.0f fps | actors %u | items %u | frame %llu", fps, snap.actorCount,
+                 snap.itemCount, static_cast<unsigned long long>(snap.frameIndex));
+        cols[n++] = IM_COL32(220, 220, 230, 255);
+    }
+    if (layout_.diagReader && opt.reader != nullptr) {
+        const ReaderStatus& rs = *opt.reader;
+        snprintf(lines[n], sizeof(lines[n]), "reader: %s", rs.running ? (rs.connected ? "running, connected" : "running, connecting...") : "stopped");
+        cols[n++] = rs.running && rs.connected ? IM_COL32(110, 255, 130, 255) : IM_COL32(255, 170, 50, 255);
+        if (rs.error[0] != '\0') {
+            snprintf(lines[n], sizeof(lines[n]), "%.150s", rs.error);
+            cols[n++] = IM_COL32(255, 100, 100, 255);
+        } else if (rs.line[0] != '\0' && n < 3) {
+            snprintf(lines[n], sizeof(lines[n]), "%.150s", rs.line);
+            cols[n++] = IM_COL32(170, 170, 180, 255);
+        }
+    }
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float lh = ImGui::GetTextLineHeightWithSpacing();
+    float y = ds.y - 12.0f - lh * n;
+    for (int i = 0; i < n; ++i, y += lh) {
+        const ImVec2 ts = ImGui::CalcTextSize(lines[i]);
+        dl->AddRectFilled(ImVec2(10.f, y - 1.f), ImVec2(14.f + ts.x, y + ts.y + 1.f), IM_COL32(0, 0, 0, 150), 3.f);
+        dl->AddText(ImVec2(12.f, y), cols[i], lines[i]);
+    }
+}
+
 // Settings > Drops: alerts, log size, CSV export.
 void HudRenderer::DrawDropSettings() {
     DropStyle& D = layout_.drops;
@@ -1564,9 +1638,9 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
                    ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f))))
         return;
     // entries: the four panel pages (PanelId order) sit together; the rest are feature pages
-    enum Entry { kGeneral, kHotkeys, kProfiles, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kEntryCount };
+    enum Entry { kGeneral, kHotkeys, kProfiles, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kReader, kEntryCount };
     static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Profiles", "Info", "Drops", "Items", "Actors",
-                                                "Minimap", "Ground labels", "Auto salvage"};
+                                                "Minimap", "Ground labels", "Auto salvage", "Reader / diagnostics"};
     ImGui::BeginChild("##settings_list", ImVec2(150.0f * layout_.uiScale, 0.0f), true);
     for (int i = 0; i < kEntryCount; ++i)
         if (ImGui::Selectable(kEntries[i], settingsTab_ == i)) settingsTab_ = i;
@@ -1617,6 +1691,8 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         }
     } else if (settingsTab_ == kMinimap) {
         DrawMinimapSettings();
+    } else if (settingsTab_ == kReader) {
+        DrawReaderSettings();
     } else if (settingsTab_ == kLabels) {
         DrawLabelSettings();
     } else {
@@ -1697,6 +1773,7 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     DrawItemBadges(snap);        // independent of F9: only while the game shows inventory/stash
     DrawAutoSalvage(snap, opt);  // safe area + salvage preview while the inventory is open
     DrawHoveredItem(snap, opt);  // independent of F9: it only appears while the game shows a tooltip
+    DrawDiagnostics(snap, opt, fps);
     if (ImGui::GetTime() < flashUntil_) {  // drop alert: a fading border around the screen
         const ImVec2 ds = ImGui::GetIO().DisplaySize;
         const float k = static_cast<float>((flashUntil_ - ImGui::GetTime()) / 1.2);

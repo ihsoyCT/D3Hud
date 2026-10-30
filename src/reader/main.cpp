@@ -711,6 +711,8 @@ static void CurrentWorldScenes(const std::vector<SceneRecord>& all, Vec2 player,
 
 // Live loop: actor list when available (all dots + player), else the
 // standing-cluster player tracker (player only). F10 writes a debug dump.
+static double g_publishHz = 60.0;  // --hz
+
 static int RunPublish(const Process& proc, double seconds, const std::string& snoPath) {
     SnoTable sno;
     const bool haveSno = LoadSno(snoPath, &sno);
@@ -798,9 +800,9 @@ static int RunPublish(const Process& proc, double seconds, const std::string& sn
     Vec2 lastPlayer = {};
     std::vector<RawActor> raw;
 
-    // ~60 Hz publishing (the overlay blends between snapshots): 1 ms timer
+    // ~60 Hz publishing by default, --hz to change (the overlay blends between snapshots): 1 ms timer
     // resolution so Sleep() can hit the 16.7 ms tick, restored on every exit.
-    constexpr double kTickSeconds = 1.0 / 60.0;
+    const double kTickSeconds = 1.0 / g_publishHz;
     struct TimerResolution {
         TimerResolution() { timeBeginPeriod(1); }
         ~TimerResolution() { timeEndPeriod(1); }
@@ -1183,6 +1185,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--ui") && i + 1 < argc) uiFilter = argv[++i];
         else if (!strcmp(argv[i], "--sno") && i + 1 < argc) snoPath = argv[++i];
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) publishSeconds = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--hz") && i + 1 < argc) g_publishHz = std::clamp(atof(argv[++i]), 5.0, 240.0);
         else if (!strcmp(argv[i], "--list-filter") && i + 1 < argc) {
             listFilter = argv[++i];
             list = true;
