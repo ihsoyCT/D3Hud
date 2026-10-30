@@ -62,6 +62,8 @@ struct DropStyle {
     bool sound = true;
     bool flash = true;
     int maxEntries = 500;       // oldest entries are dropped past this; 0 = keep all
+    bool showRunTimer = false;  // "Run 04:12" at the top centre of the screen
+    int minRunSeconds = 30;     // shorter world visits are not listed as runs (town hops)
 };
 
 struct MinimapLayout {
@@ -208,6 +210,21 @@ private:
     void DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt);
     char searchQuery_[64] = {};
     void DrawDropSettings();
+    // Runs: one per world visit (the world id changes), with their own drop counts.
+    struct RunEntry {
+        char start[9] = {};  // local wall-clock HH:MM:SS
+        double seconds = 0.0;
+        uint32_t world = 0;
+        int drops = 0, ancient = 0, primal = 0;
+    };
+    void UpdateRuns(const WorldSnapshot& snap);
+    void ResetSession();
+    void DrawRunTimer();
+    std::vector<RunEntry> runs_;  // finished runs, oldest first
+    RunEntry run_;                // the current one
+    bool haveRun_ = false;
+    double runStartT_ = 0.0, sessionStartT_ = -1.0;
+    int sessDrops_ = 0, sessAncient_ = 0, sessPrimal_ = 0, sessBonus_ = 0;  // legendary/set, ancient, primal, bonus
     void DrawReaderSettings();
     void DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps);
     double resetArmedUntil_ = 0.0;  // first click of "reset everything"

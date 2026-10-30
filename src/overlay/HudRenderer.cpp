@@ -169,6 +169,8 @@ bool MinimapLayout::Load(const char* path) {
             else if (!strcmp(k, "sound")) drops.sound = v != 0.f;
             else if (!strcmp(k, "flash")) drops.flash = v != 0.f;
             else if (!strcmp(k, "maxEntries")) drops.maxEntries = std::max(0, static_cast<int>(v));
+            else if (!strcmp(k, "showRunTimer")) drops.showRunTimer = v != 0.f;
+            else if (!strcmp(k, "minRunSeconds")) drops.minRunSeconds = std::clamp(static_cast<int>(v), 0, 3600);
         }
         else if (!strncmp(key, "items.", 6)) {
             const char* k = key + 6;
@@ -292,6 +294,7 @@ bool MinimapLayout::Save(const char* path) const {
     for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
     std::print(f, "drops.alertPrimal={}\ndrops.alertAncient={}\ndrops.sound={}\ndrops.flash={}\ndrops.maxEntries={}\n",
                drops.alertPrimal ? 1 : 0, drops.alertAncient ? 1 : 0, drops.sound ? 1 : 0, drops.flash ? 1 : 0, drops.maxEntries);
+    std::print(f, "drops.showRunTimer={}\ndrops.minRunSeconds={}\n", drops.showRunTimer ? 1 : 0, drops.minRunSeconds);
     std::print(f, "items.badges={}\nitems.badgeScale={:.2f}\nitems.badgeCorner={}\nitems.badgeAugment={}\n",
                items.badges ? 1 : 0, items.badgeScale, items.badgeCorner, items.badgeAugment ? 1 : 0);
     std::print(f, "items.colAncient={}\nitems.colPrimal={}\nitems.hoverMode={}\nitems.hoverAlpha={:.2f}\n",
@@ -1096,6 +1099,14 @@ void HudRenderer::UpdateDrops(const WorldSnapshot& snap) {
         std::strftime(e.time, sizeof(e.time), "%H:%M:%S", &local);
         dropIndex_[it.id] = drops_.size();
         drops_.push_back(e);
+        if (it.bonus) ++sessBonus_; else ++sessDrops_;
+        sessAncient_ += it.ancient ? 1 : 0;
+        sessPrimal_ += it.primal ? 1 : 0;
+        if (haveRun_) {
+            ++run_.drops;
+            run_.ancient += it.ancient ? 1 : 0;
+            run_.primal += it.primal ? 1 : 0;
+        }
         const DropStyle& D = layout_.drops;
         const bool alert = (it.primal && D.alertPrimal) || (it.ancient && D.alertAncient);
         if (alert && ImGui::GetTime() > 3.0) {  // not for items already lying there at startup
@@ -1114,6 +1125,58 @@ void HudRenderer::UpdateDrops(const WorldSnapshot& snap) {
     }
 }
 
+static void FormatDuration(double seconds, char* out, size_t n) {
+    const int s = static_cast<int>(std::max(0.0, seconds));
+    if (s >= 3600) snprintf(out, n, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60);
+    else snprintf(out, n, "%02d:%02d", s / 60, s % 60);
+}
+
+// A run is one visit to a world (rift level, bounty zone, town...): it ends when the
+// world id changes. Visits shorter than minRunSeconds are not listed.
+void HudRenderer::UpdateRuns(const WorldSnapshot& snap) {
+    const double now = ImGui::GetTime();
+    if (sessionStartT_ < 0.0) sessionStartT_ = now;
+    if (snap.worldSnoId == 0) return;
+    if (haveRun_ && snap.worldSnoId == run_.world) return;
+    if (haveRun_) {
+        run_.seconds = now - runStartT_;
+        if (run_.seconds >= layout_.drops.minRunSeconds) {
+            runs_.push_back(run_);
+            if (runs_.size() > 100) runs_.erase(runs_.begin());
+        }
+    }
+    run_ = RunEntry();
+    run_.world = snap.worldSnoId;
+    runStartT_ = now;
+    haveRun_ = true;
+    const std::time_t t = std::time(nullptr);
+    std::tm local{};
+    localtime_s(&local, &t);
+    std::strftime(run_.start, sizeof(run_.start), "%H:%M:%S", &local);
+}
+
+void HudRenderer::ResetSession() {
+    sessDrops_ = sessAncient_ = sessPrimal_ = sessBonus_ = 0;
+    sessionStartT_ = ImGui::GetTime();
+    runs_.clear();
+    if (haveRun_) {
+        run_.drops = run_.ancient = run_.primal = 0;
+        runStartT_ = sessionStartT_;
+    }
+}
+
+void HudRenderer::DrawRunTimer() {
+    if (!layout_.drops.showRunTimer || !haveRun_) return;
+    char t[24], text[48];
+    FormatDuration(ImGui::GetTime() - runStartT_, t, sizeof(t));
+    snprintf(text, sizeof(text), "Run %s", t);
+    const ImVec2 ds = ImGui::GetIO().DisplaySize, ts = ImGui::CalcTextSize(text);
+    const ImVec2 at(ds.x * 0.5f - ts.x * 0.5f, 6.0f);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->AddRectFilled(ImVec2(at.x - 6, at.y - 2), ImVec2(at.x + ts.x + 6, at.y + ts.y + 2), IM_COL32(0, 0, 0, 140), 4.f);
+    dl->AddText(at, IM_COL32(230, 230, 240, 255), text);
+}
+
 bool HudRenderer::ExportDropsCsv(const char* path) const {
     FILE* f = fopen(path, "w");
     if (f == nullptr) return false;
@@ -1130,18 +1193,32 @@ bool HudRenderer::ExportDropsCsv(const char* path) const {
 // backpack/equipped) or gone (out of range, salvaged, despawned).
 void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& opt) {
     if (!PanelOpen(PanelId::Drops, opt, "Drops")) return;
-    int ancients = 0, primals = 0, bonus = 0;
-    for (const DropEntry& d : drops_) {
-        ancients += d.item.ancient;
-        primals += d.item.primal;
-        bonus += d.item.bonus;
-    }
-    ImGui::Text("%zu drops this session: %zu legendary/set (%d ancient, %d primal), %d bonus",
-                drops_.size(), drops_.size() - bonus, ancients, primals, bonus);
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Clear")) {
-        drops_.clear();
-        dropIndex_.clear();
+    {
+        const double now = ImGui::GetTime(), secs = now - sessionStartT_;
+        char ses[24], run[24];
+        FormatDuration(secs, ses, sizeof(ses));
+        FormatDuration(haveRun_ ? now - runStartT_ : 0.0, run, sizeof(run));
+        const double perHour = secs >= 60.0 ? sessDrops_ * 3600.0 / secs : 0.0;
+        ImGui::Text("Session %s   current run %s", ses, run);
+        ImGui::Text("%d legendary/set", sessDrops_);
+        if (secs >= 60.0) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%.1f/h)", perHour);
+        }
+        ImGui::SameLine();
+        ImGui::Text("| %d ancient", sessAncient_);
+        if (sessDrops_ > 0) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%.0f%%)", 100.0 * sessAncient_ / sessDrops_);
+        }
+        ImGui::SameLine();
+        ImGui::Text("| %d primal | %d bonus", sessPrimal_, sessBonus_);
+        if (ImGui::SmallButton("Clear log")) {
+            drops_.clear();
+            dropIndex_.clear();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset session stats")) ResetSession();
     }
     if (ImGui::BeginTable("drops", 5,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY |
@@ -1179,6 +1256,41 @@ void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& op
             else                              ImGui::TextDisabled("%s", status);
         }
         ImGui::EndTable();
+    }
+    if (ImGui::CollapsingHeader("Runs (world visits)")) {
+        if (ImGui::BeginTable("runs", 6,
+                              ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
+                              ImVec2(560.0f, 130.0f))) {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Start", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("Drops", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+            ImGui::TableSetupColumn("Ancient", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("Primal", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+            ImGui::TableSetupColumn("World", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+            auto row = [&](const RunEntry& r, double seconds, bool live) {
+                char t[24];
+                FormatDuration(seconds, t, sizeof(t));
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                if (live) ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "%s", r.start);
+                else ImGui::TextUnformatted(r.start);
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(t);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", r.drops);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", r.ancient);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", r.primal);
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%08X%s", r.world, live ? "  (now)" : "");
+            };
+            if (haveRun_) row(run_, ImGui::GetTime() - runStartT_, true);
+            for (size_t k = runs_.size(); k-- > 0;) row(runs_[k], runs_[k].seconds, false);
+            ImGui::EndTable();
+        }
     }
     PanelEnd(PanelId::Drops, true);
 }
@@ -1627,6 +1739,11 @@ void HudRenderer::DrawDropSettings() {
     ch |= ImGui::Checkbox("  flash the screen border", &D.flash);
     ImGui::SliderInt("keep at most (0 = all)", &D.maxEntries, 0, 2000);
     ch |= ImGui::IsItemDeactivatedAfterEdit();
+    ch |= ImGui::Checkbox("run timer at the top of the screen", &D.showRunTimer);
+    ImGui::SliderInt("list runs longer than (seconds)", &D.minRunSeconds, 0, 300);
+    ch |= ImGui::IsItemDeactivatedAfterEdit();
+    if (ImGui::Button("Reset session stats")) ResetSession();
+    ImGui::SameLine();
     if (ImGui::Button("Export session to CSV")) {
         const std::string path = (std::filesystem::path(layoutPath_).parent_path() / "d3hud_drops.csv").string();
         layoutStatus_ = ExportDropsCsv(path.c_str()) ? "exported d3hud_drops.csv next to d3hud.ini" : "export failed";
@@ -1829,7 +1946,9 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
             layout_.panelPinned[i] = !layout_.panelPinned[i];
             layout_.Save(layoutPath_);
         }
+    UpdateRuns(snap);
     UpdateDrops(snap);           // the log keeps recording while the panels are hidden
+    DrawRunTimer();
     if (!opt.showPanels)
         for (ImVec2& s : panelSize_) s = ImVec2(0.f, 0.f);  // F9 off: nothing to hover
     for (int i = 0; i < kPanels; ++i)
