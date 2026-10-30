@@ -83,7 +83,11 @@ struct MinimapLayout {
     float rightOffset = 0.168f;  // centre distance from the right edge / window height (16:9 measured)
     float topOffset = 0.192f;    // centre distance from the top edge / window height
     float radius = 0.125f;       // / window height
-    float worldRadius = 156.0f;  // world units from centre to rim
+    float worldRadius = 156.0f;  // world units from centre to rim of the manual placement below
+    // Zoom while the game's own minimap circle is followed (autoMinimap): world units from its centre to
+    // its rim. Separate from worldRadius because the two circles differ in size: a zoom calibrated against
+    // one is wrong for the other. 150 = measured against the game's minimap (radius 0.125 of the screen height).
+    float autoWorldRadius = 150.0f;
     bool beyondRim = true;       // also draw actors outside the circle (faded)
     // marker look
     static constexpr int kKindCount = static_cast<int>(ActorKind::RiftOrbTiered) + 1;
@@ -346,6 +350,7 @@ private:
     bool panelMoved_[kPanels] = {};        // title-bar drag in progress; saved on release
     int settingsTab_ = 0;  // index into settingsPages_
     std::vector<SettingsPage> settingsPages_;
+    float activeWorldRadius_ = 156.0f;  // the zoom the minimap used last frame
     ImVec2 dockPos_ = {}, dockSize_ = {};  // last frame's dock rect (auto-hide keeps testing it)
 
     void DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt);

@@ -135,6 +135,7 @@ void MinimapLayout::Describe(SettingsTable& t) {
     t.Add("topOffset", topOffset, kAnyLo, kAnyHi, 4);
     t.Add("radius", radius, kAnyLo, kAnyHi, 4);
     t.Add("worldRadius", worldRadius, kAnyLo, kAnyHi, 1);
+    t.Add("autoWorldRadius", autoWorldRadius, 20.f, 400.f, 1);
     t.Add("beyondRim", beyondRim);
     t.Comment("auto salvage: safe backpack cells (bit row*10+col), protections");
     t.AddHex64("safeCells", safeArea.cells, (1ull << (kBackpackCols * kBackpackRows)) - 1);
@@ -413,7 +414,8 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
         cx = io.DisplaySize.x - radiusPx - 24.0f;
         cy = io.DisplaySize.y - radiusPx - 24.0f;
     }
-    const float unitsPerPx = layout_.worldRadius / std::max(radiusPx, 1.0f);
+    activeWorldRadius_ = minimapFound_ ? layout_.autoWorldRadius : layout_.worldRadius;
+    const float unitsPerPx = activeWorldRadius_ / std::max(radiusPx, 1.0f);
     const ImVec2 c(cx, cy);
     const Vec2 center = {cx, cy};
     // background layer: under the panels, over nothing else (the window is transparent)
@@ -438,7 +440,7 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
     };
     DrawScenes(snap, dl, toPx, [&](Vec2 w, float slack) {
         const float dx = w.x - snap.playerPos.x, dy = w.y - snap.playerPos.y;
-        const float r = layout_.worldRadius + slack;
+        const float r = activeWorldRadius_ + slack;
         return dx * dx + dy * dy <= r * r;
     });
 
@@ -497,7 +499,7 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
             const float d = std::hypot(a.world.x - snap.playerPos.x, a.world.y - snap.playerPos.y);
             if (d < bestDist) { bestDist = d; best = &a; }
         }
-        if (best != nullptr && bestDist > layout_.worldRadius) {
+        if (best != nullptr && bestDist > activeWorldRadius_) {
             Vec2 px;
             WorldToMinimap(best->world, snap.playerPos, unitsPerPx, center, 1e9f, &px, nullptr, opt.mapOrientation);
             ImVec2 dir(px.x - cx, px.y - cy);
@@ -549,7 +551,8 @@ void HudRenderer::DrawMinimapSettings() {
     ImGui::SliderFloat("from top edge", &layout_.topOffset, 0.0f, 0.5f, "%.3f");
     ImGui::SliderFloat("radius", &layout_.radius, 0.03f, 0.4f, "%.3f");
     ImGui::EndDisabled();
-    ImGui::SliderFloat("zoom (world units to rim)", &layout_.worldRadius, 20.0f, 400.0f, "%.0f");
+    ImGui::SliderFloat("zoom (world units to rim)", minimapFound_ ? &layout_.autoWorldRadius : &layout_.worldRadius, 20.0f,
+                       400.0f, "%.0f");
 
     ImGui::SeparatorText("Markers");
     ImGui::SliderFloat("marker size", &layout_.markerScale, 0.5f, 3.0f, "x%.2f");
@@ -640,6 +643,7 @@ void HudRenderer::DrawMinimapSettings() {
         layout_.topOffset = d.topOffset;
         layout_.radius = d.radius;
         layout_.worldRadius = d.worldRadius;
+        layout_.autoWorldRadius = d.autoWorldRadius;
         layout_.beyondRim = d.beyondRim;
         layoutStatus_ = "placement reset (not saved)";
     }
