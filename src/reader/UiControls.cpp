@@ -100,7 +100,7 @@ std::vector<UiControlInfo> UiControls::List(const Process& proc, const std::stri
     const size_t kChunk = 16u << 20, kTail = 512;
     std::vector<uint8_t> buf;
     char check[512];
-    for (const RegionInfo& r : proc.Regions(MEM_PRIVATE, true)) {
+    for (const RegionInfo& r : proc.Regions(MEM_PRIVATE)) {
         for (size_t off = 0; off < r.size; off += kChunk) {
             const size_t n = std::min(kChunk + kTail, r.size - off);
             buf.resize(n);

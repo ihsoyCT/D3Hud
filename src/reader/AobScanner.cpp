@@ -101,7 +101,7 @@ std::vector<uint64_t> ScanProcess(const Process& proc, const Pattern& p,
         hi = restrictToModule->base + restrictToModule->size;
     }
 
-    for (const RegionInfo& r : proc.Regions(typeFilter, true)) {
+    for (const RegionInfo& r : proc.Regions(typeFilter)) {
         if (restrictToModule != nullptr) {
             const uint64_t rEnd = r.base + r.size;
             if (rEnd <= lo || r.base >= hi) continue;

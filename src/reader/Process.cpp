@@ -109,7 +109,7 @@ uint64_t Process::creationTime() const {
     return (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
 }
 
-std::vector<RegionInfo> Process::Regions(DWORD typeFilter, bool readableOnly) const {
+std::vector<RegionInfo> Process::Regions(DWORD typeFilter) const {
     std::vector<RegionInfo> out;
     SYSTEM_INFO si;
     GetSystemInfo(&si);

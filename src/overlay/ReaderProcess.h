@@ -3,9 +3,7 @@
 // goes to reader.log, and a kill-on-close job object ends it with the overlay.
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 
 #include <string>
 

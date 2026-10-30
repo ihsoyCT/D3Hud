@@ -10,9 +10,7 @@
 //   D3Hud.Reader --scan-file <file> <pattern>    offline AOB scan (dumps, game exe)
 //   D3Hud.Reader --selftest                      spawn marker child, find it, verify
 //   D3Hud.Reader --marker-child <addr-file>      internal: sacrificial child for --selftest
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 #include <timeapi.h>
 
 #include <algorithm>
@@ -138,7 +136,7 @@ static int Capture(Process& proc, const char* outDir) {
     std::print(idx, "# region_id base size protect type file_offset\n");
     std::print("capturing readable regions of pid {} ({}) -> {}\n",
            static_cast<unsigned long>(proc.pid()), proc.name().c_str(), outDir);
-    auto regions = proc.Regions(0, true);
+    auto regions = proc.Regions();
     uint64_t total = 0, dumped = 0;
     int id = 0;
     FILE* blob = nullptr;

@@ -1,9 +1,7 @@
 // D3Hud.Overlay — transparent click-through DX11/ImGui overlay (M0).
 // Sources: synthetic scene (default), replay file (--replay), recorder (--record).
 // Modes: --dcomp (default, per-pixel alpha) or --colorkey (fallback).
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <dcomp.h>

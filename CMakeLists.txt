@@ -62,6 +62,13 @@ target_link_libraries(d3hud_tests PRIVATE d3hud_core d3hud_reader)
 enable_testing()
 add_test(NAME core COMMAND d3hud_tests)
 
+# Warnings for our own code (not the vendored imgui). /permissive- = standard conformance.
+if(MSVC)
+    foreach(t d3hud_core d3hud_reader D3Hud.Overlay D3Hud.Reader d3hud_tests)
+        target_compile_options(${t} PRIVATE /W4 /permissive- /Zc:__cplusplus)
+    endforeach()
+endif()
+
 # --- install: one relocatable folder -------------------------------------------------------
 # cmake --install build --config Release            -> <source>/dist
 # cmake --install build --config Release --prefix X -> X

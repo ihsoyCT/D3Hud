@@ -2,9 +2,7 @@
 // regions, buffered ReadProcessMemory.
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 #include <tlhelp32.h>
 
 #include <cstdint>
@@ -55,7 +53,7 @@ public:
     std::optional<ModuleInfo> FindModule(const std::string& namePart) const;
 
     // Walk VirtualQueryEx; optionally filter by type (MEM_PRIVATE etc, 0 = all committed readable).
-    std::vector<RegionInfo> Regions(DWORD typeFilter = 0, bool readableOnly = true) const;
+    std::vector<RegionInfo> Regions(DWORD typeFilter = 0) const;  // committed, readable, not guarded
 
     HANDLE handle() const { return handle_; }
     DWORD pid() const { return pid_; }

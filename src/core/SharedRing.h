@@ -2,9 +2,7 @@
 // Reader process writes at ~15 Hz; overlay polls for the latest frames.
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 
 #include <cstdint>
 

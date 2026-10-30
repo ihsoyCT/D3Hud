@@ -15,13 +15,7 @@
 #include "ItemSearch.h"
 #include "imgui_internal.h"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
+#include "Win32.h"
 #include <shellapi.h>
 
 namespace d3hud {
