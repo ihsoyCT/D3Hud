@@ -246,6 +246,11 @@ static void TestClassifyActor() {
     CHECK(ClassifyActor("Monster", "X1_LR_Boss_sniperAngel", true, kAlive, &k) && k == ActorKind::Boss);
     CHECK(ClassifyActor("Monster", "Goatman_Ranged_A", true, kAlive, &k) && k == ActorKind::Trash);
     CHECK(!ClassifyActor("Monster", "Skeleton_A", false, kDead, &k));  // corpse
+    // rift progress orbs: their own kinds, with or without an ACD; the flippy effects are not actors we show
+    CHECK(ClassifyActor("Item", "p1_normal_rifts_Orb", false, kAlive, &k) && k == ActorKind::RiftOrb);
+    CHECK(ClassifyActor("Item", "Challenge_Rifts_Orb", true, kAlive, &k) && k == ActorKind::RiftOrb);
+    CHECK(ClassifyActor("Item", "p1_tiered_rifts_Orb", false, kAlive, &k) && k == ActorKind::RiftOrbTiered);
+    CHECK(!ClassifyActor("ClientEffect", "p1_tiered_rifts_Orb_flippy", true, kAlive, &k));
     CHECK(!ClassifyActor("Monster", "Generic_Proxy", true, kAlive, &k));
     CHECK(!ClassifyActor("Monster", "Hireling_Enchantress", true, kAlive, &k));
     CHECK(!ClassifyActor("Monster", "p75_cos_pet_AngelicDragon", true, kAlive, &k));

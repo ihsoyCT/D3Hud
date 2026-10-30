@@ -112,6 +112,11 @@ bool ClassifyActor(const std::string& snoKind, const std::string& name, bool has
         }
         return false;
     }
+    if (snoKind == "Item" && Contains(name, "rifts_orb")) {
+        // the orbs that fill the rift progress bar: shown even without an ACD (they are not items)
+        *out = Contains(name, "tiered") ? ActorKind::RiftOrbTiered : ActorKind::RiftOrb;
+        return true;
+    }
     if (snoKind == "Item") {
         if (!hasAcd) return false;
         *out = Contains(name, "HealthGlobe") ? ActorKind::Globe : ActorKind::GroundItem;

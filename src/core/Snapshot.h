@@ -31,6 +31,8 @@ enum class ActorKind : uint8_t {
     GroundItem,  // appended: keeps existing values (and replay files) stable
     Portal,
     PylonSpawn,  // greater rift: possible pylon location (MarkerLocation_TieredRiftPylon)
+    RiftOrb,         // progress orb dropped in normal/challenge rifts (p1_normal_rifts_Orb, Challenge_Rifts_Orb)
+    RiftOrbTiered,   // progress orb of greater rifts (p1_tiered_rifts_Orb)
 };
 
 inline const char* ActorKindName(ActorKind k) {
@@ -48,6 +50,8 @@ inline const char* ActorKindName(ActorKind k) {
         case ActorKind::GroundItem: return "Item";
         case ActorKind::Portal:     return "Portal";
         case ActorKind::PylonSpawn: return "PylonSpawn";
+        case ActorKind::RiftOrb:    return "RiftOrb";
+        case ActorKind::RiftOrbTiered: return "RiftOrbGR";
     }
     return "?";
 }
