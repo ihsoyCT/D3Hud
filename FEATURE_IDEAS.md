@@ -32,3 +32,41 @@ Used pylons/shrines are hidden via Gizmo_State (464) / Gizmo_Has_Been_Operated
 - Validate the player heading arrow in-game (quaternion at +0xA0).
 - Dead monsters are detected by the cleared acd link (+0x88 == -1); if a
   live monster ever goes missing, F10-dump it - +0x2E0 / +0x16C are backups.
+
+## Settings backlog (brainstormed 2026-10-30)
+
+Not started. Suggested first three: hotkey rebinding, ground-label filters and
+look, nearest-pylon distance label + arrow.
+
+**General**
+- Hotkeys: rebind F7/F8/F9/End (hard-coded today); a hotkey per panel.
+- Dock: corner, opacity, auto-hide when nothing is hovered.
+- Panels: background opacity per panel; compact mode.
+- Profiles: save/load whole layouts (farming vs rifting).
+
+**Minimap**
+- Per-kind max distance; thin out trash dots in huge packs.
+- Ring on the nearest rare/champion.
+- Pylons: distance label ("Conduit Pylon 34m"); faint arrow to the nearest
+  unused pylon when off the map.
+- Player arrow colour/size (own-minimap mode).
+
+**Ground labels and drops**
+- Which items get labels (all legendaries / ancient+primal only / sets).
+- Label font size, colour per rarity, minimum rarity.
+- Alert (sound or flash) on primal/ancient drops.
+- Drops panel: session reset, CSV export, entry cap.
+
+**Items and inventory**
+- A/P badges: size, position, colour; augment-rank toggle.
+- Hover card for identified items too; its opacity.
+
+**Auto salvage**
+- Rules by rarity / item type / slot; never-salvage item types.
+- Safety: confirm step, delay between clicks, max items per run.
+- Preview: red X markers on/off and colour.
+
+**Reader and diagnostics**
+- Start the reader with the overlay; publish rate.
+- Fps/timings overlay; on-screen reader error log.
+- "Open ini folder"; "reset everything" with confirmation.
