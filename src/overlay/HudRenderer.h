@@ -57,6 +57,8 @@ struct MinimapLayout {
     bool showScenes = true;      // map prediction (walkable cells)
     float sceneAlpha = 1.0f;
     bool sceneLabels = true;     // "Entrance" / "Exit" on the prediction
+    bool distanceLabels = true;  // "Conduit Pylon  34m" on pylon/shrine names
+    bool pylonArrow = true;      // rim arrow + distance to the nearest unused pylon when it is off the map
     void ResetMarkers();
     // auto salvage (stored in the same ini)
     SafeArea safeArea;

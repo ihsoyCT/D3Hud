@@ -93,7 +93,7 @@ MinimapLayout::MinimapLayout() { ResetMarkers(); }
 
 void MinimapLayout::ResetMarkers() {
     markerScale = 1.0f;
-    outline = bigMapMarkers = showScenes = sceneLabels = true;
+    outline = bigMapMarkers = showScenes = sceneLabels = distanceLabels = pylonArrow = true;
     sceneAlpha = 1.0f;
     auto set = [&](ActorKind k, uint32_t rgb, float size, MarkerShape shape, float alpha = 1.0f,
                    bool label = false, bool pulse = false) {
@@ -157,6 +157,8 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "showScenes")) showScenes = v != 0.f;
         else if (!strcmp(key, "sceneAlpha")) sceneAlpha = v;
         else if (!strcmp(key, "sceneLabels")) sceneLabels = v != 0.f;
+        else if (!strcmp(key, "distanceLabels")) distanceLabels = v != 0.f;
+        else if (!strcmp(key, "pylonArrow")) pylonArrow = v != 0.f;
         else if (!strncmp(key, "kind.", 5)) {
             // kind.<Name>.<show|color|size|shape|alpha|label|pulse> = v
             char kname[16], what[16] = {};
@@ -210,6 +212,7 @@ bool MinimapLayout::Save(const char* path) const {
     std::print(f, "# marker look (color = 0xRRGGBB as decimal; shape 0 dot,1 ring,2 diamond,3 filled)\n");
     std::print(f, "markerScale={:.2f}\noutline={}\nbigMapMarkers={}\nshowScenes={}\nsceneAlpha={:.2f}\nsceneLabels={}\n",
                markerScale, outline ? 1 : 0, bigMapMarkers ? 1 : 0, showScenes ? 1 : 0, sceneAlpha, sceneLabels ? 1 : 0);
+    std::print(f, "distanceLabels={}\npylonArrow={}\n", distanceLabels ? 1 : 0, pylonArrow ? 1 : 0);
     for (int k = 0; k < kKindCount; ++k) {
         const KindStyle& ks = kinds[k];
         std::print(f, "kind.{0}.show={1}\nkind.{0}.color={2}\nkind.{0}.size={3:.2f}\nkind.{0}.shape={4}\n"
@@ -244,7 +247,8 @@ static ImU32 Rgba(uint32_t rgb, int alpha) {
 
 // One map marker, drawn from its kind's style (Settings > Minimap). Used
 // pylons/shrines are not drawn at all.
-static void DrawActorMarker(ImDrawList* dl, const ActorSnapshot& a, Vec2 px, int alpha, const MinimapLayout& L) {
+static void DrawActorMarker(ImDrawList* dl, const ActorSnapshot& a, Vec2 px, int alpha, const MinimapLayout& L,
+                            float dist = -1.f) {
     const KindStyle& st = L.kinds[static_cast<int>(a.kind)];
     if (!st.show) return;
     if ((a.kind == ActorKind::Pylon || a.kind == ActorKind::Shrine) && (a.itemFlags & kActorFlagUsed)) return;
@@ -286,6 +290,11 @@ static void DrawActorMarker(ImDrawList* dl, const ActorSnapshot& a, Vec2 px, int
     }
     const char* label = ShrineLabel(a.name);
     if (label == nullptr) return;
+    char withDist[96];
+    if (L.distanceLabels && dist >= 0.f) {
+        snprintf(withDist, sizeof(withDist), "%s  %.0fm", label, dist);
+        label = withDist;
+    }
     const ImVec2 sz = ImGui::CalcTextSize(label);
     const ImVec2 at(c.x - sz.x * 0.5f, c.y + r + 3.f);
     dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + sz.x + 3, at.y + sz.y + 1),
@@ -352,7 +361,7 @@ void HudRenderer::DrawBigMap(const WorldSnapshot& snap, const HudOptions& opt) {
         const Vec2 px = WorldToBigMap(a.world, snap.playerPos, snap.ui.bigMapPan, display.x, display.y,
                                       opt.mapOrientation);
         if (px.x < 0.f || px.y < 0.f || px.x > display.x || px.y > display.y) continue;
-        DrawActorMarker(dl, a, px, 255, layout_);
+        DrawActorMarker(dl, a, px, 255, layout_, std::hypot(a.world.x - snap.playerPos.x, a.world.y - snap.playerPos.y));
     }
 }
 
@@ -415,7 +424,42 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
             WorldToMinimap(a.world, snap.playerPos, unitsPerPx, center, 1e9f, &px, nullptr,
                            opt.mapOrientation);
         }
-        DrawActorMarker(dl, a, px, inside ? 255 : 170, layout_);
+        DrawActorMarker(dl, a, px, inside ? 255 : 170, layout_,
+                        std::hypot(a.world.x - snap.playerPos.x, a.world.y - snap.playerPos.y));
+    }
+
+    // Nearest unused pylon off the map: an arrow on the rim pointing to it, with the distance.
+    const KindStyle& pylonStyle = layout_.kinds[static_cast<int>(ActorKind::Pylon)];
+    if (layout_.pylonArrow && pylonStyle.show) {
+        const ActorSnapshot* best = nullptr;
+        float bestDist = FLT_MAX;
+        for (uint16_t i = 0; i < snap.actorCount; ++i) {
+            const ActorSnapshot& a = snap.actors[i];
+            if (a.kind != ActorKind::Pylon || (a.itemFlags & kActorFlagUsed)) continue;
+            const float d = std::hypot(a.world.x - snap.playerPos.x, a.world.y - snap.playerPos.y);
+            if (d < bestDist) { bestDist = d; best = &a; }
+        }
+        if (best != nullptr && bestDist > layout_.worldRadius) {
+            Vec2 px;
+            WorldToMinimap(best->world, snap.playerPos, unitsPerPx, center, 1e9f, &px, nullptr, opt.mapOrientation);
+            ImVec2 dir(px.x - cx, px.y - cy);
+            const float len = std::hypot(dir.x, dir.y);
+            if (len > 1.f) {
+                dir = ImVec2(dir.x / len, dir.y / len);
+                const ImVec2 perp(-dir.y, dir.x);
+                const ImVec2 tip(cx + dir.x * (radiusPx - 2.f), cy + dir.y * (radiusPx - 2.f));
+                const ImVec2 base(cx + dir.x * (radiusPx - 16.f), cy + dir.y * (radiusPx - 16.f));
+                const ImU32 col = Rgba(pylonStyle.rgb, 200);
+                dl->AddTriangleFilled(tip, ImVec2(base.x + perp.x * 7.f, base.y + perp.y * 7.f),
+                                      ImVec2(base.x - perp.x * 7.f, base.y - perp.y * 7.f), col);
+                char txt[24];
+                snprintf(txt, sizeof(txt), "%.0fm", bestDist);
+                const ImVec2 ts = ImGui::CalcTextSize(txt);
+                const ImVec2 at(cx + dir.x * (radiusPx - 30.f) - ts.x * 0.5f, cy + dir.y * (radiusPx - 30.f) - ts.y * 0.5f);
+                dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + ts.x + 3, at.y + ts.y + 1), IM_COL32(0, 0, 0, 150), 3.f);
+                dl->AddText(at, col, txt);
+            }
+        }
     }
 
     // Player arrow (own minimap only - the game's minimap draws its own player marker).
@@ -450,6 +494,9 @@ void HudRenderer::DrawMinimapSettings() {
     ImGui::Checkbox("map prediction", &layout_.showScenes);
     ImGui::SameLine();
     ImGui::Checkbox("Entrance/Exit labels", &layout_.sceneLabels);
+    ImGui::Checkbox("distance on pylon/shrine names", &layout_.distanceLabels);
+    ImGui::SameLine();
+    ImGui::Checkbox("arrow to the nearest pylon when off the map", &layout_.pylonArrow);
     ImGui::SliderFloat("prediction opacity", &layout_.sceneAlpha, 0.0f, 2.0f, "x%.2f");
     if (ImGui::BeginTable("kinds", 7,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
