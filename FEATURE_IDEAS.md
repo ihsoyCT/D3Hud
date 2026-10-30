@@ -35,8 +35,8 @@ Used pylons/shrines are hidden via Gizmo_State (464) / Gizmo_Has_Been_Operated
 
 ## Settings backlog (brainstormed 2026-10-30)
 
-Not started. Suggested first three: hotkey rebinding, ground-label filters and
-look, nearest-pylon distance label + arrow.
+Implemented 2026-10-30, one commit per group (see git log). Notes: "minimum rarity" for
+labels is covered by the label mode; item "slot" rules are the never-salvage item types.
 
 **General**
 - Hotkeys: rebind F7/F8/F9/End (hard-coded today); a hotkey per panel.
