@@ -85,7 +85,13 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
    (PluginHost.cpp). A new host function needs: the table entry, the implementation in `PluginHost.cpp`, the Lua
    binding in `LuaPlugin.cpp` (registered only if the host provides it), a line in `plugins/README.md`, and a
    test against the fake host in `test_core.cpp`. `HostApi.h` must keep compiling as C (`host_api_c.c`).
-11. **Plugin sandbox.** Lua gets only base (whitelisted), string, table, math, utf8, coroutine; text chunks only; a
+11. **Lua is compiled as C++** (CMakeLists.txt): its errors are then C++ exceptions and the destructors of our bindings
+   run. As C it uses longjmp, which skips them and crashed when an error passed through a binding that owned a
+   `std::string`. Do not switch it back, and include the Lua headers without `extern "C"`.
+12. **Plugin libraries** (`plugins/lib`, `d3hud.require`) are part of the plugin API and the standard way to draw
+   (`draw`): new plugins use them instead of their own helpers. A change to what a library function does needs an
+   API version bump. Libraries have tests in `test_core.cpp` (`TestLuaLibraries`).
+13. **Plugin sandbox.** Lua gets only base (whitelisted), string, table, math, utf8, coroutine; text chunks only; a
    memory cap and an instruction budget per call. Do not add io/os/debug/package, `load`, or any function that
    reaches game memory, injects input, or touches files or the network; plugins stay unable to play the game.
 

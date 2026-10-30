@@ -3,7 +3,8 @@
 //   plugin.lua  `return { name = "...", version = "...", api = 1 }`  (run with no globals at all)
 //   main.lua    the plugin; sees the whitelisted standard library plus the `d3hud` table
 // Safety: no io/os/debug/require/load*, text chunks only, a memory cap, an instruction budget per
-// call, and a plugin that raises errors repeatedly is switched off. See docs in PLUGIN_PLAN.md.
+// call, and a plugin that raises errors repeatedly is switched off. Shared Lua libraries (plugins/lib/<name>.lua)
+// are loaded with d3hud.require("name"): by plain name only, into the plugin's own sandbox. See docs in PLUGIN_PLAN.md.
 #pragma once
 
 #include <chrono>
@@ -93,6 +94,9 @@ private:
     std::chrono::steady_clock::time_point windowStart_{};
     std::string lastError_;
     int handlersRef_ = 0;  // registry table: event type -> array of Lua functions
+    int envRef_ = 0;       // registry: the sandbox environment (shared libraries run in it too)
+    int libsRef_ = 0;      // registry: loaded libraries, name -> value (false while loading)
+    std::filesystem::path libDir_;  // <plugins>/lib: what d3hud.require can load
     int uiRef_ = 0;        // registry: the `ui` table handed to page draw functions
     const d3h_ui* ui_ = nullptr;  // valid only while a page draws
     std::map<std::string, int> settingTypes_;  // key -> d3h_setting_type, for d3hud.get

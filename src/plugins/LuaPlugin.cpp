@@ -9,11 +9,11 @@
 #include <cstring>
 #include <format>
 
-extern "C" {
+// Lua is compiled as C++ (CMakeLists.txt): its errors are C++ exceptions, so destructors run when a Lua error
+// passes through our bindings (with a C build the error is a longjmp, which skips them and crashed here).
 #include "lauxlib.h"
 #include "lua.h"
 #include "lualib.h"
-}
 
 #include "MonsterAffixes.h"
 #include "Paths.h"
@@ -184,6 +184,8 @@ struct LuaBinding {
             lua_pushstring(L, kMonsterAffixes[i].key);
             lua_rawseti(L, -3, n);
         }
+        // lua_setfield resolves its index before it pops the value: stack is [actor, affixes, affix_names],
+        // so -3 is the actor, and after the pop (-2) it is the actor again
         lua_setfield(L, -3, "affix_names");
         lua_setfield(L, -2, "affixes");
     }
@@ -264,6 +266,46 @@ struct LuaBinding {
         const float scale = static_cast<float>(luaL_optnumber(L, 5, 1.0));
         Self(L)->host_.draw_text(D3H_LAYER_OVERLAY, pos, color, text, scale);
         return 0;
+    }
+
+    // d3hud.require("draw"): a shared library from plugins/lib/draw.lua, run once per plugin in the plugin's
+    // sandbox. Only plain names: no paths, so a plugin cannot load anything but the shipped libraries.
+    static int Require(lua_State* L) {
+        LuaPlugin* p = Self(L);
+        const char* name = luaL_checkstring(L, 1);
+        const size_t n = strlen(name);
+        if (n == 0 || n > 32 || strspn(name, "abcdefghijklmnopqrstuvwxyz0123456789_") != n)
+            return luaL_error(L, "library names are lowercase letters, digits and '_'");
+        lua_rawgeti(L, LUA_REGISTRYINDEX, p->libsRef_);
+        lua_getfield(L, -1, name);
+        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1)) return luaL_error(L, "library '%s' requires itself", name);
+        if (!lua_isnil(L, -1)) return 1;  // loaded before
+        lua_pop(L, 1);
+        // C++ objects must be gone before anything that can raise a Lua error (longjmp skips destructors)
+        bool found = false;
+        int rc = LUA_OK;
+        {
+            std::string source;
+            found = ReadScript(p->libDir_ / std::filesystem::path(std::string(name) + ".lua"), source);
+            if (found) {
+                const std::string chunk = std::string("@lib/") + name + ".lua";
+                rc = luaL_loadbufferx(L, source.data(), source.size(), chunk.c_str(), "t");
+            }
+        }
+        if (!found) return luaL_error(L, "library '%s' not found", name);
+        if (rc != LUA_OK) return lua_error(L);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, p->envRef_);
+        lua_setupvalue(L, -2, 1);
+        lua_pushboolean(L, 0);  // marks "loading", to catch a library that requires itself
+        lua_setfield(L, -3, name);
+        lua_call(L, 0, 1);  // an error propagates to the caller; the instruction budget of the call applies
+        if (lua_isnil(L, -1)) {
+            lua_pop(L, 1);
+            lua_pushboolean(L, 1);
+        }
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, name);
+        return 1;
     }
 
     // d3hud.on("frame", function(ev) ... end)
@@ -696,9 +738,12 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         p->manifest_.version = version != nullptr ? version : "";
     }
 
-    // Registry tables: event handlers and the ui table.
+    // Registry tables: event handlers, loaded libraries and the ui table.
     lua_newtable(L);
     p->handlersRef_ = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_newtable(L);
+    p->libsRef_ = luaL_ref(L, LUA_REGISTRYINDEX);
+    p->libDir_ = dir.parent_path() / L"lib";
 
     lua_newtable(L);  // ui
     const struct { const char* name; lua_CFunction fn; } uiFns[] = {
@@ -735,6 +780,7 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
     lua_setfield(L, -2, "api");
     LuaBinding::Register(L, p.get(), "log", LuaBinding::Log);
     LuaBinding::Register(L, p.get(), "on", LuaBinding::On);
+    LuaBinding::Register(L, p.get(), "require", LuaBinding::Require);
     if (D3H_HOST_HAS(&host, get_frame)) LuaBinding::Register(L, p.get(), "frame", LuaBinding::Frame);
     if (D3H_HOST_HAS(&host, get_actor)) {
         LuaBinding::Register(L, p.get(), "actor", LuaBinding::Actor);
@@ -784,6 +830,8 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
     if (D3H_HOST_HAS(&host, register_page)) LuaBinding::Register(L, p.get(), "page", LuaBinding::Page);
     lua_setfield(L, -2, "d3hud");
 
+    lua_pushvalue(L, -1);  // the environment, kept for the libraries
+    p->envRef_ = luaL_ref(L, LUA_REGISTRYINDEX);
     if (luaL_loadbufferx(L, mainSrc.data(), mainSrc.size(), "@main.lua", "t") != LUA_OK) {
         error = lua_tostring(L, -1);
         return nullptr;

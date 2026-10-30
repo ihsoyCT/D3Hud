@@ -34,6 +34,7 @@ memory, press keys or click, touch files or the network. (See `PLUGIN_PLAN.md` f
 | | |
 |---|---|
 | `d3hud.log(msg [, "info"\|"warn"\|"error"])` | write to the Plugins page and the console |
+| `d3hud.require(name)` | a shared library from `plugins/lib` (below), loaded once per plugin |
 | `d3hud.on(event, fn)` | subscribe; `fn(ev)` gets `ev.type`, `ev.index` (1-based, 0 = none), `ev.value`, `ev.text` |
 | `d3hud.frame()` | a table with the current facts (below) |
 | `d3hud.actors()` | **all** actors of the snapshot as an array of tables (fields below) |
@@ -83,6 +84,29 @@ host. `choice` values are 1-based. Colours are `0xRRGGBB` numbers. Everything is
 local changed, v = ui.checkbox("enabled", enabled)
 if changed then enabled = v end
 ```
+
+## Shared libraries and how things are drawn
+
+`plugins/lib/<name>.lua` holds libraries every plugin can use: `local draw = d3hud.require("draw")`. Only plain
+names are accepted (no paths), and a library runs in the plugin's own sandbox. They are part of the plugin API:
+they change only together with the API version.
+
+**`draw`: the standard look.** Plugins pass colours as `0xRRGGBB` (like colour settings); the library adds alpha.
+
+| | |
+|---|---|
+| `draw.bar(x0, y0, w, h, fraction, rgb)` | bar: black border, dark back, `rgb` as fill |
+| `draw.tag(x, y, text, rgb, scale [, opts])` | a box (affixes, labels): border in `rgb`, translucent fill of the same colour, black or white text chosen by `draw.contrast` so it stays readable. `opts.alpha` is the fill opacity 0..255 (default `draw.TAG_FILL`), `opts.padding`, `opts.text` forces the text colour. Returns width, height |
+| `draw.tags(x, y, items, scale, maxw [, opts])` | a row of tags, `items = { {text=, color=}, ... }`; what does not fit into `maxw` is left out; `opts.anchor = "center"`, `opts.gap` |
+| `draw.tag_size(text, scale [, opts])` | width, height, padding of a tag |
+| `draw.shadowed(x, y, argb, text, scale)` | text with a black drop shadow (white by default: `draw.WHITE`) |
+| `draw.fit(text, maxw, scale)` | text cut with ".." to fit |
+| `draw.contrast(rgb, alpha)`, `draw.luminance(rgb)`, `draw.argb(rgb, alpha)`, `draw.PANEL` | helpers; `PANEL` is the dark box behind a list |
+
+**`fmt`:** `fmt.hms(seconds)` ("1:02:05"), `fmt.pct(0.43)` ("43%"), `fmt.pretty("x1_Fallen_Champion")` ("Fallen Champion").
+
+**`store`:** packs small tables into the text of a hidden string setting: `store.pack_map(t [, {sep, format}])`,
+`store.unpack_map(text [, {sep, number}])`, `store.pack_list(list [, sep])`, `store.unpack_list(text [, sep])`.
 
 ## Not available yet
 

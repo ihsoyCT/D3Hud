@@ -14,7 +14,7 @@ Milestones 2-4 done (the goal of the plugin PR): `src/core/HostApi.h` (plain C),
 from the plan: the manifest is `plugin.lua` (a table, run with no globals) instead of `plugin.json`, to avoid a
 JSON parser; plugin settings live in `plugins.ini` (separate from `d3hud.ini`); hot rects, plugin hotkeys,
 circles/quads, the `drop` event and the salvage policy hook are in the header but not provided yet. Plugin dock
-panels and rect/line drawing are provided; `plugins/healthbars` is the second plugin.
+panels, rect/line drawing and shared Lua libraries (`plugins/lib`, `d3hud.require`) are provided; `plugins/healthbars` is the second plugin.
 
 Step 0b part 2 done: the Settings window lists `SettingsPage` entries (`AddSettingsPage`); the built-in pages are
 registered the same way, grouped Interface / Panels / Features.

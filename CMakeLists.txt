@@ -15,7 +15,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_subdirectory(third_party/imgui)
 
 # Lua 5.4 (MIT), vendored; only the pure-language parts: no io/os/package/debug libraries.
+# Compiled as C++ on purpose: Lua then raises errors as C++ exceptions, so the destructors of our bindings run
+# (as C it uses longjmp, which skips them and crashes through frames that own std::string and the like).
 file(GLOB LUA_SOURCES third_party/lua/src/*.c)
+set_source_files_properties(${LUA_SOURCES} PROPERTIES LANGUAGE CXX)
 add_library(lua STATIC ${LUA_SOURCES})
 target_include_directories(lua PUBLIC third_party/lua/src)
 target_compile_definitions(lua PRIVATE _CRT_SECURE_NO_WARNINGS)

@@ -885,6 +885,72 @@ static void TestTimeTracker() {
     CHECK(page.find("Town") != std::string::npos);                  // ... but the all-time table is not
 }
 
+// The shared Lua libraries (plugins/lib): d3hud.require, and the standard way to draw.
+static void TestLuaLibraries() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_libs_\u00e9";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    fs::copy(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"lib", root / L"lib", fs::copy_options::recursive, ec);
+    CHECK(!ec);
+    {
+        File f = OpenFile(root / L"lib" / L"selfref.lua", L"wb");
+        const char* src = "return d3hud.require('selfref')";
+        fwrite(src, 1, strlen(src), f);
+    }
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto load = [&](const char* folder, const std::string& code) {
+        const fs::path dir = WritePlugin(root, folder, code);
+        err.clear();
+        return LuaPlugin::Load(dir, host, err);
+    };
+
+    // pure helpers
+    auto pure = load("pure", R"lua(
+local draw, fmt, store = d3hud.require("draw"), d3hud.require("fmt"), d3hud.require("store")
+assert(draw.contrast(0xFFC040, 112) == draw.WHITE, "amber on a translucent fill: white text")
+assert(draw.contrast(0xFFFFFF, 255) == draw.BLACK, "a solid white fill: black text")
+assert(draw.contrast(0x000000, 112) == draw.WHITE)
+assert(draw.argb(0x102030, 0x80) == 0x80102030 and draw.argb(0x102030) == 0xFF102030)
+assert(fmt.hms(3725) == "1:02:05" and fmt.pct(0.427) == "43%")
+assert(fmt.pretty("x1_Fallen_Champion") == "Fallen Champion" and fmt.pretty("FallenHound") == "Fallen Hound")
+assert(store.pack_map({ b = 2, a = 1 }) == "a=1;b=2")
+assert(store.unpack_map("a=1;b=2", { number = true }).b == 2 and store.unpack_map("a=x;b=y").a == "x")
+assert(store.pack_map({ k = 1.5 }, { sep = ",", format = function(v) return string.format("%.1f", v) end }) == "k=1.5")
+local m = store.unpack_map("molten=1,frozen=2", { sep = ",", number = true })
+assert(m.molten == 1 and m.frozen == 2)
+local l = store.unpack_list("a,b,c")
+assert(#l == 3 and store.pack_list(l) == "a,b,c" and #store.unpack_list("") == 0)
+assert(d3hud.require("draw") == draw, "a library is loaded once")
+assert(not pcall(d3hud.require, "../evil") and not pcall(d3hud.require, "C:/x") and not pcall(d3hud.require, "nosuchlib"))
+assert(not pcall(d3hud.require, "selfref"), "a library that requires itself is an error, not an endless loop")
+)lua");
+    CHECK(pure != nullptr);
+    if (pure == nullptr) fprintf(stderr, "libs: %s\n", err.c_str());
+
+    // tags: a translucent fill and a border in the colour, black / white text; what does not fit is left out
+    fake::g.Reset();
+    auto tags = load("tags", R"lua(
+local draw = d3hud.require("draw")
+d3hud.on("frame", function()
+    draw.tag(10, 10, "Molten", 0xFF6A3D, 1)
+    local w, h = draw.tags(100, 50, { {text = "AAAA", color = 0xFF0000}, {text = "BBBB", color = 0x00FF00}, {text = "CCCC", color = 0x0000FF} }, 1, 80)
+    d3hud.log(w .. " " .. h)
+end)
+)lua");
+    CHECK(tags != nullptr);
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(!tags->disabled());
+    // Molten: fill + border; two of the three AAAA/BBBB/CCCC tags fit into 80 px: two rects and one text each
+    CHECK(fake::g.rects.size() == 2 + 2 * 2);
+    CHECK(fake::g.drawn.size() == 3 && fake::g.drawn[0] == "Molten" && fake::g.drawn[1] == "AAAA" && fake::g.drawn[2] == "BBBB");
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "71.0 19.0");  // 34 + 3 + 34 wide, 13 + 6 tall
+    fs::remove_all(root, ec);
+}
+
 // plugins/healthbars: bars for champions, rares and bosses that are on screen and alive
 static void TestHealthBars() {
     namespace fs = std::filesystem;
@@ -971,11 +1037,12 @@ static void TestHealthBars() {
     fake::Fire(D3H_EVENT_FRAME);
     bool molten = false, frozen = false, orbiter = false;
     for (const std::string& d : fake::g.drawn) {  // each affix has its own colour, so each is drawn on its own
-        molten |= d == "Molten, ";
+        molten |= d == "Molten";
         frozen |= d == "Frozen";
         orbiter |= d.find("Orbiter") != std::string::npos;  // not ticked by default
     }
     CHECK(molten && frozen && !orbiter);
+    CHECK(fake::g.rects.size() >= 4);  // each tag: a translucent fill and a border
     CHECK(fake::g.settings.SetNumber("healthbars.affixes_show", 0));
     fake::g.drawn.clear();
     fake::Fire(D3H_EVENT_FRAME);
@@ -1335,6 +1402,7 @@ int main() {
     TestPluginSettings();
     TestLuaSandbox();
     TestTimeTracker();
+    TestLuaLibraries();
     TestHealthBars();
     TestRaii();
     TestSnapshotInterp();

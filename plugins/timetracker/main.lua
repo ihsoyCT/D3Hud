@@ -17,25 +17,12 @@ d3hud.setting{ key = "show_hud", type = "bool", default = false, label = "Show t
 d3hud.setting{ key = "totals", type = "string", default = "", hidden = true }
 d3hud.setting{ key = "worlds", type = "string", default = "", hidden = true }
 
--- "name=value;name=value" <-> table. Names never contain '=' or ';' (areas are cleaned on input).
-local function decode(s)
-    local t = {}
-    for name, v in string.gmatch(s, "([^=;]+)=([^;]+)") do
-        t[name] = tonumber(v) or 0
-    end
-    return t
-end
+local fmt = d3hud.require("fmt")
+local store = d3hud.require("store")
 
-local function encode(t)
-    local parts = {}
-    for name, v in pairs(t) do
-        parts[#parts + 1] = name .. "=" .. string.format("%.1f", v)
-    end
-    table.sort(parts)
-    return table.concat(parts, ";")
-end
+local function seconds_text(v) return string.format("%.1f", v) end
 
-local total = decode(d3hud.get("totals"))     -- all time, seconds per area
+local total = store.unpack_map(d3hud.get("totals"), { number = true })  -- all time, seconds per area
 local session = {}                             -- since the overlay started
 local worlds = {}                          -- world sno (as text) -> area name
 local last_time, unsaved = nil, 0
@@ -58,22 +45,12 @@ local function area_list()
     return list
 end
 
--- worlds[] maps to names, not numbers, so it has its own "sno=name;sno=name" format.
-local function load_worlds(s)
-    local t = {}
-    for sno, name in string.gmatch(s, "(%d+)=([^;]+)") do t[sno] = name end
-    return t
-end
-local function save_worlds()
-    local parts = {}
-    for sno, name in pairs(worlds) do parts[#parts + 1] = sno .. "=" .. name end
-    table.sort(parts)
-    d3hud.set("worlds", table.concat(parts, ";"))
-end
-worlds = load_worlds(d3hud.get("worlds"))
+-- worlds: world sno (as text) -> area name
+local function save_worlds() d3hud.set("worlds", store.pack_map(worlds)) end
+worlds = store.unpack_map(d3hud.get("worlds"))
 
 local function save()
-    d3hud.set("totals", encode(total))
+    d3hud.set("totals", store.pack_map(total, { format = seconds_text }))
     unsaved = 0
 end
 
@@ -103,11 +80,6 @@ local function sum(t)
     local n = 0
     for _, v in pairs(t) do n = n + v end
     return n
-end
-
-local function hms(s)
-    s = math.floor(s)
-    return string.format("%d:%02d:%02d", s // 3600, s % 3600 // 60, s % 60)
 end
 
 -- Areas to list: the configured ones, the rift ones, and any with recorded time (renamed areas).
@@ -148,10 +120,10 @@ local function section(ui, title, data)
         local v = data[a] or 0
         if v > 0 then
             local pct = v * 100 / all
-            ui.text(string.format("%-14s %9s  %5.1f%%  %s", a, hms(v), pct, string.rep("|", math.floor(pct / 2.5 + 0.5))))
+            ui.text(string.format("%-14s %9s  %5.1f%%  %s", a, fmt.hms(v), pct, string.rep("|", math.floor(pct / 2.5 + 0.5))))
         end
     end
-    ui.text_disabled(string.format("total %s", hms(all)))
+    ui.text_disabled(string.format("total %s", fmt.hms(all)))
 end
 
 -- A dock panel: hover its tab ("Time") to peek at the split, F8 + click to keep it open.
