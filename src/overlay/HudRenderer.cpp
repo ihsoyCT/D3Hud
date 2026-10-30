@@ -13,15 +13,10 @@
 
 #include "imgui.h"
 #include "ItemSearch.h"
+#include "Paths.h"
 #include "imgui_internal.h"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
+#include "Win32.h"
 #include <shellapi.h>
 
 namespace d3hud {
@@ -125,8 +120,8 @@ void MinimapLayout::ResetMarkers() {
     set(ActorKind::RiftOrbTiered, 0xFFE150, 4.5f, MarkerShape::Dot, 1.0f, false, true);  // yellow (greater rifts)
 }
 
-bool MinimapLayout::Load(const char* path) {
-    FILE* f = fopen(path, "r");
+bool MinimapLayout::Load(const std::filesystem::path& path) {
+    File f = OpenFile(path, L"r");
     if (f == nullptr) return false;
     char line[128];
     while (fgets(line, sizeof(line), f) != nullptr) {
@@ -262,12 +257,11 @@ bool MinimapLayout::Load(const char* path) {
             }
         }
     }
-    fclose(f);
     return true;
 }
 
-bool MinimapLayout::Save(const char* path) const {
-    FILE* f = fopen(path, "w");
+bool MinimapLayout::Save(const std::filesystem::path& path) const {
+    File f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     std::print(f, "# D3Hud minimap layout (positions/radius = fraction of window height)\n");
     std::print(f, "autoMinimap={}\n", autoMinimap ? 1 : 0);
@@ -317,12 +311,14 @@ bool MinimapLayout::Save(const char* path) const {
                labels.enabled ? 1 : 0, labels.mode, labels.showBonus ? 1 : 0, labels.scale, labels.bgAlpha);
     std::print(f, "labels.colLegendary={}\nlabels.colSet={}\nlabels.colPrimal={}\nlabels.colBonus={}\n",
                labels.colLegendary, labels.colSet, labels.colPrimal, labels.colBonus);
-    fclose(f);
     return true;
 }
 
-void HudRenderer::SetLayoutPath(const char* path) {
-    strncpy_s(layoutPath_, path, _TRUNCATE);
+// Writes d3hud.ini; the status line in Settings says when that failed.
+void HudRenderer::SaveLayout() { layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed"; }
+
+void HudRenderer::SetLayoutPath(const std::filesystem::path& path) {
+    layoutPath_ = path;
     layoutStatus_ = layout_.Load(layoutPath_) ? "loaded" : "defaults (no d3hud.ini yet)";
 }
 
@@ -711,12 +707,13 @@ void HudRenderer::DrawMinimapSettings() {
         layout_.ResetMarkers();
         layoutStatus_ = "markers reset (not saved)";
     }
-    ImGui::TextDisabled("%s  -  %s", layoutStatus_, layoutPath_);
+    ImGui::TextDisabled("%s  -  %s", layoutStatus_, Utf8(layoutPath_).c_str());
 }
 
 // Debug view: every actor the minimap receives this frame, nearest first.
 void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& opt) {
-    if (!PanelOpen(PanelId::Actors, opt, "Actors (minimap source)")) return;
+    PanelScope panel(*this, PanelId::Actors, opt, "Actors (minimap source)");
+    if (!panel) return;
 
     int perKind[static_cast<int>(ActorKind::RiftOrbTiered) + 1] = {};
     std::vector<std::pair<float, uint16_t>> order;
@@ -775,11 +772,11 @@ void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& op
         }
         ImGui::EndTable();
     }
-    PanelEnd(PanelId::Actors, true);
 }
 
 void HudRenderer::DrawSalvagePanel(const WorldSnapshot& snap, const HudOptions& opt) {
-    if (!PanelOpen(PanelId::Items, opt, "Items")) return;
+    PanelScope panel(*this, PanelId::Items, opt, "Items");
+    if (!panel) return;
     // live items carry a location; synthetic ones (M0 fake data) do not
     const bool live = snap.itemCount > 0 && snap.items[0].location != kItemLocationUnknown;
     ImGui::Text("%u items %s", snap.itemCount,
@@ -858,7 +855,6 @@ void HudRenderer::DrawSalvagePanel(const WorldSnapshot& snap, const HudOptions& 
         }
         ImGui::EndTable();
     }
-    PanelEnd(PanelId::Items, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -938,14 +934,14 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
                                                                     : ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
         if (ImGui::SmallButton(layout_.panelPinned[i] ? "pinned" : "pin")) {
             layout_.panelPinned[i] = !layout_.panelPinned[i];
-            layout_.Save(layoutPath_);
+            SaveLayout();
         }
         ImGui::PopStyleColor();
         if (layout_.panelX[i] >= 0.f) {
             ImGui::SameLine();
             if (ImGui::SmallButton("dock")) {  // back to the bottom-right corner
                 layout_.panelX[i] = layout_.panelY[i] = -1.f;
-                layout_.Save(layoutPath_);
+                SaveLayout();
             }
         }
         ImGui::Separator();
@@ -967,7 +963,7 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
         if (std::abs(w - layout_.panelW[i]) > 0.002f || std::abs(h - layout_.panelH[i]) > 0.002f) {
             layout_.panelW[i] = w;
             layout_.panelH[i] = h;
-            layout_.Save(layoutPath_);
+            SaveLayout();
         }
     }
     // Follow the title-bar drag in the layout every frame, so the forced position of the
@@ -979,7 +975,7 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
         panelMoved_[i] = true;
     } else if (panelMoved_[i]) {
         panelMoved_[i] = false;
-        layout_.Save(layoutPath_);
+        SaveLayout();
     }
 }
 
@@ -1014,7 +1010,7 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
             first = false;
             if (ImGui::Button(PanelName(static_cast<PanelId>(i)))) {
                 layout_.panelPinned[i] = !layout_.panelPinned[i];
-                layout_.Save(layoutPath_);
+                SaveLayout();
             }
             ImGui::PopStyleColor();
             // cursor test, not IsItemHovered: the dock ignores input while click-through
@@ -1032,7 +1028,8 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
 
 void HudRenderer::DrawInfo(const WorldSnapshot& snap, const HudOptions& opt, double fps,
                            const char* sourceName) {
-    if (!PanelOpen(PanelId::Info, opt, "Info")) return;
+    PanelScope panel(*this, PanelId::Info, opt, "Info");
+    if (!panel) return;
     ImGui::Text("D3Hud M0 | source: %s", sourceName);
     ImGui::Text("frame %llu  %.0f fps", static_cast<unsigned long long>(snap.frameIndex), fps);
     ImGui::Text("actors %u  items %u", snap.actorCount, snap.itemCount);
@@ -1067,7 +1064,6 @@ void HudRenderer::DrawInfo(const WorldSnapshot& snap, const HudOptions& opt, dou
         ImGui::Text("%s map orientation | %s click-through | %s panels | %s quit", k[MinimapLayout::kHkMapOrientation],
                     k[MinimapLayout::kHkClickThrough], k[MinimapLayout::kHkPanels], k[MinimapLayout::kHkQuit]);
     }
-    PanelEnd(PanelId::Info, true);
 }
 
 // Labels above legendary/set/bonus items lying in the world, like the game's own
@@ -1266,22 +1262,22 @@ void HudRenderer::DrawRunTimer(const WorldSnapshot& snap) {
     }
 }
 
-bool HudRenderer::ExportDropsCsv(const char* path) const {
-    FILE* f = fopen(path, "w");
+bool HudRenderer::ExportDropsCsv(const std::filesystem::path& path) const {
+    File f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     fprintf(f, "time,name,type,rarity,ancient,primal,bonus%s", "\n");
     for (const DropEntry& d : drops_) {
         fprintf(f, "%s,\"%s\",%s,%s,%d,%d,%d%s", d.time, d.item.name, d.item.typeName, RarityName(d.item.rarity),
                 d.item.ancient ? 1 : 0, d.item.primal ? 1 : 0, d.item.bonus ? 1 : 0, "\n");
     }
-    fclose(f);
     return true;
 }
 
 // The drop log, newest first: still on the ground, picked up (now in the
 // backpack/equipped) or gone (out of range, salvaged, despawned).
 void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& opt) {
-    if (!PanelOpen(PanelId::Drops, opt, "Drops")) return;
+    PanelScope panel(*this, PanelId::Drops, opt, "Drops");
+    if (!panel) return;
     {
         const double now = ImGui::GetTime(), secs = now - sessionStartT_;
         char ses[24], run[24];
@@ -1381,7 +1377,6 @@ void HudRenderer::DrawDropsPanel(const WorldSnapshot& snap, const HudOptions& op
             ImGui::EndTable();
         }
     }
-    PanelEnd(PanelId::Drops, true);
 }
 
 // "A" (ancient) / "P" (primal), with the augment rank in front ("125A"), in the
@@ -1439,7 +1434,7 @@ void HudRenderer::DrawAutoSalvage(const WorldSnapshot& snap, HudOptions& opt) {
         const int cx = static_cast<int>((m.x - grid.x0) / cw), cy = static_cast<int>((m.y - grid.y0) / ch);
         if (m.x >= grid.x0 && m.y >= grid.y0 && cx < kBackpackCols && cy < kBackpackRows) {
             safe.Toggle(cx, cy);
-            layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+            SaveLayout();
         }
     }
     if (showSafe) {
@@ -1587,7 +1582,7 @@ void HudRenderer::DrawSalvageSettings() {
         }
     }
     ImGui::TextDisabled("The Salvage button appears under the anvil when the blacksmith's salvage tab is open.");
-    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    if (ch) SaveLayout();
 }
 
 // Two columns: the panels on the left, the selected one's settings on the right.
@@ -1634,7 +1629,7 @@ void HudRenderer::DrawHotkeySettings() {
         captureHotkey_ = -1;
         captureReady_ = false;
         hotkeysDirty_ = true;
-        layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        SaveLayout();
     }
 }
 
@@ -1642,8 +1637,8 @@ void HudRenderer::DrawHotkeySettings() {
 // d3hud.<name>.ini files next to d3hud.ini.
 void HudRenderer::DrawProfileSettings() {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::path(layoutPath_).parent_path();
-    auto pathOf = [&](const std::string& name) { return (dir / ("d3hud." + name + ".ini")).string(); };
+    const fs::path dir = layoutPath_.parent_path();
+    auto pathOf = [&](const std::string& name) { return dir / ("d3hud." + name + ".ini"); };  // names are plain ASCII (see below)
     if (profilesDirty_) {
         profilesDirty_ = false;
         profiles_.clear();
@@ -1664,7 +1659,7 @@ void HudRenderer::DrawProfileSettings() {
         for (const char* c = profileName_; *c != '\0'; ++c)
             if (isalnum(static_cast<unsigned char>(*c)) || *c == '-' || *c == '_') name += *c;
         if (!name.empty()) {
-            layoutStatus_ = layout_.Save(pathOf(name).c_str()) ? "profile saved" : "profile save failed";
+            layoutStatus_ = layout_.Save(pathOf(name)) ? "profile saved" : "profile save failed";
             profilesDirty_ = true;
         }
     }
@@ -1677,7 +1672,7 @@ void HudRenderer::DrawProfileSettings() {
         ImGui::SameLine(220.0f * layout_.uiScale);
         if (ImGui::SmallButton("Load")) {
             MinimapLayout fresh;
-            if (fresh.Load(pathOf(name).c_str())) {
+            if (fresh.Load(pathOf(name))) {
                 layout_ = fresh;
                 hotkeysDirty_ = true;
                 layoutStatus_ = layout_.Save(layoutPath_) ? "profile loaded" : "profile loaded (save failed)";
@@ -1706,10 +1701,9 @@ void HudRenderer::DrawReaderSettings() {
     ch |= ImGui::Checkbox("fps and actor/item counts", &layout_.diagFps);
     ch |= ImGui::Checkbox("reader state, last log line and errors", &layout_.diagReader);
     ImGui::SeparatorText("Files");
-    ImGui::TextDisabled("%s", layoutPath_);
+    ImGui::TextDisabled("%s", Utf8(layoutPath_).c_str());
     if (ImGui::Button("Open settings folder"))
-        ShellExecuteA(nullptr, "open", std::filesystem::path(layoutPath_).parent_path().string().c_str(), nullptr,
-                      nullptr, SW_SHOWNORMAL);
+        ShellExecuteW(nullptr, L"open", layoutPath_.parent_path().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     ImGui::SameLine();
     const bool armed = ImGui::GetTime() < resetArmedUntil_;
     ImGui::PushStyleColor(ImGuiCol_Button, armed ? ImVec4(0.75f, 0.2f, 0.2f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
@@ -1725,7 +1719,7 @@ void HudRenderer::DrawReaderSettings() {
     }
     ImGui::PopStyleColor();
     ImGui::TextDisabled("Reset also clears the safe area, panel layout and hotkeys (profiles are kept).");
-    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    if (ch) SaveLayout();
 }
 
 // On-screen diagnostics, bottom-left: fps/counts and the reader's state.
@@ -1940,8 +1934,8 @@ void HudRenderer::DrawDropSettings() {
     if (ImGui::Button("Reset session stats")) ResetSession();
     ImGui::SameLine();
     if (ImGui::Button("Export session to CSV")) {
-        const std::string path = (std::filesystem::path(layoutPath_).parent_path() / "d3hud_drops.csv").string();
-        layoutStatus_ = ExportDropsCsv(path.c_str()) ? "exported d3hud_drops.csv next to d3hud.ini" : "export failed";
+        const std::filesystem::path path = layoutPath_.parent_path() / "d3hud_drops.csv";
+        layoutStatus_ = ExportDropsCsv(path) ? "exported d3hud_drops.csv next to d3hud.ini" : "export failed";
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear log")) {
@@ -1949,7 +1943,7 @@ void HudRenderer::DrawDropSettings() {
         dropIndex_.clear();
     }
     ImGui::TextDisabled("%zu entries   %s", drops_.size(), layoutStatus_);
-    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    if (ch) SaveLayout();
 }
 
 // Settings > Items: A/P badges on icons and the hover card.
@@ -2003,7 +1997,7 @@ void HudRenderer::DrawItemSettings() {
     ch |= ImGui::Combo("show the card for", &S.hoverMode, "Unidentified items only\0Every item\0Off\0");
     ImGui::SliderFloat("card opacity", &S.hoverAlpha, 0.2f, 1.0f, "%.2f");
     ch |= ImGui::IsItemDeactivatedAfterEdit();
-    if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    if (ch) SaveLayout();
 }
 
 // Settings > Ground labels.
@@ -2037,9 +2031,9 @@ void HudRenderer::DrawLabelSettings() {
 
 void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    if (!PanelOpen(PanelId::Settings, opt, "Settings",
-                   ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f))))
-        return;
+    PanelScope panel(*this, PanelId::Settings, opt, "Settings",
+                     ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f)));
+    if (!panel) return;
     // entries: the four panel pages (PanelId order) sit together; the rest are feature pages
     enum Entry { kGeneral, kHotkeys, kProfiles, kInfo, kDrops, kItems, kActors, kMinimap, kLabels, kSalvage, kReader, kEntryCount };
     static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Profiles", "Info", "Drops", "Items", "Actors",
@@ -2055,7 +2049,7 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     ImGui::Separator();
     if (settingsTab_ == kGeneral) {
         ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        if (ImGui::IsItemDeactivatedAfterEdit()) SaveLayout();
         ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
         ImGui::SeparatorText("Dock");
         bool ch = ImGui::Combo("corner", &layout_.dockCorner, "Bottom right\0Bottom left\0Top right\0Top left\0");
@@ -2066,7 +2060,7 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         ImGui::SliderFloat("panel opacity", &layout_.panelAlpha, 0.2f, 1.0f, "%.2f");
         ch |= ImGui::IsItemDeactivatedAfterEdit();
         ch |= ImGui::Checkbox("compact (tighter padding)", &layout_.compact);
-        if (ch) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        if (ch) SaveLayout();
     } else if (settingsTab_ == kHotkeys) {
         DrawHotkeySettings();
     } else if (settingsTab_ == kProfiles) {
@@ -2083,7 +2077,7 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
             changed = true;
         }
         ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
-        if (changed) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        if (changed) SaveLayout();
         if (settingsTab_ == kDrops) {
             ImGui::SeparatorText("Drop log and alerts");
             DrawDropSettings();
@@ -2102,7 +2096,6 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         DrawSalvageSettings();
     }
     ImGui::EndChild();
-    PanelEnd(PanelId::Settings, true);
 }
 
 // While the game shows the tooltip of an UNIDENTIFIED item: a compact card left
@@ -2155,7 +2148,7 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     for (int i = 0; i < kPanels; ++i)
         if (opt.panelToggleMask & (1u << i)) {
             layout_.panelPinned[i] = !layout_.panelPinned[i];
-            layout_.Save(layoutPath_);
+            SaveLayout();
         }
     UpdateRuns(snap);
     UpdateDrops(snap);           // the log keeps recording while the panels are hidden

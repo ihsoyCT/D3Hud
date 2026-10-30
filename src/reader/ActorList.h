@@ -71,7 +71,7 @@ public:
     static bool FindBase(const Process& proc, uint64_t* base, int* votes, bool verbose = false);
 
     // Reads all live actors; false if the array is no longer readable.
-    bool Read(const Process& proc, std::vector<RawActor>* out) const;
+    [[nodiscard]] bool Read(const Process& proc, std::vector<RawActor>* out) const;
 
     void setBase(uint64_t base) { base_ = base; }
     uint64_t base() const { return base_; }

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,7 +19,7 @@ struct SnoInfo {
 
 class SnoTable {
 public:
-    bool Load(const std::string& path);
+    [[nodiscard]] bool Load(const std::filesystem::path& path);
     const SnoInfo* Find(uint32_t sno) const;
     size_t size() const { return table_.size(); }
     std::unordered_set<uint32_t> Ids() const {
@@ -42,7 +43,7 @@ struct ItemNameInfo {
 
 class ItemNameTable {
 public:
-    bool Load(const std::string& path);
+    [[nodiscard]] bool Load(const std::filesystem::path& path);
     const ItemNameInfo* Find(uint32_t gbid) const;
     size_t size() const { return table_.size(); }
 

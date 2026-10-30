@@ -3,10 +3,9 @@
 // goes to reader.log, and a kill-on-close job object ends it with the overlay.
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 
+#include <filesystem>
 #include <string>
 
 namespace d3hud {
@@ -18,7 +17,7 @@ public:
 
     // Launches `D3Hud.Reader.exe --attach "Diablo III64.exe" --publish --hz <hz>`; false
     // (see lastError()) if the exe is missing or CreateProcess fails.
-    bool Start(int hz = 60);
+    [[nodiscard]] bool Start(int hz = 60);
     void Stop();
     bool Running() const;
     DWORD pid() const { return pid_; }
@@ -28,9 +27,9 @@ public:
     const std::string& LastLogLine();
 
 private:
-    std::string dir_;  // exe directory, trailing backslash
-    HANDLE job_ = nullptr;
-    HANDLE process_ = nullptr;
+    std::filesystem::path dir_;  // exe directory
+    UniqueHandle job_;      // kill-on-close job: the reader ends with the overlay
+    UniqueHandle process_;
     DWORD pid_ = 0;
     std::string error_;
     std::string lastLine_;

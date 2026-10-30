@@ -1,9 +1,7 @@
 // D3Hud.Overlay — transparent click-through DX11/ImGui overlay (M0).
 // Sources: synthetic scene (default), replay file (--replay), recorder (--record).
 // Modes: --dcomp (default, per-pixel alpha) or --colorkey (fallback).
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <dcomp.h>
@@ -24,6 +22,7 @@
 #include "HudRenderer.h"
 #include "ReplayIO.h"
 #include "SceneGen.h"
+#include "Paths.h"
 #include "ReaderProcess.h"
 #include "SalvageRunner.h"
 #include "SharedRing.h"
@@ -384,7 +383,10 @@ int main(int argc, char** argv) {
             replayPath = nullptr;
         }
     }
-    if (recordPath) recorder.Open(recordPath, static_cast<float>(scene.frameIntervalMs()));
+    if (recordPath && !recorder.Open(recordPath, static_cast<float>(scene.frameIntervalMs()))) {
+        std::print(stderr, "cannot open '{}' for recording\n", recordPath);
+        recordPath = nullptr;
+    }
 
     d3hud::WorldSnapshot snap;
     scene.Generate(&snap);  // first frame immediately
@@ -393,14 +395,9 @@ int main(int argc, char** argv) {
 
     HudRenderer renderer;
     {
-        char ini[MAX_PATH];
-        GetModuleFileNameA(nullptr, ini, MAX_PATH);
-        char* slash = strrchr(ini, '\\');
-        if (slash != nullptr) strcpy_s(slash + 1, MAX_PATH - (slash + 1 - ini), "d3hud.ini");
-        renderer.SetLayoutPath(ini);
+        renderer.SetLayoutPath(ExeDir() / "d3hud.ini");
         // map prediction shapes, next to the exe like d3hud.ini (copied by the build)
-        if (slash != nullptr) strcpy_s(slash + 1, MAX_PATH - (slash + 1 - ini), "scene_cells.bin");
-        if (!renderer.LoadSceneCells(ini)) std::print(stderr, "no scene_cells.bin - map prediction off\n");
+        if (!renderer.LoadSceneCells(ExeDir() / "scene_cells.bin")) std::print(stderr, "no scene_cells.bin - map prediction off\n");
     }
     HudOptions opts;
     opts.showPanels = g_showPanels;

@@ -3,64 +3,59 @@
 #include <cstdio>
 #include <vector>
 
+#include "Paths.h"
+
 namespace d3hud {
 
 ReaderProcess::ReaderProcess() {
-    char self[MAX_PATH];
-    GetModuleFileNameA(nullptr, self, MAX_PATH);
-    dir_ = self;
-    dir_ = dir_.substr(0, dir_.find_last_of("\\/") + 1);
-    job_ = CreateJobObjectA(nullptr, nullptr);
-    if (job_ != nullptr) {
+    dir_ = ExeDir();
+    job_.reset(CreateJobObjectA(nullptr, nullptr));
+    if (job_) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {};
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        SetInformationJobObject(job_, JobObjectExtendedLimitInformation, &info, sizeof(info));
+        SetInformationJobObject(job_.get(), JobObjectExtendedLimitInformation, &info, sizeof(info));
     }
 }
 
 ReaderProcess::~ReaderProcess() {
-    Stop();
-    if (job_ != nullptr) CloseHandle(job_);
+    Stop();  // the job handle closes with the object and takes the reader down with it
 }
 
 bool ReaderProcess::Start(int hz) {
     if (Running()) return true;
-    if (process_ != nullptr) {
-        CloseHandle(process_);
-        process_ = nullptr;
-    }
-    const std::string exe = dir_ + "D3Hud.Reader.exe";
-    if (GetFileAttributesA(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    process_.reset();
+    const std::filesystem::path exe = dir_ / L"D3Hud.Reader.exe";
+    if (!std::filesystem::exists(exe)) {
         error_ = "D3Hud.Reader.exe not found next to the overlay";
         return false;
     }
     SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};  // inheritable log handle
-    HANDLE log = CreateFileA((dir_ + "reader.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    HANDLE log = CreateFileW((dir_ / L"reader.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (log == INVALID_HANDLE_VALUE) {
         error_ = "cannot create reader.log";
         return false;
     }
-    STARTUPINFOA si = {sizeof(si)};
+    STARTUPINFOW si = {sizeof(si)};
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput = log;
     si.hStdError = log;
-    std::string cmd = "\"" + exe + "\" --attach \"Diablo III64.exe\" --publish --hz " + std::to_string(hz);
-    std::vector<char> cmdBuf(cmd.begin(), cmd.end());
-    cmdBuf.push_back('\0');
+    const std::wstring cmd = L"\"" + exe.wstring() + L"\" --attach \"Diablo III64.exe\" --publish --hz " + std::to_wstring(hz);
+    std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+    cmdBuf.push_back(L'\0');
     PROCESS_INFORMATION pi = {};
-    const BOOL ok = CreateProcessA(exe.c_str(), cmdBuf.data(), nullptr, nullptr, TRUE,
+    const BOOL ok = CreateProcessW(exe.c_str(), cmdBuf.data(), nullptr, nullptr, TRUE,
                                    CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, dir_.c_str(), &si, &pi);
     CloseHandle(log);  // the child holds its own copy
     if (!ok) {
         error_ = "CreateProcess failed (" + std::to_string(GetLastError()) + ")";
         return false;
     }
-    if (job_ != nullptr) AssignProcessToJobObject(job_, pi.hProcess);  // before it runs
+    if (job_) AssignProcessToJobObject(job_.get(), pi.hProcess);  // before it runs
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
-    process_ = pi.hProcess;
+    process_.reset(pi.hProcess);
     pid_ = pi.dwProcessId;
     error_.clear();
     lastLine_.clear();
@@ -70,26 +65,26 @@ bool ReaderProcess::Start(int hz) {
 
 void ReaderProcess::Stop() {
     if (Running()) {
-        TerminateProcess(process_, 0);
-        WaitForSingleObject(process_, 2000);
+        TerminateProcess(process_.get(), 0);
+        WaitForSingleObject(process_.get(), 2000);
     }
 }
 
 bool ReaderProcess::Running() const {
-    return process_ != nullptr && WaitForSingleObject(process_, 0) == WAIT_TIMEOUT;
+    return process_ && WaitForSingleObject(process_.get(), 0) == WAIT_TIMEOUT;
 }
 
 DWORD ReaderProcess::exitCode() const {
     DWORD code = STILL_ACTIVE;
-    if (process_ != nullptr) GetExitCodeProcess(process_, &code);
+    if (process_) GetExitCodeProcess(process_.get(), &code);
     return code;
 }
 
 const std::string& ReaderProcess::LastLogLine() {
     const ULONGLONG now = GetTickCount64();
-    if (process_ == nullptr || now - lastLineAt_ < 500) return lastLine_;
+    if (!process_ || now - lastLineAt_ < 500) return lastLine_;
     lastLineAt_ = now;
-    FILE* f = _fsopen((dir_ + "reader.log").c_str(), "rb", _SH_DENYNO);
+    File f(_wfsopen((dir_ / L"reader.log").c_str(), L"rb", _SH_DENYNO));
     if (f == nullptr) return lastLine_;
     char buf[2048];
     _fseeki64(f, 0, SEEK_END);
@@ -97,7 +92,6 @@ const std::string& ReaderProcess::LastLogLine() {
     const long long from = size > static_cast<long long>(sizeof(buf)) ? size - sizeof(buf) : 0;
     _fseeki64(f, from, SEEK_SET);
     const size_t n = fread(buf, 1, sizeof(buf), f);
-    fclose(f);
     // last non-empty line, skipping the per-5-s throughput stats
     size_t end = n;
     while (end > 0) {

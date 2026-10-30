@@ -48,7 +48,7 @@ std::vector<ClusterInfo> ScanClusters(const Process& proc) {
     std::unordered_map<int64_t, BinData> bins;
     std::vector<uint64_t> chunk(1 << 18);
 
-    for (const RegionInfo& r : proc.Regions(MEM_PRIVATE, true)) {
+    for (const RegionInfo& r : proc.Regions(MEM_PRIVATE)) {
         if (r.size < 0x10000) continue;
         uint64_t done = 0;
         while (done < r.size) {
@@ -146,7 +146,7 @@ bool PlayerTracker::Find(const Process& proc, PlayerFindResult* out, bool verbos
     // locate a concrete instance of the top exact value to track
     const float tx = r.pos.x, tz = r.pos.z;
     uint64_t found = 0;
-    for (const RegionInfo& reg : proc.Regions(MEM_PRIVATE, true)) {
+    for (const RegionInfo& reg : proc.Regions(MEM_PRIVATE)) {
         if (found) break;
         if (reg.size < 0x10000) continue;
         std::vector<uint8_t> data = proc.ReadVec(reg.base, std::min<uint64_t>(reg.size, 64u << 20));

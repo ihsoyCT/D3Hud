@@ -8,7 +8,7 @@
 
 namespace d3hud {
 
-bool SnoTable::Load(const std::string& path) {
+bool SnoTable::Load(const std::filesystem::path& path) {
     std::ifstream in(path);
     if (!in) return false;
     std::string line;
@@ -31,7 +31,7 @@ const SnoInfo* SnoTable::Find(uint32_t sno) const {
     return it == table_.end() ? nullptr : &it->second;
 }
 
-bool ItemNameTable::Load(const std::string& path) {
+bool ItemNameTable::Load(const std::filesystem::path& path) {
     std::ifstream in(path);
     if (!in) return false;
     std::string line;
@@ -63,8 +63,8 @@ const ItemNameInfo* ItemNameTable::Find(uint32_t gbid) const {
 
 static bool Contains(const std::string& haystack, const char* needle) {
     std::string h = haystack, n = needle;
-    std::transform(h.begin(), h.end(), h.begin(), [](unsigned char c) { return std::tolower(c); });
-    std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return std::tolower(c); });
+    std::transform(h.begin(), h.end(), h.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return h.find(n) != std::string::npos;
 }
 

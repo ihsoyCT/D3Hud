@@ -2,6 +2,7 @@
 // snapshots from any source, owns no state beyond options.
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -129,8 +130,8 @@ struct MinimapLayout {
     static constexpr int kHotkeyCount = kHkPanelFirst + kPanelCount;
     uint8_t hotkeys[kHotkeyCount] = {0x77, 0x78, 0x23, 0x76, 0, 0, 0, 0, 0};  // F8 F9 END F7
 
-    bool Load(const char* path);
-    bool Save(const char* path) const;
+    [[nodiscard]] bool Load(const std::filesystem::path& path);
+    [[nodiscard]] bool Save(const std::filesystem::path& path) const;
 };
 
 // Panels of the HUD: collapsed tabs docked at the bottom-right. Hovering a tab
@@ -186,9 +187,9 @@ class HudRenderer {
 public:
     void Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName);
     // Loads the layout from `path` (defaults if missing); the calibration panel saves there.
-    void SetLayoutPath(const char* path);
+    void SetLayoutPath(const std::filesystem::path& path);
     // Scene shapes for the map prediction (scene_cells.bin); false if missing.
-    bool LoadSceneCells(const char* path) { return sceneCells_.Load(path); }
+    bool LoadSceneCells(const std::filesystem::path& path) { return sceneCells_.Load(path); }
     // Hotkey bindings for main.cpp: re-register when TakeHotkeysDirty(); while a key is being
     // captured in Settings the owner must ignore hotkey presses.
     const uint8_t* hotkeys() const { return layout_.hotkeys; }
@@ -204,8 +205,27 @@ private:
     // `defaultSize` > 0 makes the panel user-resizable (size remembered).
     bool PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize = ImVec2(0.f, 0.f));
     void PanelEnd(PanelId id, bool wasOpen);
+    // An open panel for the length of a scope: PanelEnd runs on every way out (early returns included).
+    //   PanelScope panel(*this, PanelId::Items, opt, "Items");
+    //   if (!panel) return;   // collapsed: nothing to draw
+    class PanelScope {
+    public:
+        PanelScope(HudRenderer& r, PanelId id, const HudOptions& opt, const char* title,
+                   ImVec2 defaultSize = ImVec2(0.f, 0.f))
+            : r_(r), id_(id), open_(r.PanelOpen(id, opt, title, defaultSize)) {}
+        ~PanelScope() { r_.PanelEnd(id_, open_); }
+        PanelScope(const PanelScope&) = delete;
+        PanelScope& operator=(const PanelScope&) = delete;
+        explicit operator bool() const { return open_; }
+
+    private:
+        HudRenderer& r_;
+        PanelId id_;
+        bool open_;
+    };
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
+    void SaveLayout();  // layout_.Save + status line
     void DrawMinimapSettings();
     bool minimapFound_ = false;  // last frame: the game's minimap control was used for placement
     void DrawHotkeySettings();
@@ -243,7 +263,7 @@ private:
     void DrawReaderSettings();
     void DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps);
     double resetArmedUntil_ = 0.0;  // first click of "reset everything"
-    bool ExportDropsCsv(const char* path) const;
+    bool ExportDropsCsv(const std::filesystem::path& path) const;
     double flashUntil_ = 0.0;   // drop alert: screen-border flash
     uint32_t flashRgb_ = 0;
     std::vector<std::string> profiles_;  // names of d3hud.<name>.ini next to d3hud.ini
@@ -291,7 +311,7 @@ private:
     int selectedRow_ = -1;
     ImGuiTextFilter filter_;
     MinimapLayout layout_;
-    char layoutPath_[260] = {};
+    std::filesystem::path layoutPath_;
     const char* layoutStatus_ = "";
 };
 

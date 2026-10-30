@@ -16,7 +16,7 @@ void SharedSweep(const Process& proc, const std::vector<ChunkMatcher*>& matchers
     if (!any) return;
 
     std::vector<uint8_t> buf;
-    for (const RegionInfo& r : proc.Regions(MEM_PRIVATE, true)) {
+    for (const RegionInfo& r : proc.Regions(MEM_PRIVATE)) {
         if (r.size < 8) continue;
         for (size_t off = 0; off < r.size; off += kChunk) {
             const size_t n = std::min(kChunk + maxTail, r.size - off);

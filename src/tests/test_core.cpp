@@ -14,7 +14,9 @@
 #include "SceneGen.h"
 #include "SharedRing.h"
 #include "Snapshot.h"
+#include "BasesCache.h"
 #include "ItemSearch.h"
+#include "Paths.h"
 #include "Salvage.h"
 #include "SceneCells.h"
 #include "SceneTable.h"
@@ -433,6 +435,55 @@ static void TestSalvageRules() {
     CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
 }
 
+static void TestPaths() {
+    namespace fs = std::filesystem;
+    const fs::path exe = ExePath();
+    CHECK(!exe.empty() && fs::exists(exe) && ExeDir() == exe.parent_path());
+    // files must work in a folder whose name is not plain ASCII
+    const fs::path dir = fs::temp_directory_path() / L"d3hud-t\u00ebst-\u00fcn\u00efc\u00f6de \u65e5\u672c";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    BasesCache c;
+    c.pid = 7;
+    c.created = 9;
+    c.actorBase = 0x1234;
+    c.acd = {1, 2};
+    c.ui = {5};
+    CHECK(c.Save(dir / L"bases.ini"));
+    BasesCache d;
+    d.pid = 7;
+    d.created = 9;
+    CHECK(d.Load(dir / L"bases.ini") && d.actorBase == 0x1234 && d.acd.size() == 2 && d.ui.size() == 1);
+    CHECK(!Utf8(dir).empty() && Utf8(dir).find("d3hud-t") != std::string::npos);
+    CHECK(OpenFile(dir / L"missing" / L"x.bin", L"rb") == nullptr);
+    fs::remove_all(dir, ec);
+}
+
+static void TestRaii() {
+    HANDLE raw = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    {
+        UniqueHandle a(raw);
+        UniqueHandle b = std::move(a);
+        CHECK(!a && b && b.get() == raw);  // moved from: empty; the new owner holds it
+        CHECK(!UniqueHandle(INVALID_HANDLE_VALUE));  // CreateFile's failure value counts as empty
+    }
+    DWORD flags = 0;
+    CHECK(!GetHandleInformation(raw, &flags));  // closed when the owner went out of scope
+
+    namespace fs = std::filesystem;
+    const fs::path tmp = fs::temp_directory_path() / L"d3hud-raii-test.bin";
+    {
+        File f = OpenFile(tmp, L"wb");
+        CHECK(f != nullptr);
+        fputs("abc", f);
+    }  // closed (and flushed) here, no fclose
+    std::error_code ec;
+    CHECK(fs::file_size(tmp, ec) == 3);
+    File missing = OpenFile(tmp.parent_path() / L"no-such-dir" / L"x", L"rb");
+    CHECK(missing == nullptr);
+    fs::remove(tmp, ec);
+}
+
 static void TestRiftTimer() {
     // measured in a greater rift: bar 1505..1827 (322 units), marker moved 25 units in 70 s
     CHECK(std::fabs(RiftTimerFractionFromRects(1505.f, 1827.f, 1507.2f) - 0.0068f) < 1e-3f);
@@ -715,6 +766,8 @@ int main() {
     TestRiftProgress();
     TestSalvageAll();
     TestRiftTimer();
+    TestPaths();
+    TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();
     TestMapOrientation();

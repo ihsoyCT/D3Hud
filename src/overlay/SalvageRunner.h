@@ -12,9 +12,7 @@
 // the salvage tab or inventory closing, or an item that does not vanish.
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 
 #include <string>
 #include <vector>

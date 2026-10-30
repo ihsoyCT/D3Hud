@@ -1,6 +1,8 @@
 #include "BasesCache.h"
 
 #include <charconv>
+
+#include "Paths.h"
 #include <string_view>
 
 namespace d3hud {
@@ -23,9 +25,8 @@ bool ParseList(const std::string& line, std::vector<uint64_t>* out) {
 
 }  // namespace
 
-bool BasesCache::Save(const std::string& path) const {
-    FILE* f = nullptr;
-    fopen_s(&f, path.c_str(), "w");
+bool BasesCache::Save(const std::filesystem::path& path) const {
+    File f = OpenFile(path, L"w");
     if (f == nullptr) return false;
     fprintf(f, "pid=%u\ncreated=%llu\nactor=%llX\n", pid, static_cast<unsigned long long>(created),
             static_cast<unsigned long long>(actorBase));
@@ -38,13 +39,11 @@ bool BasesCache::Save(const std::string& path) const {
     list("attrib", attrib);
     list("scene", scene);
     list("ui", ui);
-    fclose(f);
     return true;
 }
 
-bool BasesCache::Load(const std::string& path) {
-    FILE* f = nullptr;
-    fopen_s(&f, path.c_str(), "r");
+bool BasesCache::Load(const std::filesystem::path& path) {
+    File f = OpenFile(path, L"r");
     if (f == nullptr) return false;
     char line[8192];
     uint32_t filePid = 0;
@@ -68,7 +67,6 @@ bool BasesCache::Load(const std::string& path) {
         else if (key == "scene") { ParseList(std::string(val), &fileScene); }
         else if (key == "ui") { haveUi = ParseList(std::string(val), &fileUi); }
     }
-    fclose(f);
     if (filePid != pid || fileCreated != created || !haveActor || !haveUi || actorBase == 0) {
         actorBase = 0;
         return false;  // stale: another (or restarted) game process

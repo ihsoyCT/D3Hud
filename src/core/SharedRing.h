@@ -2,9 +2,7 @@
 // Reader process writes at ~15 Hz; overlay polls for the latest frames.
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "Win32.h"
 
 #include <cstdint>
 
@@ -19,7 +17,7 @@ public:
 
     // Create (writer) or open (reader) the ring. Fails if mapping cannot be made.
     bool Create();
-    bool Open();
+    [[nodiscard]] bool Open();
     void Close();
 
     // Writer side: publish a snapshot (single writer assumed).
@@ -27,7 +25,7 @@ public:
 
     // Reader side: non-blocking poll; returns true when a newer snapshot was
     // consumed into `out`. Skips stale slots and always delivers in order.
-    bool Poll(WorldSnapshot* out);
+    [[nodiscard]] bool Poll(WorldSnapshot* out);
 
     uint64_t latestIndex() const { return header_ ? header_->writeIndex : 0; }
 
@@ -37,7 +35,7 @@ private:
         uint32_t capacity;
         volatile uint64_t writeIndex;
     };
-    HANDLE map_ = nullptr;
+    UniqueHandle map_;
     Header* header_ = nullptr;
     WorldSnapshot* slots_ = nullptr;
     uint64_t nextRead_ = 0;

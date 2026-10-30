@@ -9,12 +9,11 @@ constexpr uint32_t kRingMagic = 0x524E4752;  // 'RNGR'
 
 bool SharedRing::Create() {
     const SIZE_T size = sizeof(Header) + sizeof(WorldSnapshot) * kCapacity;
-    map_ = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, size, kName);
-    if (map_ == nullptr) return false;
-    header_ = static_cast<Header*>(MapViewOfFile(map_, FILE_MAP_ALL_ACCESS, 0, 0, size));
+    map_.reset(CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, size, kName));
+    if (!map_) return false;
+    header_ = static_cast<Header*>(MapViewOfFile(map_.get(), FILE_MAP_ALL_ACCESS, 0, 0, size));
     if (header_ == nullptr) {
-        CloseHandle(map_);
-        map_ = nullptr;
+        map_.reset();
         return false;
     }
     header_->magic = kRingMagic;
@@ -26,9 +25,9 @@ bool SharedRing::Create() {
 
 bool SharedRing::Open() {
     const SIZE_T size = sizeof(Header) + sizeof(WorldSnapshot) * kCapacity;
-    map_ = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, kName);
-    if (map_ == nullptr) return false;
-    header_ = static_cast<Header*>(MapViewOfFile(map_, FILE_MAP_ALL_ACCESS, 0, 0, size));
+    map_.reset(OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, kName));
+    if (!map_) return false;
+    header_ = static_cast<Header*>(MapViewOfFile(map_.get(), FILE_MAP_ALL_ACCESS, 0, 0, size));
     if (header_ == nullptr || header_->magic != kRingMagic) {
         Close();
         return false;
@@ -43,10 +42,7 @@ void SharedRing::Close() {
         header_ = nullptr;
         slots_ = nullptr;
     }
-    if (map_ != nullptr) {
-        CloseHandle(map_);
-        map_ = nullptr;
-    }
+    map_.reset();
 }
 
 void SharedRing::Publish(const WorldSnapshot& snap) {

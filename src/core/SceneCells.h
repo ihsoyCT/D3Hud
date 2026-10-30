@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -20,7 +21,7 @@ constexpr uint32_t kSceneExit = 2;      // "*_exit_*" / rift "*_dungeonstone_exi
 
 class SceneCells {
 public:
-    bool Load(const std::string& path);
+    [[nodiscard]] bool Load(const std::filesystem::path& path);
     // Cells of a scene SNO (nullptr if unknown / no walkable cells).
     const std::vector<CellRect>* Find(uint32_t sceneSno) const;
     // kScene* bits of a scene SNO (0 if unknown or none).

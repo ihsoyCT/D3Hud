@@ -41,6 +41,8 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 - **Close a running overlay/reader before building**: the linker cannot replace a running exe
   (`LNK1104`). Compile errors still show.
 - Always build after an edit and look for `error` lines; the CI does the same on every pull request.
+- Our targets build with `/W4 /permissive-` and must stay warning-free (CI shows the warnings). Fallible
+  functions are `[[nodiscard]]`: check the result, or write `(void)` with a comment saying why it may fail.
 - Run the whole test suite after touching `src/core`.
 
 ## Rules that are easy to break
@@ -66,7 +68,12 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
    `io.WantTextInput` is set.
 7. **Windows headers**: `NOMINMAX`/`WIN32_LEAN_AND_MEAN` are used; `near`/`far` are macros in
    `windows.h` (do not name variables that). `std::print` format strings are compile-time checked.
-8. **Install layout**: the exes find their data files, `d3hud.ini`, `reader.log` next to themselves.
+8. **Paths and `windows.h`.** Include `Win32.h`, never `<windows.h>` directly (it sets `NOMINMAX` and
+   `WIN32_LEAN_AND_MEAN` once). Exe-relative files go through `Paths.h`: `ExeDir()`/`ExePath()` (wide API),
+   `std::filesystem::path` in every `Load`/`Save` signature, `OpenFile(path, L"rb")` instead of `fopen`,
+   `Utf8(path)` for log and ImGui text. Do not use `GetModuleFileNameA`, `find_last_of('\\')` or `fopen` with
+   narrow strings for those: they break for folders or user names with non-ASCII characters or spaces.
+9. **Install layout**: the exes find their data files, `d3hud.ini`, `reader.log` next to themselves.
    Keep `cmake --install` and the CPack zip in sync with that (CI checks the files). The MSVC runtime
    is linked statically on purpose.
 
@@ -81,6 +88,8 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 ## Style and process
 
 - Match the surrounding code: naming, comment density, idioms. Comments say *why*, not what.
+- Own resources with RAII, not paired calls: `UniqueHandle` (Win32.h) for kernel handles, `File` (Paths.h)
+  for `FILE*`, `PanelScope` (HudRenderer.h) for the five dock panels. No new manual `CloseHandle`/`fclose`.
 - Small, focused commits with an imperative message; do not mix unrelated changes. Build and test
   before committing; never commit a state that does not compile.
 - Keep `README.md` (user-facing) current when behaviour or options change; put investigations in
