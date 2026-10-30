@@ -111,6 +111,7 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "worldRadius")) worldRadius = v;
         else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
         else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
+        else if (!strcmp(key, "uiScale")) uiScale = std::clamp(v, 0.5f, 3.0f);
         else if (!strcmp(key, "markerScale")) markerScale = v;
         else if (!strcmp(key, "outline")) outline = v != 0.f;
         else if (!strcmp(key, "bigMapMarkers")) bigMapMarkers = v != 0.f;
@@ -146,6 +147,8 @@ bool MinimapLayout::Load(const char* path) {
                     else if (!strcmp(what, "hidden")) panelHidden[id] = v != 0.f;
                     else if (!strcmp(what, "x")) panelX[id] = v;
                     else if (!strcmp(what, "y")) panelY[id] = v;
+                    else if (!strcmp(what, "w")) panelW[id] = v;
+                    else if (!strcmp(what, "h")) panelH[id] = v;
                     break;
                 }
             }
@@ -178,8 +181,10 @@ bool MinimapLayout::Save(const char* path) const {
     static const char* kNames[kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
     std::print(f, "# panels: pinned open, hidden from the dock, position (fraction of window; <0 = docked)\n");
     for (int i = 0; i < kPanelCount; ++i)
-        std::print(f, "panel.{0}.pinned={1}\npanel.{0}.hidden={2}\npanel.{0}.x={3:.4f}\npanel.{0}.y={4:.4f}\n",
-                   kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i]);
+        std::print(f, "panel.{0}.pinned={1}\npanel.{0}.hidden={2}\npanel.{0}.x={3:.4f}\npanel.{0}.y={4:.4f}\n"
+                      "panel.{0}.w={5:.4f}\npanel.{0}.h={6:.4f}\n",
+                   kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i], panelW[i], panelH[i]);
+    std::print(f, "uiScale={:.2f}\n", uiScale);
     fclose(f);
     return true;
 }
@@ -404,15 +409,15 @@ void HudRenderer::DrawMinimapSettings() {
     ImGui::SliderFloat("prediction opacity", &layout_.sceneAlpha, 0.0f, 2.0f, "x%.2f");
     if (ImGui::BeginTable("kinds", 7,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
-                          ImVec2(0.0f, 190.0f))) {
+                          ImVec2(0.0f, std::max(120.0f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.2f)))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableSetupColumn("Show", ImGuiTableColumnFlags_WidthFixed, 38.0f);
         ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-        ImGui::TableSetupColumn("Shape", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Shape", ImGuiTableColumnFlags_WidthFixed, 130.0f * layout_.uiScale);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 60.0f);
         ImGui::TableSetupColumn("Opacity", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-        ImGui::TableSetupColumn("Extras", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Extras", ImGuiTableColumnFlags_WidthFixed, 130.0f * layout_.uiScale);
         ImGui::TableHeadersRow();
         for (int k = 1; k < MinimapLayout::kKindCount; ++k) {  // 0 = player: the centre arrow, no marker
             KindStyle& st = layout_.kinds[k];
@@ -433,7 +438,7 @@ void HudRenderer::DrawMinimapSettings() {
             ImGui::TableNextColumn();
             int shape = static_cast<int>(st.shape);
             ImGui::SetNextItemWidth(-FLT_MIN);
-            if (ImGui::Combo("##shape", &shape, "Dot Ring Diamond Filled diamond "))
+            if (ImGui::Combo("##shape", &shape, "Dot\0Ring\0Diamond\0Filled diamond\0"))
                 st.shape = static_cast<MarkerShape>(shape);
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-FLT_MIN);
@@ -637,7 +642,7 @@ static const char* PanelName(PanelId id) {
     return "?";
 }
 
-bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title) {
+bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize) {
     const int i = static_cast<int>(id);
     const ImGuiIO& io = ImGui::GetIO();
     const ImVec2 cur(opt.cursorX, opt.cursorY);
@@ -664,8 +669,17 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
             ImGui::SetNextWindowPos(ImVec2(display.x - 12.f, display.y - 44.f), ImGuiCond_Always,
                                     ImVec2(1.0f, 1.0f));
     }
-    ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse |
-                             ImGuiWindowFlags_NoSavedSettings;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+    panelResizable_[i] = defaultSize.x > 0.f;
+    if (panelResizable_[i]) {
+        const ImVec2 size = layout_.panelW[i] > 0.f
+                                ? ImVec2(layout_.panelW[i] * display.x, layout_.panelH[i] * display.y)
+                                : defaultSize;
+        ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(420.f, 280.f), ImVec2(display.x, display.y));
+    } else {
+        flags |= ImGuiWindowFlags_AlwaysAutoResize;
+    }
     if (!opt.inputInteractive) flags |= ImGuiWindowFlags_NoInputs;  // hover = view-only
     if (!ImGui::Begin(title, nullptr, flags)) {
         ImGui::End();
@@ -699,6 +713,15 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
     panelSize_[i] = win->Rect().GetSize();
     const bool moving = ImGui::GetCurrentContext()->MovingWindow == win;
     ImGui::End();
+    if (panelResizable_[i] && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {  // resize finished
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        const float w = panelSize_[i].x / display.x, h = panelSize_[i].y / display.y;
+        if (std::abs(w - layout_.panelW[i]) > 0.002f || std::abs(h - layout_.panelH[i]) > 0.002f) {
+            layout_.panelW[i] = w;
+            layout_.panelH[i] = h;
+            layout_.Save(layoutPath_);
+        }
+    }
     // Follow the title-bar drag in the layout every frame, so the forced position of the
     // next frame (PanelOpen) is where the panel was dropped; write the file on release.
     if (moving) {
@@ -1031,19 +1054,26 @@ void HudRenderer::DrawSalvageSettings() {
 
 // Two columns: the panels on the left, the selected one's settings on the right.
 void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
-    if (!PanelOpen(PanelId::Settings, opt, "Settings")) return;
-    static const char* kEntries[] = {"Info", "Drops", "Items", "Actors", "Minimap", "Auto salvage"};
-    constexpr int kEntryCount = 6;  // first four are panels (PanelId order)
-    ImGui::BeginChild("##settings_list", ImVec2(130.0f, 430.0f), true);
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    if (!PanelOpen(PanelId::Settings, opt, "Settings",
+                   ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f))))
+        return;
+    static const char* kEntries[] = {"General", "Info", "Drops", "Items", "Actors", "Minimap", "Auto salvage"};
+    constexpr int kEntryCount = 7;  // entries 1..4 are the panels (PanelId order)
+    ImGui::BeginChild("##settings_list", ImVec2(150.0f * layout_.uiScale, 0.0f), true);
     for (int i = 0; i < kEntryCount; ++i)
         if (ImGui::Selectable(kEntries[i], settingsTab_ == i)) settingsTab_ = i;
     ImGui::EndChild();
     ImGui::SameLine();
-    ImGui::BeginChild("##settings_detail", ImVec2(560.0f, 430.0f), true);
+    ImGui::BeginChild("##settings_detail", ImVec2(0.0f, 0.0f), true);  // fills the window
     ImGui::TextUnformatted(kEntries[settingsTab_]);
     ImGui::Separator();
-    if (settingsTab_ < 4) {
-        const int i = settingsTab_;
+    if (settingsTab_ == 0) {
+        ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+        ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
+    } else if (settingsTab_ <= 4) {
+        const int i = settingsTab_ - 1;
         bool changed = false;
         bool shown = !layout_.panelHidden[i];
         changed |= ImGui::Checkbox("show in dock", &shown);
@@ -1053,9 +1083,9 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
             layout_.panelX[i] = layout_.panelY[i] = -1.f;
             changed = true;
         }
-        ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.\nDrag the title bar (F8) to move.");
+        ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
         if (changed) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
-    } else if (settingsTab_ == 4) {
+    } else if (settingsTab_ == 5) {
         DrawMinimapSettings();
     } else {
         DrawSalvageSettings();
@@ -1106,6 +1136,7 @@ void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& o
 }
 
 void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName) {
+    ImGui::GetStyle().FontScaleMain = layout_.uiScale;
     UpdateDrops(snap);           // the log keeps recording while the panels are hidden
     if (!opt.showPanels)
         for (ImVec2& s : panelSize_) s = ImVec2(0.f, 0.f);  // F9 off: nothing to hover

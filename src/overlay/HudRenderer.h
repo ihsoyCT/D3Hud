@@ -58,6 +58,9 @@ struct MinimapLayout {
     bool panelHidden[kPanelCount] = {false, false, false, true, false};  // Actors = debug
     float panelX[kPanelCount] = {-1.f, -1.f, -1.f, -1.f, -1.f};  // < 0 = docked
     float panelY[kPanelCount] = {-1.f, -1.f, -1.f, -1.f, -1.f};
+    float panelW[kPanelCount] = {};  // size of resizable panels (fraction of window); 0 = default
+    float panelH[kPanelCount] = {};
+    float uiScale = 1.0f;            // global text/widget scale (Settings > General)
 
     bool Load(const char* path);
     bool Save(const char* path) const;
@@ -119,7 +122,8 @@ public:
 
 private:
     // Panel framework: returns true when the panel should draw its body.
-    bool PanelOpen(PanelId id, const HudOptions& opt, const char* title);
+    // `defaultSize` > 0 makes the panel user-resizable (size remembered).
+    bool PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize = ImVec2(0.f, 0.f));
     void PanelEnd(PanelId id, bool wasOpen);
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
@@ -129,6 +133,7 @@ private:
     ImVec2 panelPos_[kPanels] = {};   // last frame's window rect (min)
     ImVec2 panelSize_[kPanels] = {};
     float panelHoverUntil_[kPanels] = {};  // linger after the cursor leaves
+    bool panelResizable_[kPanels] = {};
     bool panelMoved_[kPanels] = {};        // title-bar drag in progress; saved on release
     int settingsTab_ = 0;
 
