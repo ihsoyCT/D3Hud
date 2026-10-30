@@ -17,6 +17,7 @@
 #include <string>
 
 #include "imgui.h"
+#include "imgui_internal.h"  // ClearActiveID
 #include "backends/imgui_impl_dx11.h"
 #include "backends/imgui_impl_win32.h"
 
@@ -40,6 +41,8 @@ static HWND g_hwnd = nullptr;
 static HWND g_targetHwnd = nullptr;
 static bool g_running = true;
 static bool g_clickThrough = true;
+static bool g_textFocus = false;  // an ImGui text field is active: the overlay holds the keyboard
+static ULONGLONG g_textFocusAt = 0;
 static bool g_hotkeysSuspended = false;  // a key is being captured in Settings > Hotkeys
 static unsigned g_panelToggleMask = 0;   // panel hotkeys pressed since the last frame
 static bool g_hotButton = false;  // click-through lifted only while the cursor is over the salvage button
@@ -506,7 +509,7 @@ int main(int argc, char** argv) {
         opts.inputInteractive = !g_clickThrough && !g_hotButton;
         opts.mouseLive = !g_clickThrough;
         opts.mapOrientation = g_mapOrientation;
-        g_hotkeysSuspended = renderer.capturingHotkey();
+        g_hotkeysSuspended = renderer.capturingHotkey() || g_textFocus;
         if (renderer.TakeHotkeysDirty()) RegisterHotkeys(renderer.hotkeys());
         opts.panelToggleMask = g_panelToggleMask;
         g_panelToggleMask = 0;
@@ -535,6 +538,28 @@ int main(int argc, char** argv) {
             salvageStatus.status = salvageRunner.status().c_str();
         }
         renderer.Draw(snap, opts, fpsSmooth, sourceName);
+        {
+            // Typing: the overlay is WS_EX_NOACTIVATE, so keys go to the game. While a text
+            // field is active take the keyboard (and give it back to the game afterwards).
+            const bool wantText = ImGui::GetIO().WantTextInput;
+            if (wantText != g_textFocus) {
+                g_textFocus = wantText;
+                g_textFocusAt = GetTickCount64();
+                LONG_PTR ex = GetWindowLongPtrW(g_hwnd, GWL_EXSTYLE);
+                if (wantText) {
+                    ex &= ~static_cast<LONG_PTR>(WS_EX_NOACTIVATE);
+                    SetWindowLongPtrW(g_hwnd, GWL_EXSTYLE, ex);
+                    SetForegroundWindow(g_hwnd);
+                    SetFocus(g_hwnd);
+                } else {
+                    ex |= WS_EX_NOACTIVATE;
+                    SetWindowLongPtrW(g_hwnd, GWL_EXSTYLE, ex);
+                    if (g_targetHwnd != nullptr && IsWindow(g_targetHwnd)) SetForegroundWindow(g_targetHwnd);
+                }
+            } else if (g_textFocus && GetTickCount64() - g_textFocusAt > 400 && GetForegroundWindow() != g_hwnd) {
+                ImGui::ClearActiveID();  // the user clicked back into the game: end the edit
+            }
+        }
         if (salvageStatus.stopClicked) salvageRunner.Stop("stopped by user");
         if (salvageStatus.startClicked) {
             // clicks must reach the game: back to click-through first
