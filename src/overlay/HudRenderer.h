@@ -62,6 +62,11 @@ struct MinimapLayout {
     float panelH[kPanelCount] = {};
     float uiScale = 1.0f;            // global text/widget scale (Settings > General)
 
+    // global hotkeys (virtual-key codes, 0 = unbound); ids 1.. in main.cpp
+    enum HotkeyAction { kHkClickThrough, kHkPanels, kHkQuit, kHkMapOrientation, kHkPanelFirst /* + PanelId */ };
+    static constexpr int kHotkeyCount = kHkPanelFirst + kPanelCount;
+    uint8_t hotkeys[kHotkeyCount] = {0x77, 0x78, 0x23, 0x76, 0, 0, 0, 0, 0};  // F8 F9 END F7
+
     bool Load(const char* path);
     bool Save(const char* path) const;
 };
@@ -95,6 +100,7 @@ struct HudOptions {
     bool showMinimap = true;
     bool showPanels = true;
     bool inputInteractive = false;    // F8 state: true = overlay captures mouse
+    unsigned panelToggleMask = 0;     // bit i: the hotkey of panel i fired this frame (Draw consumes it)
     int mapOrientation = 0;           // F7 cycles; see OrientForMap (live default: 2)
     float cursorX = -1.f, cursorY = -1.f;  // mouse in overlay client px (Win32: works click-through)
     bool haveLabelCenter = false;  // live: player position extrapolated to "now" for world labels
@@ -117,6 +123,11 @@ public:
     void SetLayoutPath(const char* path);
     // Scene shapes for the map prediction (scene_cells.bin); false if missing.
     bool LoadSceneCells(const char* path) { return sceneCells_.Load(path); }
+    // Hotkey bindings for main.cpp: re-register when TakeHotkeysDirty(); while a key is being
+    // captured in Settings the owner must ignore hotkey presses.
+    const uint8_t* hotkeys() const { return layout_.hotkeys; }
+    bool TakeHotkeysDirty() { const bool d = hotkeysDirty_; hotkeysDirty_ = false; return d; }
+    bool capturingHotkey() const { return captureHotkey_ >= 0; }
     const SafeArea& safeArea() const { return layout_.safeArea; }
     const SalvageRules& salvageRules() const { return layout_.salvageRules; }
 
@@ -128,6 +139,10 @@ private:
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
     void DrawMinimapSettings();
+    void DrawHotkeySettings();
+    bool hotkeysDirty_ = true;
+    bool captureReady_ = false;  // no key held since the capture began
+    int captureHotkey_ = -1;  // hotkey action waiting for a key press, or -1
     void DrawSalvageSettings();
     static constexpr int kPanels = MinimapLayout::kPanelCount;
     ImVec2 panelPos_[kPanels] = {};   // last frame's window rect (min)

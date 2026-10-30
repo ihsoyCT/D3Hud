@@ -40,6 +40,8 @@ static HWND g_hwnd = nullptr;
 static HWND g_targetHwnd = nullptr;
 static bool g_running = true;
 static bool g_clickThrough = true;
+static bool g_hotkeysSuspended = false;  // a key is being captured in Settings > Hotkeys
+static unsigned g_panelToggleMask = 0;   // panel hotkeys pressed since the last frame
 static bool g_hotButton = false;  // click-through lifted only while the cursor is over the salvage button
 static bool g_showPanels = true;
 static int g_mapOrientation = 0;  // see OrientForMap; F7 cycles
@@ -132,6 +134,15 @@ static void SetClickThrough(HWND hwnd, bool on) {
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
 }
 
+// (Re)register the global hotkeys: id = 1 + action, vk 0 = unbound.
+static void RegisterHotkeys(const uint8_t* vks) {
+    for (int i = 0; i < MinimapLayout::kHotkeyCount; ++i) {
+        UnregisterHotKey(g_hwnd, i + 1);
+        if (vks[i] != 0 && !RegisterHotKey(g_hwnd, i + 1, 0, vks[i]))
+            std::print(stderr, "warning: hotkey {} (vk {}) register failed\n", i, vks[i]);
+    }
+}
+
 // ---------------------------------------------------------------------------
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return 0;
@@ -140,18 +151,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_running = false;
             return 0;
         case WM_HOTKEY:
+            if (g_hotkeysSuspended) return 0;
+            // ids are 1 + MinimapLayout::HotkeyAction; the keys are user-configurable
+            if (wp >= 5) g_panelToggleMask |= 1u << (wp - 5);
             switch (static_cast<int>(wp)) {
-                case 1:  // F8 — toggle click-through
+                case 1:  // click-through (default F8)
                     g_hotButton = false;
                     SetClickThrough(hwnd, !g_clickThrough);
                     break;
-                case 2:  // F9 — panels
+                case 2:  // panels (default F9)
                     g_showPanels = !g_showPanels;
                     break;
-                case 3:  // END — quit
+                case 3:  // quit (default END)
                     g_running = false;
                     break;
-                case 4:  // F7 — cycle map orientation
+                case 4:  // cycle map orientation (default F7)
                     g_mapOrientation = (g_mapOrientation + 1) % kMapOrientations;
                     break;
             }
@@ -312,10 +326,6 @@ int main(int argc, char** argv) {
     if (!MakeRtv()) return 1;
     ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
 
-    if (!RegisterHotKey(g_hwnd, 1, 0, VK_F8)) std::print(stderr, "warning: F8 hotkey register failed\n");
-    if (!RegisterHotKey(g_hwnd, 2, 0, VK_F9)) std::print(stderr, "warning: F9 hotkey register failed\n");
-    if (!RegisterHotKey(g_hwnd, 3, 0, VK_END)) std::print(stderr, "warning: END hotkey register failed\n");
-    if (!RegisterHotKey(g_hwnd, 4, 0, VK_F7)) std::print(stderr, "warning: F7 hotkey register failed\n");
 
     // --- imgui --------------------------------------------------------------
     IMGUI_CHECKVERSION();
@@ -495,6 +505,10 @@ int main(int argc, char** argv) {
         opts.inputInteractive = !g_clickThrough && !g_hotButton;
         opts.mouseLive = !g_clickThrough;
         opts.mapOrientation = g_mapOrientation;
+        g_hotkeysSuspended = renderer.capturingHotkey();
+        if (renderer.TakeHotkeysDirty()) RegisterHotkeys(renderer.hotkeys());
+        opts.panelToggleMask = g_panelToggleMask;
+        g_panelToggleMask = 0;
         {
             // Win32 cursor: ImGui gets no mouse input while the overlay is click-through
             POINT cur;
@@ -609,9 +623,7 @@ int main(int argc, char** argv) {
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
-    UnregisterHotKey(g_hwnd, 1);
-    UnregisterHotKey(g_hwnd, 2);
-    UnregisterHotKey(g_hwnd, 3);
+    for (int i = 0; i < MinimapLayout::kHotkeyCount; ++i) UnregisterHotKey(g_hwnd, i + 1);
     if (g_rtv) g_rtv->Release();
     if (g_swap) g_swap->Release();
     if (g_dcompVisual) g_dcompVisual->Release();

@@ -12,6 +12,14 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 namespace d3hud {
 namespace {
 
@@ -66,6 +74,22 @@ const char* VerdictName(SalvageVerdict v) {
     return "?";
 }
 
+// Hotkey actions, in MinimapLayout::HotkeyAction order (ini key / label).
+static const char* const kHotkeyIds[MinimapLayout::kHotkeyCount] = {
+    "clickThrough", "panels", "quit", "mapOrientation", "panelInfo", "panelDrops", "panelItems", "panelActors", "panelSettings"};
+static const char* const kHotkeyLabels[MinimapLayout::kHotkeyCount] = {
+    "Click-through / interact", "Show/hide panels", "Quit", "Cycle map orientation", "Toggle Info panel", "Toggle Drops panel",
+    "Toggle Items panel", "Toggle Actors panel", "Toggle Settings panel"};
+
+static void KeyName(int vk, char* out, size_t n) {
+    if (vk == 0) { snprintf(out, n, "(none)"); return; }
+    if (vk >= VK_F1 && vk <= VK_F24) { snprintf(out, n, "F%d", vk - VK_F1 + 1); return; }
+    const bool ext = vk == VK_END || vk == VK_HOME || vk == VK_INSERT || vk == VK_DELETE || vk == VK_PRIOR ||
+                     vk == VK_NEXT || (vk >= VK_LEFT && vk <= VK_DOWN) || vk == VK_DIVIDE || vk == VK_NUMLOCK;
+    const LONG lp = (static_cast<LONG>(MapVirtualKeyA(vk, MAPVK_VK_TO_VSC)) << 16) | (ext ? (1 << 24) : 0);
+    if (GetKeyNameTextA(lp, out, static_cast<int>(n)) <= 0) snprintf(out, n, "key 0x%02X", vk);
+}
+
 MinimapLayout::MinimapLayout() { ResetMarkers(); }
 
 void MinimapLayout::ResetMarkers() {
@@ -112,6 +136,10 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "beyondRim")) beyondRim = v != 0.f;
         else if (!strcmp(key, "protectEquipped")) salvageRules.protectEquippedAncients = v != 0.f;
         else if (!strcmp(key, "uiScale")) uiScale = std::clamp(v, 0.5f, 3.0f);
+        else if (!strncmp(key, "hotkey.", 7)) {
+            for (int h = 0; h < kHotkeyCount; ++h)
+                if (!strcmp(key + 7, kHotkeyIds[h])) hotkeys[h] = static_cast<uint8_t>(std::clamp(v, 0.f, 254.f));
+        }
         else if (!strcmp(key, "markerScale")) markerScale = v;
         else if (!strcmp(key, "outline")) outline = v != 0.f;
         else if (!strcmp(key, "bigMapMarkers")) bigMapMarkers = v != 0.f;
@@ -185,6 +213,7 @@ bool MinimapLayout::Save(const char* path) const {
                       "panel.{0}.w={5:.4f}\npanel.{0}.h={6:.4f}\n",
                    kNames[i], panelPinned[i] ? 1 : 0, panelHidden[i] ? 1 : 0, panelX[i], panelY[i], panelW[i], panelH[i]);
     std::print(f, "uiScale={:.2f}\n", uiScale);
+    for (int h = 0; h < kHotkeyCount; ++h) std::print(f, "hotkey.{}={}\n", kHotkeyIds[h], hotkeys[h]);
     fclose(f);
     return true;
 }
@@ -779,7 +808,7 @@ void HudRenderer::DrawInfo(const WorldSnapshot& snap, const HudOptions& opt, dou
     ImGui::Text("frame %llu  %.0f fps", static_cast<unsigned long long>(snap.frameIndex), fps);
     ImGui::Text("actors %u  items %u", snap.actorCount, snap.itemCount);
     ImGui::Text("player (%.1f, %.1f)", snap.playerPos.x, snap.playerPos.y);
-    ImGui::Text("map orientation %d: %s (F7)", opt.mapOrientation,
+    ImGui::Text("map orientation %d: %s", opt.mapOrientation,
                 MapOrientationName(opt.mapOrientation));
     if (ReaderStatus* rs = opt.reader) {
         ImGui::Separator();
@@ -803,7 +832,12 @@ void HudRenderer::DrawInfo(const WorldSnapshot& snap, const HudOptions& opt, dou
     } else {
         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "INPUT PASS-THROUGH (F8: interact)");
     }
-    ImGui::TextUnformatted("F7 map orientation | F8 click-through | F9 panels | END quit");
+    {
+        char k[4][32];
+        for (int h = 0; h < 4; ++h) KeyName(layout_.hotkeys[h], k[h], sizeof(k[h]));
+        ImGui::Text("%s map orientation | %s click-through | %s panels | %s quit", k[MinimapLayout::kHkMapOrientation],
+                    k[MinimapLayout::kHkClickThrough], k[MinimapLayout::kHkPanels], k[MinimapLayout::kHkQuit]);
+    }
     PanelEnd(PanelId::Info, true);
 }
 
@@ -1055,27 +1089,79 @@ void HudRenderer::DrawSalvageSettings() {
 }
 
 // Two columns: the panels on the left, the selected one's settings on the right.
+// Settings > Hotkeys: click an action, then press the new key. Polled with
+// GetAsyncKeyState because a registered hotkey never reaches the window as a key event.
+void HudRenderer::DrawHotkeySettings() {
+    ImGui::TextDisabled("Click a key, then press the new one. Esc cancels; Backspace unbinds a panel toggle.");
+    if (ImGui::BeginTable("hotkeys", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
+        for (int h = 0; h < MinimapLayout::kHotkeyCount; ++h) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(kHotkeyLabels[h]);
+            ImGui::TableNextColumn();
+            ImGui::PushID(h);
+            char name[48];
+            if (captureHotkey_ == h) snprintf(name, sizeof(name), "press a key...");
+            else KeyName(layout_.hotkeys[h], name, sizeof(name));
+            if (ImGui::Button(name, ImVec2(170.0f * layout_.uiScale, 0.0f))) {
+                captureHotkey_ = captureHotkey_ == h ? -1 : h;
+                captureReady_ = false;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (captureHotkey_ < 0) return;
+    int pressed = 0;
+    for (int vk = 8; vk < 255 && pressed == 0; ++vk) {
+        const bool mouse = vk <= VK_XBUTTON2, mod = (vk >= VK_SHIFT && vk <= VK_MENU) || (vk >= VK_LSHIFT && vk <= VK_RMENU) ||
+                           vk == VK_LWIN || vk == VK_RWIN;
+        if (!mouse && !mod && (GetAsyncKeyState(vk) & 0x8000)) pressed = vk;
+    }
+    if (pressed == 0) {
+        captureReady_ = true;  // wait until the key that started the capture is released
+    } else if (captureReady_) {
+        const int h = captureHotkey_;
+        if (pressed == VK_BACK && h >= MinimapLayout::kHkPanelFirst) {
+            layout_.hotkeys[h] = 0;
+        } else if (pressed != VK_ESCAPE) {
+            for (int o = 0; o < MinimapLayout::kHotkeyCount; ++o)  // one action per key
+                if (o != h && layout_.hotkeys[o] == pressed) layout_.hotkeys[o] = 0;
+            layout_.hotkeys[h] = static_cast<uint8_t>(pressed);
+        }
+        captureHotkey_ = -1;
+        captureReady_ = false;
+        hotkeysDirty_ = true;
+        layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
+    }
+}
+
 void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     if (!PanelOpen(PanelId::Settings, opt, "Settings",
                    ImVec2(std::max(780.0f, display.x * 0.42f), std::max(540.0f, display.y * 0.62f))))
         return;
-    static const char* kEntries[] = {"General", "Info", "Drops", "Items", "Actors", "Minimap", "Auto salvage"};
-    constexpr int kEntryCount = 7;  // entries 1..4 are the panels (PanelId order)
+    // entries: the four panel pages (PanelId order) sit together; the rest are feature pages
+    enum Entry { kGeneral, kHotkeys, kInfo, kDrops, kItems, kActors, kMinimap, kSalvage, kEntryCount };
+    static const char* kEntries[kEntryCount] = {"General", "Hotkeys", "Info", "Drops", "Items", "Actors",
+                                                "Minimap", "Auto salvage"};
     ImGui::BeginChild("##settings_list", ImVec2(150.0f * layout_.uiScale, 0.0f), true);
     for (int i = 0; i < kEntryCount; ++i)
         if (ImGui::Selectable(kEntries[i], settingsTab_ == i)) settingsTab_ = i;
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("##settings_detail", ImVec2(0.0f, 0.0f), true);  // fills the window
+    if (settingsTab_ != kHotkeys) captureHotkey_ = -1;
     ImGui::TextUnformatted(kEntries[settingsTab_]);
     ImGui::Separator();
-    if (settingsTab_ == 0) {
+    if (settingsTab_ == kGeneral) {
         ImGui::SliderFloat("UI scale (text and widgets)", &layout_.uiScale, 0.75f, 2.5f, "x%.2f");
         if (ImGui::IsItemDeactivatedAfterEdit()) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
         ImGui::TextDisabled("The Settings window can be resized by dragging its bottom-right corner (F8).");
-    } else if (settingsTab_ <= 4) {
-        const int i = settingsTab_ - 1;
+    } else if (settingsTab_ == kHotkeys) {
+        DrawHotkeySettings();
+    } else if (settingsTab_ >= kInfo && settingsTab_ <= kActors) {
+        const int i = settingsTab_ - kInfo;
         bool changed = false;
         bool shown = !layout_.panelHidden[i];
         changed |= ImGui::Checkbox("show in dock", &shown);
@@ -1087,7 +1173,7 @@ void HudRenderer::DrawSettings(const WorldSnapshot&, const HudOptions& opt) {
         }
         ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins.%sDrag the title bar (F8) to move.", "\n");
         if (changed) layoutStatus_ = layout_.Save(layoutPath_) ? "saved" : "save failed";
-    } else if (settingsTab_ == 5) {
+    } else if (settingsTab_ == kMinimap) {
         DrawMinimapSettings();
     } else {
         DrawSalvageSettings();
@@ -1139,6 +1225,11 @@ void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& o
 
 void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName) {
     ImGui::GetStyle().FontScaleMain = layout_.uiScale;
+    for (int i = 0; i < kPanels; ++i)
+        if (opt.panelToggleMask & (1u << i)) {
+            layout_.panelPinned[i] = !layout_.panelPinned[i];
+            layout_.Save(layoutPath_);
+        }
     UpdateDrops(snap);           // the log keeps recording while the panels are hidden
     if (!opt.showPanels)
         for (ImVec2& s : panelSize_) s = ImVec2(0.f, 0.f);  // F9 off: nothing to hover
