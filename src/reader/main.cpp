@@ -582,12 +582,15 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
     int page = 0, tab = -1;
     for (int pg = 0; pg < 4; ++pg) {
         const UiControlState s = ui.Read(proc, kUiPage1 + pg);
+        if (s.found) out->stashPageRect[pg] = s.rect;
         if (s.visible && s.animState == 14) page = pg;
     }
     for (int t = 0; t < 5; ++t) {
         const UiControlState s = ui.Read(proc, kUiTab1 + t);
+        if (s.found) out->stashTabRect[t] = s.rect;
         if (s.visible && s.animState % 3 == 1) tab = t;
     }
+    out->stashPage = static_cast<int8_t>(page);
     out->stashTab = static_cast<int8_t>(tab < 0 ? -1 : page * 5 + tab);
 }
 

@@ -1700,20 +1700,24 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
     if (!S.search || (!snap.ui.stashOpen && !snap.ui.inventoryOpen)) return;
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const bool active = searchQuery_[0] != '\0';
+    const ImU32 outline = Rgba(S.searchRgb, 255), dim = IM_COL32(0, 0, 0, static_cast<int>(S.searchDim * 255.f));
+
+    // matches per global stash tab (page * 5 + tab; the item's gridY / 10), and in the bags
+    int perTab[64] = {};
+    int inBags = 0;
+    if (active)
+        for (uint16_t i = 0; i < snap.itemCount; ++i) {
+            const ItemSnapshot& it = snap.items[i];
+            if (!ItemMatchesQuery(it, searchQuery_)) continue;
+            if (it.location == kItemLocationStash) ++perTab[std::min(63, it.gridY / kStashRowsPerTab)];
+            else ++inBags;
+        }
 
     if (snap.ui.stashOpen) {
+        // the box sits BELOW the stash grid: the tab and page buttons are above it
         const UiRect grid = UiToScreen(snap.ui.stash, display.x, display.y);
         if (grid.x1 - grid.x0 > 8.0f) {
-            int perTab[64] = {};
-            int inBags = 0;
-            if (active)
-                for (uint16_t i = 0; i < snap.itemCount; ++i) {
-                    const ItemSnapshot& it = snap.items[i];
-                    if (!ItemMatchesQuery(it, searchQuery_)) continue;
-                    if (it.location == kItemLocationStash) ++perTab[std::min(63, it.gridY / kStashRowsPerTab)];
-                    else ++inBags;
-                }
-            ImGui::SetNextWindowPos(ImVec2(grid.x0, grid.y0 - 6.0f), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+            ImGui::SetNextWindowPos(ImVec2(grid.x0, grid.y1 + 6.0f), ImGuiCond_Always, ImVec2(0.0f, 0.0f));
             if (ImGui::Begin("##stash_search", nullptr,
                              ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing)) {
@@ -1723,17 +1727,9 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
                 ImGui::SameLine();
                 if (ImGui::SmallButton("x")) searchQuery_[0] = '\0';
                 if (active) {
-                    const int here = snap.ui.stashTab >= 0 ? perTab[std::min(63, static_cast<int>(snap.ui.stashTab))] : 0;
-                    char others[96] = {};
-                    int shown = 0;
-                    for (int t = 0; t < 64 && shown < 8; ++t)
-                        if (perTab[t] > 0 && t != snap.ui.stashTab) {
-                            const size_t len = strlen(others);
-                            snprintf(others + len, sizeof(others) - len, "%s%d(%d)", shown ? " " : "", t + 1, perTab[t]);
-                            ++shown;
-                        }
-                    ImGui::TextDisabled("%d on this tab%s%s%s", here, shown ? ", other tabs: " : "", others,
-                                        inBags ? "  (+ matches in the bags)" : "");
+                    int total = inBags;
+                    for (int c : perTab) total += c;
+                    ImGui::TextDisabled("%d match(es) in the stash%s", total - inBags, inBags ? ", + some in the bags" : "");
                 }
                 const ImVec2 p = ImGui::GetWindowPos(), sz = ImGui::GetWindowSize();
                 opt.AddHot(p.x, p.y, p.x + sz.x, p.y + sz.y);
@@ -1741,10 +1737,35 @@ void HudRenderer::DrawItemSearch(const WorldSnapshot& snap, HudOptions& opt) {
             ImGui::End();
         }
     }
-
     if (!active) return;
+
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    const ImU32 outline = Rgba(S.searchRgb, 255), dim = IM_COL32(0, 0, 0, static_cast<int>(S.searchDim * 255.f));
+    // stash buttons: every page (chest at the top) and, on the shown page, every tab that holds matches
+    if (snap.ui.stashOpen) {
+        auto mark = [&](const UiRect& ui, int count) {
+            const UiRect r = UiToScreen(ui, display.x, display.y);
+            if (r.x1 - r.x0 < 4.0f || r.y1 - r.y0 < 4.0f) return;  // control not laid out
+            dl->AddRect(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), outline, 0.f, 0, 3.0f);
+            char n[16];
+            snprintf(n, sizeof(n), "%d", count);
+            const ImVec2 ts = ImGui::CalcTextSize(n);
+            const ImVec2 at(r.x1 - ts.x - 4.0f, r.y0 + 1.0f);
+            dl->AddRectFilled(ImVec2(at.x - 2, at.y), ImVec2(at.x + ts.x + 2, at.y + ts.y), IM_COL32(0, 0, 0, 200), 3.f);
+            dl->AddText(at, outline, n);
+        };
+        const int shownPage = snap.ui.stashPage >= 0 ? snap.ui.stashPage : (snap.ui.stashTab >= 0 ? snap.ui.stashTab / 5 : 0);
+        int perPage[4] = {};
+        for (int g = 0; g < 64; ++g)
+            if (perTab[g] > 0 && g / 5 < 4) perPage[g / 5] += perTab[g];
+        for (int pg = 0; pg < 4; ++pg)
+            if (perPage[pg] > 0) mark(snap.ui.stashPageRect[pg], perPage[pg]);
+        for (int t = 0; t < 5; ++t) {
+            const int g = shownPage * 5 + t;
+            if (g < 64 && perTab[g] > 0) mark(snap.ui.stashTabRect[t], perTab[g]);
+        }
+    }
+
+    // items on screen: matches outlined, the rest dimmed
     for (uint16_t i = 0; i < snap.itemCount; ++i) {
         const ItemSnapshot& it = snap.items[i];
         UiRect ui;
