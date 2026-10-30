@@ -1,6 +1,8 @@
 #include "LuaPlugin.h"
 
 #include <algorithm>
+#include <cmath>
+#include <iterator>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -141,21 +143,63 @@ struct LuaBinding {
         return 1;
     }
 
+    static const char* KindName(int32_t k) {
+        static const char* const names[] = {"player", "trash", "champion", "rare", "minion", "boss", "pylon", "shrine",
+                                            "chest", "globe", "ground_item", "portal", "pylon_spawn", "rift_orb",
+                                            "rift_orb_tiered"};
+        return k >= 0 && k < static_cast<int32_t>(std::size(names)) ? names[k] : "unknown";
+    }
+
+    // The actor as a Lua table: everything the snapshot knows about it.
+    static void PushActor(lua_State* L, const d3h_actor& a, const d3h_frame& f) {
+        lua_createtable(L, 0, 20);
+        SetNum(L, "id", static_cast<double>(a.id));
+        SetNum(L, "x", a.pos.x);
+        SetNum(L, "y", a.pos.y);
+        SetNum(L, "dist", std::hypot(a.pos.x - f.player_pos.x, a.pos.y - f.player_pos.y));  // world units from the player
+        SetNum(L, "heading", a.heading);
+        SetNum(L, "hp", a.hp_fraction);  // 0..1, -1 = not read
+        SetNum(L, "hp_current", a.hp_current);
+        SetNum(L, "hp_max", a.hp_max);
+        SetNum(L, "kind", a.kind);
+        SetStr(L, "kind_name", KindName(a.kind));
+        SetNum(L, "rarity", a.rarity);
+        SetNum(L, "flags", a.flags);
+        SetBool(L, "ancient", (a.flags & D3H_FLAG_ANCIENT) != 0);
+        SetBool(L, "primal", (a.flags & D3H_FLAG_PRIMAL) != 0);
+        SetBool(L, "bonus", (a.flags & D3H_FLAG_BONUS) != 0);
+        SetBool(L, "unidentified", (a.flags & D3H_FLAG_UNIDENTIFIED) != 0);
+        SetBool(L, "used", (a.flags & D3H_FLAG_USED) != 0);  // pylon / shrine already clicked
+        SetStr(L, "name", a.name);
+    }
+
+    // d3hud.actor(i) -> table or nil (1-based)
     static int Actor(lua_State* L) {
         const lua_Integer i = luaL_checkinteger(L, 1);
         d3h_actor a{};
         a.size = sizeof(a);
+        d3h_frame f{};
+        f.size = sizeof(f);
         if (i < 1 || !Self(L)->host_.get_actor(static_cast<uint32_t>(i - 1), &a)) return 0;
-        lua_createtable(L, 0, 10);
-        SetNum(L, "id", static_cast<double>(a.id));
-        SetNum(L, "x", a.pos.x);
-        SetNum(L, "y", a.pos.y);
-        SetNum(L, "heading", a.heading);
-        SetNum(L, "hp", a.hp_fraction);
-        SetNum(L, "kind", a.kind);
-        SetNum(L, "rarity", a.rarity);
-        SetNum(L, "flags", a.flags);
-        SetStr(L, "name", a.name);
+        Self(L)->host_.get_frame(&f);
+        PushActor(L, a, f);
+        return 1;
+    }
+
+    // d3hud.actors() -> array of actor tables: every actor of the current snapshot
+    static int Actors(lua_State* L) {
+        const d3h_host& h = Self(L)->host_;
+        d3h_frame f{};
+        f.size = sizeof(f);
+        h.get_frame(&f);
+        lua_createtable(L, static_cast<int>(f.actor_count), 0);
+        for (uint32_t i = 0; i < f.actor_count; ++i) {
+            d3h_actor a{};
+            a.size = sizeof(a);
+            if (!h.get_actor(i, &a)) break;
+            PushActor(L, a, f);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
+        }
         return 1;
     }
 
@@ -350,6 +394,50 @@ struct LuaBinding {
         d.user = ctx.get();
         if (!p->host_.register_page(&d)) return luaL_error(L, "page '%s' was rejected by the host", id);
         p->pages_.push_back(std::move(ctx));
+        return 0;
+    }
+
+    // d3hud.panel{ id=, title=, width=, height=, draw=function(ui) ... end }: a dock panel (hover peek, pin, drag)
+    static int Panel(lua_State* L) {
+        LuaPlugin* p = Self(L);
+        luaL_checktype(L, 1, LUA_TTABLE);
+        const char* id = StrField(L, 1, "id");
+        const char* title = StrField(L, 1, "title");
+        if (id == nullptr || title == nullptr) return luaL_error(L, "panel needs id and title");
+        lua_getfield(L, 1, "draw");
+        if (!lua_isfunction(L, -1)) return luaL_error(L, "panel '%s' needs a draw function", id);
+        auto ctx = std::make_unique<LuaPlugin::PageCtx>();
+        ctx->plugin = p;
+        ctx->ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        d3h_panel_desc d{};
+        d.size = sizeof(d);
+        d.id = id;
+        d.title = title;
+        d.draw = &LuaPlugin::PageTrampoline;  // a panel draws like a page: draw(ui)
+        d.user = ctx.get();
+        d.default_w = static_cast<float>(NumField(L, 1, "width", 0));
+        d.default_h = static_cast<float>(NumField(L, 1, "height", 0));
+        if (!p->host_.register_panel(&d)) return luaL_error(L, "panel '%s' was rejected by the host", id);
+        p->pages_.push_back(std::move(ctx));
+        return 0;
+    }
+
+    static d3h_color ColorArg(lua_State* L, int i) { return static_cast<d3h_color>(luaL_checkinteger(L, i)); }
+
+    // d3hud.draw_rect(x0, y0, x1, y1, argb [, filled = true [, thickness]])
+    static int DrawRect(lua_State* L) {
+        const d3h_rect r{static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2)),
+                         static_cast<float>(luaL_checknumber(L, 3)), static_cast<float>(luaL_checknumber(L, 4))};
+        const bool filled = lua_isnoneornil(L, 6) ? true : lua_toboolean(L, 6) != 0;
+        Self(L)->host_.draw_rect(D3H_LAYER_OVERLAY, r, ColorArg(L, 5), filled, static_cast<float>(luaL_optnumber(L, 7, 1.0)));
+        return 0;
+    }
+
+    // d3hud.draw_line(x0, y0, x1, y1, argb [, thickness])
+    static int DrawLine(lua_State* L) {
+        const d3h_vec2 a{static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2))};
+        const d3h_vec2 b{static_cast<float>(luaL_checknumber(L, 3)), static_cast<float>(luaL_checknumber(L, 4))};
+        Self(L)->host_.draw_line(D3H_LAYER_OVERLAY, a, b, ColorArg(L, 5), static_cast<float>(luaL_optnumber(L, 6, 1.0)));
         return 0;
     }
 
@@ -606,7 +694,10 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
     LuaBinding::Register(L, p.get(), "log", LuaBinding::Log);
     LuaBinding::Register(L, p.get(), "on", LuaBinding::On);
     if (D3H_HOST_HAS(&host, get_frame)) LuaBinding::Register(L, p.get(), "frame", LuaBinding::Frame);
-    if (D3H_HOST_HAS(&host, get_actor)) LuaBinding::Register(L, p.get(), "actor", LuaBinding::Actor);
+    if (D3H_HOST_HAS(&host, get_actor)) {
+        LuaBinding::Register(L, p.get(), "actor", LuaBinding::Actor);
+        LuaBinding::Register(L, p.get(), "actors", LuaBinding::Actors);
+    }
     if (D3H_HOST_HAS(&host, get_item)) LuaBinding::Register(L, p.get(), "item", LuaBinding::Item);
     if (D3H_HOST_HAS(&host, world_to_screen) && host.world_to_screen != nullptr)
         LuaBinding::Register(L, p.get(), "world_to_screen", LuaBinding::WorldToScreenFn);
@@ -616,6 +707,25 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         LuaBinding::Register(L, p.get(), "get", LuaBinding::Get);
         LuaBinding::Register(L, p.get(), "set", LuaBinding::Set);
     }
+    if (D3H_HOST_HAS(&host, draw_rect) && host.draw_rect != nullptr)
+        LuaBinding::Register(L, p.get(), "draw_rect", LuaBinding::DrawRect);
+    if (D3H_HOST_HAS(&host, draw_line) && host.draw_line != nullptr)
+        LuaBinding::Register(L, p.get(), "draw_line", LuaBinding::DrawLine);
+    if (D3H_HOST_HAS(&host, register_panel) && host.register_panel != nullptr)
+        LuaBinding::Register(L, p.get(), "panel", LuaBinding::Panel);
+    // names for the numbers in actor / item tables
+    lua_newtable(L);
+    static const std::pair<const char*, int> kinds[] = {{"player", D3H_ACTOR_PLAYER}, {"trash", D3H_ACTOR_TRASH}, {"champion", D3H_ACTOR_CHAMPION},
+                          {"rare", D3H_ACTOR_RARE}, {"minion", D3H_ACTOR_MINION}, {"boss", D3H_ACTOR_BOSS},
+                          {"pylon", D3H_ACTOR_PYLON}, {"shrine", D3H_ACTOR_SHRINE}, {"chest", D3H_ACTOR_CHEST},
+                          {"globe", D3H_ACTOR_GLOBE}, {"ground_item", D3H_ACTOR_GROUND_ITEM}, {"portal", D3H_ACTOR_PORTAL},
+                          {"pylon_spawn", D3H_ACTOR_PYLON_SPAWN}, {"rift_orb", D3H_ACTOR_RIFT_ORB},
+                          {"rift_orb_tiered", D3H_ACTOR_RIFT_ORB_TIERED}};
+    for (const auto& k : kinds) {
+        lua_pushinteger(L, k.second);
+        lua_setfield(L, -2, k.first);
+    }
+    lua_setfield(L, -2, "kind");
     if (D3H_HOST_HAS(&host, register_page)) LuaBinding::Register(L, p.get(), "page", LuaBinding::Page);
     lua_setfield(L, -2, "d3hud");
 

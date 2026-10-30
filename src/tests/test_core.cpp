@@ -517,6 +517,9 @@ struct State {
     std::vector<std::pair<int32_t, Sub>> subs;
     std::vector<Page> pages;
     std::vector<std::string> logs, drawn, lines;
+    std::vector<d3h_actor> actors;
+    std::vector<d3h_rect> rects;
+    std::vector<Page> panels;
     d3h_frame frame{};
     int comboPick = 0;  // 0 = leave the combo alone, else the 1-based index to choose
     void Reset() { *this = State(); frame.size = sizeof(frame); frame.rift_timer_fraction = -1.f; frame.hovered_item = -1; }
@@ -526,8 +529,25 @@ State g;
 std::string Key(const char* k) { return *CurrentPluginName() + "." + k; }
 
 void Log(int32_t, const char* m) { g.logs.emplace_back(m); }
-void GetFrame(d3h_frame* out) { *out = g.frame; }
-d3h_bool GetActor(uint32_t, d3h_actor*) { return 0; }
+void GetFrame(d3h_frame* out) {
+    *out = g.frame;
+    out->actor_count = static_cast<uint32_t>(g.actors.size());
+}
+d3h_bool GetActor(uint32_t i, d3h_actor* out) {
+    if (i >= g.actors.size()) return 0;
+    *out = g.actors[i];
+    return 1;
+}
+d3h_bool WorldToScreen(d3h_vec2 w, float, d3h_vec2* out) {
+    if (w.x < 0) return 0;  // "off screen"
+    *out = w;
+    return 1;
+}
+void DrawRect(int32_t, d3h_rect r, d3h_color, d3h_bool, float) { g.rects.push_back(r); }
+d3h_bool RegisterPanel(const d3h_panel_desc* d) {
+    g.panels.push_back({d->id, d->title, "", d->draw, d->user});
+    return 1;
+}
 void Subscribe(int32_t type, d3h_event_fn fn, void* user) { g.subs.push_back({type, {fn, user}}); }
 void DrawText(int32_t, d3h_vec2, d3h_color, const char* t, float) { g.drawn.emplace_back(t); }
 d3h_bool RegisterPage(const d3h_page_desc* d) {
@@ -553,6 +573,7 @@ d3h_host MakeHost() {
     h.size = sizeof(h);
     h.api_version = D3H_API_VERSION;
     h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.subscribe = Subscribe; h.draw_text = DrawText;
+    h.world_to_screen = WorldToScreen; h.draw_rect = DrawRect; h.register_panel = RegisterPanel;
     h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
     h.get_float = GetFloat; h.get_color = GetColor; h.get_string = GetString; h.set_value = SetValue; h.set_string = SetString;
     return h;
@@ -586,6 +607,21 @@ void Fire(int32_t type, int32_t index = -1, int64_t value = 0, const char* text 
 void DrawPages() {
     const d3h_ui ui = MakeUi();
     for (const Page& p : g.pages) p.draw(&ui, p.user);
+}
+void DrawPanels() {
+    const d3h_ui ui = MakeUi();
+    for (const Page& p : g.panels) p.draw(&ui, p.user);
+}
+d3h_actor Actor(int32_t kind, float x, float hp, const char* name) {
+    d3h_actor a{};
+    a.size = sizeof(a);
+    a.kind = kind;
+    a.pos = {x, 5.f};
+    a.hp_fraction = hp;
+    a.hp_current = hp > 0 ? hp * 1000.f : 0.f;
+    a.hp_max = hp >= 0 ? 1000.f : 0.f;
+    strncpy_s(a.name, sizeof(a.name), name, _TRUNCATE);
+    return a;
 }
 }  // namespace fake
 
@@ -684,6 +720,19 @@ static void TestLuaSandbox() {
     CHECK(fake::g.settings.GetNumber("testplugin.n", v) && v == 9);  // clamped by the host
     fake::Fire(D3H_EVENT_HOTKEY, -1, 0, "go");
     CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "go39");
+
+    // d3hud.actors(): everything the snapshot knows, with names and the distance to the player
+    fake::g.Reset();
+    fake::g.frame.player_pos = {0.f, 5.f};
+    fake::g.actors = {fake::Actor(D3H_ACTOR_RARE, 30.f, 0.25f, "Skeleton_Rare"), fake::Actor(D3H_ACTOR_TRASH, 4.f, -1.f, "Zombie")};
+    auto lister = load("lister", "d3hud.on('frame', function()\n"
+                                 "  local all = d3hud.actors()\n"
+                                 "  local r = all[1]\n"
+                                 "  d3hud.log(#all .. ' ' .. r.kind_name .. ' ' .. r.name .. ' ' .. r.dist .. ' ' .. r.hp .. ' ' .. r.hp_current .. '/' .. r.hp_max .. ' ' .. all[2].hp .. ' ' .. d3hud.actor(2).name .. ' ' .. tostring((d3hud.actor(3))))\n"
+                                 "end)");
+    CHECK(lister != nullptr);
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "2 rare Skeleton_Rare 30.0 0.25 250.0/1000.0 -1.0 Zombie nil");
     fs::remove_all(root, ec);
 }
 
@@ -699,7 +748,7 @@ static void TestTimeTracker() {
         fprintf(stderr, "timetracker: %s\n", err.c_str());
         return;
     }
-    CHECK(p->manifest().name == "timetracker" && fake::g.pages.size() == 1);
+    CHECK(p->manifest().name == "timetracker" && fake::g.pages.size() == 1 && fake::g.panels.size() == 1);
 
     auto tick = [&](double ms, uint32_t world, uint32_t uiFlags = 0) {
         fake::g.frame.time_ms = ms;
@@ -738,9 +787,17 @@ static void TestTimeTracker() {
     CHECK(page.find("total 0:01:10") != std::string::npos);
     CHECK(!p->disabled());
 
+    // the dock panel shows the same split
+    fake::g.lines.clear();
+    fake::DrawPanels();
+    page.clear();
+    for (const std::string& l : fake::g.lines) page += l + "\n";
+    CHECK(page.find("This session") != std::string::npos && page.find("42.9%") != std::string::npos);
+
     // the totals survive a restart: a new plugin instance reads them from the stored setting
     fake::g.subs.clear();
     fake::g.pages.clear();
+    fake::g.panels.clear();
     p.reset();
     p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"timetracker", host, err);
     CHECK(p != nullptr);
@@ -750,6 +807,45 @@ static void TestTimeTracker() {
     for (const std::string& l : fake::g.lines) page += l + "\n";
     CHECK(page.find("nothing recorded yet") != std::string::npos);  // this session is empty again ...
     CHECK(page.find("Town") != std::string::npos);                  // ... but the all-time table is not
+}
+
+// plugins/healthbars: bars for champions, rares and bosses that are on screen and alive
+static void TestHealthBars() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"healthbars", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "healthbars: %s\n", err.c_str());
+        return;
+    }
+    fake::g.frame.screen_w = 1920.f;
+    fake::g.frame.screen_h = 1080.f;
+    fake::g.actors = {fake::Actor(D3H_ACTOR_CHAMPION, 100.f, 0.5f, "Champion"),
+                      fake::Actor(D3H_ACTOR_RARE, 200.f, 1.0f, "Rare"),
+                      fake::Actor(D3H_ACTOR_BOSS, 300.f, -1.f, "Boss, life not read"),
+                      fake::Actor(D3H_ACTOR_TRASH, 400.f, 1.0f, "Trash"),
+                      fake::Actor(D3H_ACTOR_RARE, 500.f, 0.f, "Dead rare"),
+                      fake::Actor(D3H_ACTOR_CHAMPION, -50.f, 0.7f, "Off screen")};
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(!p->disabled());
+    // two bars (border, background, fill each) and their percentages
+    CHECK(fake::g.rects.size() == 6);
+    CHECK(fake::g.drawn.size() == 2 && fake::g.drawn[0] == "50%" && fake::g.drawn[1] == "100%");
+    if (fake::g.rects.size() == 6) {
+        const d3h_rect fill = fake::g.rects[2];  // the champion's: half of the 80 px bar
+        CHECK(std::fabs((fill.x1 - fill.x0) - 40.f) < 0.01f);
+    }
+
+    // options: no champions, no percentages; the boss's life is read now
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::g.actors[2].hp_fraction = 0.9f;
+    CHECK(fake::g.settings.SetNumber("healthbars.champion", 0) && fake::g.settings.SetNumber("healthbars.percent", 0));
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.rects.size() == 6 && fake::g.drawn.empty());  // rare and boss
 }
 
 static void TestPaths() {
@@ -1089,6 +1185,7 @@ int main() {
     TestPluginSettings();
     TestLuaSandbox();
     TestTimeTracker();
+    TestHealthBars();
     TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();

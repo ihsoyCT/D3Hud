@@ -12,8 +12,9 @@ Progress: step 0b part 1 done: `src/core/Settings.h` (`SettingsTable`) replaces 
 Milestones 2-4 done (the goal of the plugin PR): `src/core/HostApi.h` (plain C), the sandboxed Lua runtime
 (`src/plugins/`), the overlay host (`PluginHost`) and the first plugin, `plugins/timetracker` (time per area). Deviations
 from the plan: the manifest is `plugin.lua` (a table, run with no globals) instead of `plugin.json`, to avoid a
-JSON parser; plugin settings live in `plugins.ini` (separate from `d3hud.ini`); dock panels, hot rects, plugin
-hotkeys, the drawing shapes, the `drop` event and the salvage policy hook are in the header but not provided yet.
+JSON parser; plugin settings live in `plugins.ini` (separate from `d3hud.ini`); hot rects, plugin hotkeys,
+circles/quads, the `drop` event and the salvage policy hook are in the header but not provided yet. Plugin dock
+panels and rect/line drawing are provided; `plugins/healthbars` is the second plugin.
 
 Step 0b part 2 done: the Settings window lists `SettingsPage` entries (`AddSettingsPage`); the built-in pages are
 registered the same way, grouped Interface / Panels / Features.

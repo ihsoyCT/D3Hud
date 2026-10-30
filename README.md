@@ -132,8 +132,11 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
 - **Time tracker** (`plugins/timetracker`) records where your play time goes and shows it as percentages
   per area, for this session and all time. Rifts and greater rifts are detected automatically. For
   everything else you stand in a world once, open *Settings > Time tracker* and say which area it belongs
-  to (for example *Town* or *Bounties*); the answer is remembered. Areas are renamed or added on the
-  *timetracker options* page, which can also show the session split on screen.
+  to (for example *Town* or *Bounties*); the answer is remembered. The page also holds the options (rename
+  or add areas, show the split on screen). A **Time** tab in the dock shows the same split when you hover it.
+- **Health bars** (`plugins/healthbars`) draws a life bar over every champion (blue), rare and boss on the
+  screen, with size, colours and what to show on its settings page. The reader reads the life of those three
+  kinds only, and only once it has found their data, so a bar can appear a few seconds late.
 
 Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
 read game memory, press keys, or touch files. To write one see `plugins/README.md`. Restart the overlay

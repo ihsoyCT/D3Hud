@@ -85,11 +85,14 @@ struct PluginHost::HostFns {
         r.id = a.id;
         r.pos = {a.world.x, a.world.y};
         r.heading = a.heading;
-        r.hp_fraction = a.maxHp > 0.f ? std::clamp(a.currentHp / a.maxHp, 0.f, 1.f) : 0.f;
+        r.hp_fraction = a.maxHp > 0.f ? std::clamp(a.currentHp / a.maxHp, 0.f, 1.f) : -1.f;
+        r.hp_current = a.maxHp > 0.f ? a.currentHp : 0.f;
+        r.hp_max = a.maxHp > 0.f ? a.maxHp : 0.f;
         r.kind = static_cast<int32_t>(a.kind);
         r.rarity = static_cast<int32_t>(a.itemRarity);
         r.flags = a.itemFlags;
         strncpy_s(r.name, sizeof(r.name), a.name, _TRUNCATE);
+        r.size = out->size;  // the caller's struct size: a prefix is copied
         memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
         return 1;
     }
@@ -113,6 +116,7 @@ struct PluginHost::HostFns {
         r.augment_rank = it.augmentRank;
         strncpy_s(r.name, sizeof(r.name), it.name, _TRUNCATE);
         strncpy_s(r.type_name, sizeof(r.type_name), it.typeName, _TRUNCATE);
+        r.size = out->size;  // the caller's struct size: a prefix is copied
         memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
         return 1;
     }
@@ -138,14 +142,43 @@ struct PluginHost::HostFns {
                     ArgbToImColor(color), text);
     }
 
+    static ImDrawList* ListFor(int32_t layer) {
+        return layer <= D3H_LAYER_MARKERS ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+    }
+    static void DrawLine(int32_t layer, d3h_vec2 a, d3h_vec2 b, d3h_color color, float thickness) {
+        ListFor(layer)->AddLine(ImVec2(a.x, a.y), ImVec2(b.x, b.y), ArgbToImColor(color), std::clamp(thickness, 0.5f, 32.f));
+    }
+    static void DrawRect(int32_t layer, d3h_rect r, d3h_color color, d3h_bool filled, float thickness) {
+        if (filled) ListFor(layer)->AddRectFilled(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), ArgbToImColor(color));
+        else ListFor(layer)->AddRect(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), ArgbToImColor(color), 0.f, 0, std::clamp(thickness, 0.5f, 32.f));
+    }
+
+    static d3h_bool RegisterPanel(const d3h_panel_desc* d) {
+        const std::string* plugin = CurrentPluginName();
+        if (plugin == nullptr || d->id == nullptr || d->title == nullptr || d->draw == nullptr) return 0;
+        PluginHost* host = g_host;
+        const d3h_draw_fn draw = d->draw;
+        void* const user = d->user;
+        const std::string id = *plugin + "." + d->id;
+        host->renderer_.AddPluginPanel(id, d->title, [host, draw, user] { draw(&host->ui_, user); },
+                                       ImVec2(d->default_w, d->default_h));
+        host->panelsOf_[*plugin].push_back(id);
+        return 1;
+    }
+
     static d3h_bool RegisterPage(const d3h_page_desc* d) {
         const std::string* plugin = CurrentPluginName();
         if (plugin == nullptr || d->id == nullptr || d->title == nullptr || d->draw == nullptr) return 0;
         PluginHost* host = g_host;
         const d3h_draw_fn draw = d->draw;
         void* const user = d->user;
+        // the plugin's first page also carries its options and dock panel controls: one place per plugin
+        const bool first = host->pluginsWithPage_.insert(*plugin).second;
         host->renderer_.AddSettingsPage({*plugin + "." + d->id, d->title, d->group != nullptr ? d->group : "Plugins",
-                                         d->order, [host, draw, user] { draw(&host->ui_, user); }});
+                                         d->order, [host, draw, user, first, name = *plugin] {
+                                             draw(&host->ui_, user);
+                                             if (first) host->DrawExtrasOf(name);
+                                         }});
         return 1;
     }
 
@@ -257,6 +290,9 @@ PluginHost::PluginHost(HudRenderer& renderer) : renderer_(renderer) {
     host_.subscribe = HostFns::Subscribe;
     host_.draw_text = HostFns::DrawText;
     host_.register_page = HostFns::RegisterPage;
+    host_.register_panel = HostFns::RegisterPanel;
+    host_.draw_line = HostFns::DrawLine;
+    host_.draw_rect = HostFns::DrawRect;
     host_.define_setting = HostFns::Define;
     host_.get_bool = HostFns::GetBool;
     host_.get_int = HostFns::GetInt;
@@ -322,12 +358,27 @@ void PluginHost::LoadAll(const std::filesystem::path& pluginsDir, const std::fil
     }
 }
 
-// Plugins that define visible settings get an automatic page for them.
+bool PluginHost::HasExtras(const std::string& plugin) const {
+    return std::ranges::any_of(settings_.Of(plugin), [](const PluginSettingDef* d) { return !d->hidden; }) ||
+           panelsOf_.contains(plugin);
+}
+
+// A plugin without a page of its own still gets one for its options and dock panels.
 void PluginHost::AddSettingsPageFor(const std::string& plugin) {
-    const bool visible = std::ranges::any_of(settings_.Of(plugin), [](const PluginSettingDef* d) { return !d->hidden; });
-    if (!visible) return;
-    renderer_.AddSettingsPage({plugin + ".settings", plugin + " options", "Plugins", 2000,
-                               [this, plugin] { DrawSettingsOf(plugin); }});
+    if (pluginsWithPage_.contains(plugin) || !HasExtras(plugin)) return;
+    renderer_.AddSettingsPage({plugin + ".settings", plugin, "Plugins", 2000, [this, plugin] { DrawExtrasOf(plugin); }});
+}
+
+void PluginHost::DrawExtrasOf(const std::string& plugin) {
+    const bool options = std::ranges::any_of(settings_.Of(plugin), [](const PluginSettingDef* d) { return !d->hidden; });
+    if (options) {
+        ImGui::SeparatorText("Options");
+        DrawSettingsOf(plugin);
+    }
+    if (const auto it = panelsOf_.find(plugin); it != panelsOf_.end()) {
+        ImGui::SeparatorText("Dock panel");
+        for (const std::string& id : it->second) renderer_.DrawPluginPanelSettings(id);
+    }
 }
 
 void PluginHost::DrawSettingsOf(const std::string& plugin) {

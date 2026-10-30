@@ -30,6 +30,8 @@ constexpr uint32_t kAttrItemQualityLevel = 383;  // 0..2 normal, 3..5 magic, 6..
 constexpr uint32_t kAttrAncientRank = 413;       // 1 ancient, 2 primal
 constexpr uint32_t kAttrUnidentified = 414;      // 1 = unidentified (gear and consumables)
 constexpr uint32_t kAttrAugmentGemRank = 432;    // CubeEnchantedGemRank: Caldesann's Despair augment
+constexpr uint32_t kAttrHitpointsCur = 115;       // float bits; monsters keep their current life here
+constexpr uint32_t kAttrHitpointsMaxTotal = 124;  // float bits
 constexpr uint32_t kAttrGizmoState = 464;        // shrines/pylons: nonzero once clicked
 constexpr uint32_t kAttrGizmoOperated = 475;     // Gizmo_Has_Been_Operated
                                                  // (main stat bonus = rank * 5)

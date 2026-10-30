@@ -154,6 +154,17 @@ local function section(ui, title, data)
     ui.text_disabled(string.format("total %s", hms(all)))
 end
 
+-- A dock panel: hover its tab ("Time") to peek at the split, F8 + click to keep it open.
+d3hud.panel{
+    id = "split", title = "Time",
+    draw = function(ui)
+        local f = d3hud.frame()
+        ui.text(string.format("Now: %s", area_of(f)))
+        section(ui, "This session", session)
+        section(ui, "All time", total)
+    end,
+}
+
 d3hud.page{
     id = "timetracker", title = "Time tracker", group = "Plugins", order = 1000,
     draw = function(ui)

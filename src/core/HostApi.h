@@ -91,11 +91,13 @@ typedef struct d3h_actor {
     uint64_t id;
     d3h_vec2 pos;
     float heading;
-    float hp_fraction; /* 0..1 */
+    float hp_fraction; /* 0..1, or -1 when the life of this actor is not read (only elites and bosses are) */
     int32_t kind;      /* d3h_actor_kind */
     int32_t rarity;    /* ground items: d3h_rarity */
     uint32_t flags;
     char name[D3H_NAME_LEN];
+    /* appended in API 1 before release; older plugins never see them (check `size`) */
+    float hp_current, hp_max; /* life in game units; 0 when unknown */
 } d3h_actor;
 
 typedef struct d3h_item {

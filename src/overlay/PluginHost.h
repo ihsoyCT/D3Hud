@@ -3,12 +3,13 @@
 // adds the plugins' settings pages to the Settings window and persists their settings.
 //
 // Not provided by this host yet (the table entries are NULL; plugins must check): world_to_minimap,
-// item_screen_rect, the draw_* primitives other than draw_text, register_panel, hot_rect,
-// register_hotkey, set_salvage_policy, and the DROP event.
+// item_screen_rect, draw_circle / draw_quad, hot_rect, register_hotkey, set_salvage_policy, and the DROP event.
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,8 @@ private:
     void Fire(int32_t type, int32_t index = -1, int64_t value = 0, const char* text = nullptr);
     void DrawPluginsPage();
     void DrawSettingsOf(const std::string& plugin);
+    void DrawExtrasOf(const std::string& plugin);  // options + dock panel controls, at the end of the plugin's page
+    bool HasExtras(const std::string& plugin) const;
     void AddSettingsPageFor(const std::string& plugin);
     void Save();
 
@@ -64,6 +67,8 @@ private:
         const std::string* plugin;
     };
     std::vector<Sub> subs_;
+    std::set<std::string> pluginsWithPage_;               // plugins that registered a page of their own
+    std::map<std::string, std::vector<std::string>> panelsOf_;  // plugin -> its dock panel ids
     const WorldSnapshot* snap_ = nullptr;  // valid during OnFrame
     float screenW_ = 0, screenH_ = 0;
     uint64_t lastFrameIndex_ = ~0ull;

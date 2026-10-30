@@ -253,7 +253,7 @@ struct WorldSnapshot {
     double timestampMs = 0.0;  // live reader: QueryPerformanceCounter ms; synthetic: frame time
     Vec2 playerPos;
     float playerHeading = 0.f;
-    uint32_t worldSnoId = 0;
+    uint32_t worldSnoId = 0;  // demo: fixed. live: an id of the kind of place (lowest scene SNO of the world), 0 unknown
     uint16_t actorCount = 0;
     uint16_t itemCount = 0;
     // In the former header padding (header stays 48 bytes): index + 1 of the item

@@ -2,7 +2,9 @@
 // snapshots from any source, owns no state beyond options.
 #pragma once
 
+#include <deque>
 #include <filesystem>
+#include <map>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -134,6 +136,14 @@ struct MinimapLayout {
 
     // Binds every persisted field to its ini key (see HudRenderer.cpp); Load and Save are built on it.
     void Describe(SettingsTable& table);
+    // Plugin dock panels: their placement lives in the same ini (pluginpanel.<id>.*). Plugins register
+    // after the file was read, so HudRenderer::AddPluginPanel loads just that panel's keys.
+    struct PluginPanelState {
+        bool pinned = false, hidden = false;
+        float x = -1.f, y = -1.f, w = 0.f, h = 0.f;  // x < 0 = docked
+    };
+    std::map<std::string, PluginPanelState> pluginPanels;
+    void DescribePluginPanel(SettingsTable& table, const std::string& id);
     [[nodiscard]] bool Load(const std::filesystem::path& path);
     [[nodiscard]] bool Save(const std::filesystem::path& path) const;
 };
@@ -201,6 +211,11 @@ class HudRenderer {
 public:
     HudRenderer();
     void AddSettingsPage(SettingsPage page);
+    // A dock panel owned by a plugin: a tab in the dock, hover peek, pin, drag and a remembered position,
+    // exactly like the built-in panels. `id` is unique ("<plugin>.<panel>"); `defaultSize` > 0 = resizable.
+    void AddPluginPanel(std::string id, std::string title, std::function<void()> draw, ImVec2 defaultSize);
+    // "show in dock / keep open / reset position" for one plugin panel (the plugin's Settings page).
+    void DrawPluginPanelSettings(const std::string& id);
     // Shows the Settings window pinned open on the page with this id (nothing is saved); false if unknown.
     bool OpenSettingsPage(const std::string& id);
     void Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName);
@@ -221,26 +236,54 @@ public:
 private:
     // Panel framework: returns true when the panel should draw its body.
     // `defaultSize` > 0 makes the panel user-resizable (size remembered).
-    bool PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize = ImVec2(0.f, 0.f));
-    void PanelEnd(PanelId id, bool wasOpen);
-    // An open panel for the length of a scope: PanelEnd runs on every way out (early returns included).
+    // The state of one panel, wherever it lives: built-in panels keep it in layout_ and the arrays
+    // below, plugin panels in layout_.pluginPanels and their PluginPanel.
+    struct PanelView {
+        bool* pinned;
+        float *x, *y, *w, *h;  // saved position / size (fractions of the window); x < 0 = docked
+        ImVec2 *pos, *size;    // last frame's window rect (size.x == 0: collapsed, no hover area)
+        float* hoverUntil;     // linger after the cursor leaves
+        bool *resizable, *moved;
+        bool peekable;         // opens on hover (Settings only opens when pinned)
+    };
+    struct PluginPanel {
+        std::string id, title, label;  // label = title##id, the ImGui window name
+        std::function<void()> draw;
+        ImVec2 defaultSize;
+        ImVec2 pos, size;
+        float hoverUntil = 0.f;
+        bool resizable = false, moved = false;
+    };
+    PanelView ViewOf(PanelId id);
+    PanelView ViewOf(PluginPanel& p);
+    // Looked up by id each time: "reset everything" replaces layout_, which would leave a stored pointer dangling.
+    MinimapLayout::PluginPanelState& St(const PluginPanel& p) { return layout_.pluginPanels[p.id]; }
+    // Panel framework: returns true when the panel should draw its body.
+    // `defaultSize` > 0 makes the panel user-resizable (size remembered).
+    bool PanelOpenView(const PanelView& v, const HudOptions& opt, const char* title, ImVec2 defaultSize);
+    void PanelEndView(const PanelView& v, bool wasOpen);
+    // An open panel for the length of a scope: PanelEndView runs on every way out (early returns included).
     //   PanelScope panel(*this, PanelId::Items, opt, "Items");
     //   if (!panel) return;   // collapsed: nothing to draw
     class PanelScope {
     public:
         PanelScope(HudRenderer& r, PanelId id, const HudOptions& opt, const char* title,
                    ImVec2 defaultSize = ImVec2(0.f, 0.f))
-            : r_(r), id_(id), open_(r.PanelOpen(id, opt, title, defaultSize)) {}
-        ~PanelScope() { r_.PanelEnd(id_, open_); }
+            : r_(r), view_(r.ViewOf(id)), open_(r.PanelOpenView(view_, opt, title, defaultSize)) {}
+        PanelScope(HudRenderer& r, PluginPanel& p, const HudOptions& opt)
+            : r_(r), view_(r.ViewOf(p)), open_(r.PanelOpenView(view_, opt, p.label.c_str(), p.defaultSize)) {}
+        ~PanelScope() { r_.PanelEndView(view_, open_); }
         PanelScope(const PanelScope&) = delete;
         PanelScope& operator=(const PanelScope&) = delete;
         explicit operator bool() const { return open_; }
 
     private:
         HudRenderer& r_;
-        PanelId id_;
+        PanelView view_;
         bool open_;
     };
+    std::deque<PluginPanel> pluginPanels_;
+    void DrawPluginPanel(PluginPanel& p, const HudOptions& opt);
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);
     void RegisterBuiltinSettingsPages();

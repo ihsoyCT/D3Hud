@@ -227,9 +227,28 @@ static bool GizmoUsed(const Process& proc, const AcdTable* acds, const AttribTab
     return (st != 0xFFFFFFFF && st != 0) || (op != 0xFFFFFFFF && op != 0);
 }
 
+// Current and maximum life of a monster from its attribute group (floats stored as u32). False when the
+// group is not located yet or the monster has no life attribute; the values are then left alone.
+// *missingGroup receives the attribute group id when no known block holds it (the caller adds it to the
+// next attribute block scan).
+static bool MonsterHp(const Process& proc, const AcdTable* acds, const AttribTable* attribs, const RawActor& a,
+                      float* cur, float* max, uint32_t* missingGroup = nullptr) {
+    AcdItemRecord r;
+    uint32_t c = 0, m = 0;
+    if (acds == nullptr || attribs == nullptr || !a.hasAcd() || !acds->ReadItem(proc, a.acd, &r)) return false;
+    const AttribTable::Result res = attribs->Get(proc, r.attribGroup, kAttrHitpointsCur, &c);
+    if (res == AttribTable::Result::Unresolved && missingGroup != nullptr) *missingGroup = r.attribGroup;
+    if (res != AttribTable::Result::Found) return false;
+    if (attribs->Get(proc, r.attribGroup, kAttrHitpointsMaxTotal, &m) != AttribTable::Result::Found) return false;
+    memcpy(cur, &c, sizeof(float));
+    memcpy(max, &m, sizeof(float));
+    return std::isfinite(*cur) && std::isfinite(*max) && *max > 0.f;
+}
+
 static int FillActors(const Process& proc, const AcdTable* acds, const AttribTable* attribs,
                       const std::vector<RawActor>& raw, const SnoTable& sno, Vec2 hint,
-                      WorldSnapshot* snap, RawActor* player, bool* havePlayer) {
+                      WorldSnapshot* snap, RawActor* player, bool* havePlayer,
+                      std::vector<uint32_t>* hpMissingGroups = nullptr) {
     *havePlayer = false;
     float best = 1e30f;
     int unresolvedCount = 0;
@@ -257,6 +276,12 @@ static int FillActors(const Process& proc, const AcdTable* acds, const AttribTab
         s.kind = kind;
         strncpy_s(s.name, info->name.c_str(), _TRUNCATE);
         s.itemFlags = 0;
+        s.currentHp = s.maxHp = 0.f;  // 0 = unknown (only elites and bosses are read)
+        if (kind == ActorKind::Champion || kind == ActorKind::Rare || kind == ActorKind::Boss) {
+            uint32_t missing = 0;
+            (void)MonsterHp(proc, acds, attribs, a, &s.currentHp, &s.maxHp, &missing);  // unreadable: stays unknown
+            if (missing != 0 && hpMissingGroups != nullptr) hpMissingGroups->push_back(missing);
+        }
         if ((kind == ActorKind::Pylon || kind == ActorKind::Shrine) && GizmoUsed(proc, acds, attribs, a))
             s.itemFlags = kActorFlagUsed;
     }
@@ -384,13 +409,28 @@ static int DumpActors(const Process& proc, const std::filesystem::path& snoPath)
         std::print("  [{:4}] {:<10} {:<45} pos=({:8.2f}, {:8.2f}, {:6.2f}){}\n", a.slot, ActorKindName(kind),
                info->name.c_str(), a.x, a.z, a.y, unresolved ? "  (acd not found)" : "");
     }
+    // attribute blocks, found through the groups of the actors whose attributes the dump shows
+    AttribTable attribs;
+    std::vector<uint32_t> groups;
+    for (const RawActor& a : raw) {
+        const SnoInfo* info = sno.Find(a.sno);
+        ActorKind kind;
+        uint32_t quality;
+        bool unresolved;
+        AcdItemRecord r;
+        if (!ClassifyWithQuality(proc, &acds, info, a, &kind, &quality, &unresolved) || !a.hasAcd()) continue;
+        const bool wanted = kind == ActorKind::Player || kind == ActorKind::Champion || kind == ActorKind::Rare ||
+                            kind == ActorKind::Boss || kind == ActorKind::Pylon || kind == ActorKind::Shrine;
+        if (wanted && acds.ReadItem(proc, a.acd, &r)) groups.push_back(r.attribGroup);
+    }
+    attribs.Discover(proc, groups, true);
     Vec2 player = {};
     WorldSnapshot snap;
     RawActor p;
     bool havePlayer = false;
-    FillActors(proc, &acds, nullptr, raw, sno, player, &snap, &p, &havePlayer);
+    FillActors(proc, &acds, &attribs, raw, sno, player, &snap, &p, &havePlayer);
     if (havePlayer) player = {p.x, p.z};
-    WriteActorDump(proc, &acds, nullptr, raw, sno, player, base);
+    WriteActorDump(proc, &acds, &attribs, raw, sno, player, base);
     return 0;
 }
 
@@ -454,6 +494,12 @@ static void WriteActorDump(const Process& proc, const AcdTable* acds, const Attr
             snprintf(gtext, sizeof(gtext), "%d/%d%s", static_cast<int>(st), static_cast<int>(op), used ? " used" : "");
         }
         shown += drawn;
+        if (drawn && (kind == ActorKind::Champion || kind == ActorKind::Rare || kind == ActorKind::Boss)) {
+            // elites and bosses: Hitpoints_Cur / Hitpoints_Max_Total go into the gizmo column
+            float cur = 0.f, max = 0.f;
+            if (MonsterHp(proc, acds, attribs, a, &cur, &max)) snprintf(gtext, sizeof(gtext), "hp %.0f/%.0f", cur, max);
+            else snprintf(gtext, sizeof(gtext), "hp ?");
+        }
         static const char kHex[] = "0123456789abcdef";
         if (proc.Read(base + static_cast<uint64_t>(a.slot) * kActorStride, rec.data(), rec.size())) {
             for (size_t i = 0; i < rec.size(); ++i) {
@@ -752,6 +798,17 @@ static void CurrentWorldScenes(const std::vector<SceneRecord>& all, Vec2 player,
             out->push_back({s.sno, s.x0, s.y0, s.x1, s.y1});
 }
 
+// A stable id for the kind of place the player is in. The game's world ids are per instance (every
+// rift and bounty zone gets a new one) and the world SNO has not been found in memory, so use what
+// is constant per place: the lowest SNO among the scenes of the current world (a town always loads the
+// same scene tiles). 0 = unknown. Stored in WorldSnapshot::worldSnoId.
+static uint32_t AreaKey(const std::vector<SceneSnapshot>& scenes) {
+    uint32_t key = 0;
+    for (const SceneSnapshot& s : scenes)
+        if (s.sno != 0 && (key == 0 || s.sno < key)) key = s.sno;
+    return key;
+}
+
 // Live loop: actor list when available (all dots + player), else the
 // standing-cluster player tracker (player only). F10 writes a debug dump.
 static double g_publishHz = 60.0;  // --hz
@@ -861,6 +918,8 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
     std::vector<ItemSnapshot> inventory, stash;
     std::unordered_map<uint32_t, ItemSnapshot> groundCache;  // acd id -> described ground item
     std::vector<uint32_t> itemGroups;  // attribute group ids of the current inventory + stash
+    std::vector<uint32_t> hpGroups;    // elites whose life attribute is in no known block yet
+    ULONGLONG hpScanAt = 0;
     // map prediction: scene shapes (file) + the scenes in memory (found in the background)
     SceneCells sceneCells;
     if (sceneCells.Load(snoPath.parent_path() / "scene_cells.bin"))
@@ -869,6 +928,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         std::print(stderr, "cannot load scene_cells.bin - no map prediction\n");
     std::vector<SceneRecord> sceneRecords;
     std::vector<SceneSnapshot> worldScenes;
+    uint32_t areaKey = 0;  // see AreaKey: kept while the player is in no known scene
     AcdScanJob acdJob{&proc, &acds,     &attribs, &snoIds, &sceneTable, &sceneCells,
                  {},  {},         false,    false,   {},          &actors,
                  &gameUi,     cachePath, false};
@@ -907,6 +967,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         }
         acdJob.snapshot = actorsToo ? raw : std::vector<RawActor>{};
         acdJob.groupIds = itemGroups;
+        acdJob.groupIds.insert(acdJob.groupIds.end(), hpGroups.begin(), hpGroups.end());
         acdJob.scanScenes = scenesToo && sceneCells.sceneCount() > 0;
         acdJob.scanUi = false;
         acdJob.player = lastPlayer;
@@ -962,11 +1023,16 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
             if (readOk) {
                 LARGE_INTEGER fillStart;
                 QueryPerformanceCounter(&fillStart);
+                hpGroups.clear();
                 const int unresolved =
-                    FillActors(proc, &acds, &attribs, raw, sno, lastPlayer, &snap, &player, &havePlayer);
+                    FillActors(proc, &acds, &attribs, raw, sno, lastPlayer, &snap, &player, &havePlayer, &hpGroups);
                 statFill += msSince(fillStart);
                 statUnresolved = unresolved;
                 const ULONGLONG now = GetTickCount64();
+                if (!hpGroups.empty() && !acdJob.busy && now - hpScanAt > 5000) {  // find the blocks of new elites' groups
+                    hpScanAt = now;
+                    startScan(false, false);
+                }
                 if (unresolved == 0) {
                     unresolvedSince = 0;
                 } else if (unresolvedSince == 0) {
@@ -1036,6 +1102,8 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                     startScan(false, true);
                 }
             }
+            if (const uint32_t key = AreaKey(worldScenes); key != 0) areaKey = key;
+            snap.worldSnoId = areaKey;
             snap.sceneCount = static_cast<uint32_t>(worldScenes.size());
             std::copy(worldScenes.begin(), worldScenes.end(), snap.scenes);
             snap.itemCount = static_cast<uint16_t>(inventory.size());

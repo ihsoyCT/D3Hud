@@ -174,6 +174,7 @@ void MinimapLayout::Describe(SettingsTable& t) {
         t.Add(p + "w", panelW[i], kAnyLo, kAnyHi, 4);
         t.Add(p + "h", panelH[i], kAnyLo, kAnyHi, 4);
     }
+    for (const auto& entry : pluginPanels) DescribePluginPanel(t, entry.first);
     t.Add("salvage.rarityMask", salvageRules.rarityMask, 0u, 0x1Fu);
     t.Add("salvage.keepAncient", salvageRules.keepAncient);
     t.Add("salvage.keepPrimal", salvageRules.keepPrimal);
@@ -226,6 +227,19 @@ void MinimapLayout::Describe(SettingsTable& t) {
     t.Add("labels.colSet", labels.colSet, 0u, kRgbMax);
     t.Add("labels.colPrimal", labels.colPrimal, 0u, kRgbMax);
     t.Add("labels.colBonus", labels.colBonus, 0u, kRgbMax);
+}
+
+// ini keys of a plugin panel: pluginpanel.<id>.<pinned|hidden|x|y|w|h>
+void MinimapLayout::DescribePluginPanel(SettingsTable& t, const std::string& id) {
+    constexpr float lo = std::numeric_limits<float>::lowest(), hi = std::numeric_limits<float>::max();
+    PluginPanelState& st = pluginPanels[id];
+    const std::string p = "pluginpanel." + id + ".";
+    t.Add(p + "pinned", st.pinned);
+    t.Add(p + "hidden", st.hidden);
+    t.Add(p + "x", st.x, lo, hi, 4);
+    t.Add(p + "y", st.y, lo, hi, 4);
+    t.Add(p + "w", st.w, lo, hi, 4);
+    t.Add(p + "h", st.h, lo, hi, 4);
 }
 
 bool MinimapLayout::Load(const std::filesystem::path& path) {
@@ -808,20 +822,32 @@ static void CornerAnchor(int corner, ImVec2 display, float inset, ImVec2* pos, I
     *pivot = ImVec2(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f);
 }
 
-bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title, ImVec2 defaultSize) {
+HudRenderer::PanelView HudRenderer::ViewOf(PanelId id) {
     const int i = static_cast<int>(id);
+    return {&layout_.panelPinned[i], &layout_.panelX[i], &layout_.panelY[i], &layout_.panelW[i], &layout_.panelH[i],
+            &panelPos_[i], &panelSize_[i], &panelHoverUntil_[i], &panelResizable_[i], &panelMoved_[i],
+            id != PanelId::Settings};
+}
+
+HudRenderer::PanelView HudRenderer::ViewOf(PluginPanel& p) {
+    MinimapLayout::PluginPanelState& st = St(p);
+    return {&st.pinned, &st.x, &st.y, &st.w, &st.h, &p.pos, &p.size, &p.hoverUntil, &p.resizable,
+            &p.moved, true};
+}
+
+bool HudRenderer::PanelOpenView(const PanelView& v, const HudOptions& opt, const char* title, ImVec2 defaultSize) {
     const ImGuiIO& io = ImGui::GetIO();
     const ImVec2 cur(opt.cursorX, opt.cursorY);
     // hovered: cursor inside last frame's window rect or the dock tab
-    const bool inRect = opt.cursorX >= 0.f && panelSize_[i].x > 0.f &&
-                        cur.x >= panelPos_[i].x - 4 && cur.x <= panelPos_[i].x + panelSize_[i].x + 4 &&
-                        cur.y >= panelPos_[i].y - 4 && cur.y <= panelPos_[i].y + panelSize_[i].y + 4;
-    if (inRect) panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;  // linger
+    const bool inRect = opt.cursorX >= 0.f && (*v.size).x > 0.f &&
+                        cur.x >= (*v.pos).x - 4 && cur.x <= (*v.pos).x + (*v.size).x + 4 &&
+                        cur.y >= (*v.pos).y - 4 && cur.y <= (*v.pos).y + (*v.size).y + 4;
+    if (inRect) (*v.hoverUntil) = (float)ImGui::GetTime() + 0.30f;  // linger
     // Settings is an editor, not a peek: it opens only when pinned (F8 + click on its tab)
-    const bool peek = id != PanelId::Settings && ImGui::GetTime() < panelHoverUntil_[i];
-    const bool expanded = layout_.panelPinned[i] || peek;
+    const bool peek = v.peekable && ImGui::GetTime() < (*v.hoverUntil);
+    const bool expanded = *v.pinned || peek;
     if (!expanded) {
-        panelSize_[i] = ImVec2(0.f, 0.f);  // no stale rect: a collapsed panel has no hover area
+        (*v.size) = ImVec2(0.f, 0.f);  // no stale rect: a collapsed panel has no hover area
         return false;
     }
     // docked panels open above the dock bar; moved panels keep their position.
@@ -830,8 +856,8 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
     const ImGuiWindow* moving = ImGui::GetCurrentContext()->MovingWindow;
     const bool beingMoved = moving != nullptr && std::strcmp(moving->Name, title) == 0;
     if (!beingMoved) {
-        if (layout_.panelX[i] >= 0.f)
-            ImGui::SetNextWindowPos(ImVec2(layout_.panelX[i] * display.x, layout_.panelY[i] * display.y),
+        if ((*v.x) >= 0.f)
+            ImGui::SetNextWindowPos(ImVec2((*v.x) * display.x, (*v.y) * display.y),
                                     ImGuiCond_Always);
         else {
             ImVec2 pos, pivot;
@@ -841,10 +867,10 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
     }
     ImGui::SetNextWindowBgAlpha(layout_.panelAlpha);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-    panelResizable_[i] = defaultSize.x > 0.f;
-    if (panelResizable_[i]) {
-        const ImVec2 size = layout_.panelW[i] > 0.f
-                                ? ImVec2(layout_.panelW[i] * display.x, layout_.panelH[i] * display.y)
+    (*v.resizable) = defaultSize.x > 0.f;
+    if ((*v.resizable)) {
+        const ImVec2 size = (*v.w) > 0.f
+                                ? ImVec2((*v.w) * display.x, (*v.h) * display.y)
                                 : defaultSize;
         ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSizeConstraints(ImVec2(420.f, 280.f), ImVec2(display.x, display.y));
@@ -857,17 +883,17 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
         return false;
     }
     if (opt.inputInteractive) {
-        ImGui::PushStyleColor(ImGuiCol_Text, layout_.panelPinned[i] ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f)
+        ImGui::PushStyleColor(ImGuiCol_Text, *v.pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f)
                                                                     : ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        if (ImGui::SmallButton(layout_.panelPinned[i] ? "pinned" : "pin")) {
-            layout_.panelPinned[i] = !layout_.panelPinned[i];
+        if (ImGui::SmallButton(*v.pinned ? "pinned" : "pin")) {
+            *v.pinned = !*v.pinned;
             SaveLayout();
         }
         ImGui::PopStyleColor();
-        if (layout_.panelX[i] >= 0.f) {
+        if ((*v.x) >= 0.f) {
             ImGui::SameLine();
             if (ImGui::SmallButton("dock")) {  // back to the bottom-right corner
-                layout_.panelX[i] = layout_.panelY[i] = -1.f;
+                (*v.x) = (*v.y) = -1.f;
                 SaveLayout();
             }
         }
@@ -876,20 +902,19 @@ bool HudRenderer::PanelOpen(PanelId id, const HudOptions& opt, const char* title
     return true;
 }
 
-void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
+void HudRenderer::PanelEndView(const PanelView& v, bool wasOpen) {
     if (!wasOpen) return;
-    const int i = static_cast<int>(id);
     ImGuiWindow* win = ImGui::GetCurrentWindow();  // before End(): that pops it
-    panelPos_[i] = win->Rect().Min;
-    panelSize_[i] = win->Rect().GetSize();
+    (*v.pos) = win->Rect().Min;
+    (*v.size) = win->Rect().GetSize();
     const bool moving = ImGui::GetCurrentContext()->MovingWindow == win;
     ImGui::End();
-    if (panelResizable_[i] && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {  // resize finished
+    if ((*v.resizable) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {  // resize finished
         const ImVec2 display = ImGui::GetIO().DisplaySize;
-        const float w = panelSize_[i].x / display.x, h = panelSize_[i].y / display.y;
-        if (std::abs(w - layout_.panelW[i]) > 0.002f || std::abs(h - layout_.panelH[i]) > 0.002f) {
-            layout_.panelW[i] = w;
-            layout_.panelH[i] = h;
+        const float w = (*v.size).x / display.x, h = (*v.size).y / display.y;
+        if (std::abs(w - (*v.w)) > 0.002f || std::abs(h - (*v.h)) > 0.002f) {
+            (*v.w) = w;
+            (*v.h) = h;
             SaveLayout();
         }
     }
@@ -897,11 +922,11 @@ void HudRenderer::PanelEnd(PanelId id, bool wasOpen) {
     // next frame (PanelOpen) is where the panel was dropped; write the file on release.
     if (moving) {
         const ImVec2 display = ImGui::GetIO().DisplaySize;
-        layout_.panelX[i] = panelPos_[i].x / display.x;
-        layout_.panelY[i] = panelPos_[i].y / display.y;
-        panelMoved_[i] = true;
-    } else if (panelMoved_[i]) {
-        panelMoved_[i] = false;
+        (*v.x) = (*v.pos).x / display.x;
+        (*v.y) = (*v.pos).y / display.y;
+        (*v.moved) = true;
+    } else if ((*v.moved)) {
+        (*v.moved) = false;
         SaveLayout();
     }
 }
@@ -912,6 +937,7 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
     if (layout_.dockAutoHide && dockSize_.x > 0.f && !opt.inputInteractive) {
         bool anyOpen = false;  // a panel is showing: keep the dock to go with it
         for (int i = 0; i < kPanels; ++i) anyOpen |= panelSize_[i].x > 0.f;
+        for (const PluginPanel& p : pluginPanels_) anyOpen |= p.size.x > 0.f;
         const float m = 40.0f;  // proximity margin around the dock
         const bool closeToDock = opt.cursorX >= dockPos_.x - m && opt.cursorX <= dockPos_.x + dockSize_.x + m &&
                           opt.cursorY >= dockPos_.y - m && opt.cursorY <= dockPos_.y + dockSize_.y + m;
@@ -944,6 +970,21 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
             const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
             if (opt.cursorX >= lo.x && opt.cursorX <= hi.x && opt.cursorY >= lo.y && opt.cursorY <= hi.y)
                 panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;
+        }
+        for (PluginPanel& p : pluginPanels_) {
+            if (St(p).hidden) continue;
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  St(p).pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
+            if (!first) ImGui::SameLine();
+            first = false;
+            if (ImGui::Button(p.label.c_str())) {
+                St(p).pinned = !St(p).pinned;
+                SaveLayout();
+            }
+            ImGui::PopStyleColor();
+            const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+            if (opt.cursorX >= lo.x && opt.cursorX <= hi.x && opt.cursorY >= lo.y && opt.cursorY <= hi.y)
+                p.hoverUntil = static_cast<float>(ImGui::GetTime()) + 0.30f;
         }
         ImGui::PopStyleColor();
         dockPos_ = ImGui::GetWindowPos();
@@ -2098,6 +2139,43 @@ void HudRenderer::DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& o
     ImGui::End();
 }
 
+void HudRenderer::DrawPluginPanel(PluginPanel& p, const HudOptions& opt) {
+    PanelScope panel(*this, p, opt);
+    if (!panel) return;
+    if (p.draw) p.draw();
+}
+
+void HudRenderer::AddPluginPanel(std::string id, std::string title, std::function<void()> draw, ImVec2 defaultSize) {
+    PluginPanel& p = pluginPanels_.emplace_back();
+    p.label = title + "##" + id;
+    p.id = std::move(id);
+    p.title = std::move(title);
+    p.draw = std::move(draw);
+    p.defaultSize = defaultSize;
+    (void)St(p);  // creates the entry the table below binds to
+    SettingsTable t;  // what an earlier session saved: the layout file was read before the plugin registered
+    layout_.DescribePluginPanel(t, p.id);
+    (void)t.Load(layoutPath_);  // no file yet is fine
+}
+
+void HudRenderer::DrawPluginPanelSettings(const std::string& id) {
+    for (PluginPanel& p : pluginPanels_) {
+        if (p.id != id) continue;
+        bool changed = false;
+        bool shown = !St(p).hidden;
+        changed |= ImGui::Checkbox("show in dock", &shown);
+        St(p).hidden = !shown;
+        changed |= ImGui::Checkbox("keep open (pinned)", &St(p).pinned);
+        if (ImGui::Button("reset position")) {
+            St(p).x = St(p).y = -1.f;
+            changed = true;
+        }
+        ImGui::TextDisabled("Hover the dock tab to peek; F8 + click pins. Drag the title bar (F8) to move.");
+        if (changed) SaveLayout();
+        return;
+    }
+}
+
 void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName) {
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleMain = layout_.uiScale;
@@ -2114,6 +2192,10 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     DrawRunTimer(snap);
     if (!opt.showPanels)
         for (ImVec2& s : panelSize_) s = ImVec2(0.f, 0.f);  // F9 off: nothing to hover
+    if (!opt.showPanels)
+        for (PluginPanel& p : pluginPanels_) p.size = ImVec2(0.f, 0.f);
+    for (PluginPanel& p : pluginPanels_)
+        if (St(p).hidden) p.size = ImVec2(0.f, 0.f);
     for (int i = 0; i < kPanels; ++i)
         if (layout_.panelHidden[i]) panelSize_[i] = ImVec2(0.f, 0.f);  // hidden in Settings
     if (opt.showPanels) {
@@ -2123,6 +2205,8 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
         if (visible(PanelId::Drops)) DrawDropsPanel(snap, opt);
         if (visible(PanelId::Items)) DrawSalvagePanel(snap, opt);
         if (visible(PanelId::Actors)) DrawActorPanel(snap, opt);
+        for (PluginPanel& p : pluginPanels_)
+            if (!St(p).hidden) DrawPluginPanel(p, opt);
         DrawSettings(snap, opt);  // always reachable
     }
     if (opt.showMinimap) DrawMinimap(snap, opt);
