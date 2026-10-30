@@ -510,6 +510,8 @@ enum GameUi : size_t {
     kUiRiftGrMarker,
     kUiRiftBar,                    // same for the other rift types (challenge container)
     kUiRiftMarker,
+    kUiSalvageMagic,               // salvage tab: "salvage all blue" / "salvage all yellow"
+    kUiSalvageRare,
     kUiCount,
 };
 
@@ -538,6 +540,8 @@ static std::vector<std::string> GameUiPaths() {
     p.push_back(rift + "greater_rift_container.rift_progress_marker");
     p.push_back(rift + "challenge_rift_container.rift_progress_bar");
     p.push_back(rift + "challenge_rift_container.rift_progress_marker");
+    p.push_back("Root.NormalLayer.vendor_dialog_mainPage.salvage_dialog.salvage_all_wrapper.salvage_magic_button");
+    p.push_back("Root.NormalLayer.vendor_dialog_mainPage.salvage_dialog.salvage_all_wrapper.salvage_rare_button");
     return p;
 }
 
@@ -566,6 +570,9 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
     if (out->salvageOpen) {
         const UiControlState anvil = ui.Read(proc, kUiSalvageAnvil), alt = ui.Read(proc, kUiSalvageAnvilAlt);
         out->salvageButton = (anvil.visible || !alt.visible) ? anvil.rect : alt.rect;
+        const UiControlState magic = ui.Read(proc, kUiSalvageMagic), rare = ui.Read(proc, kUiSalvageRare);
+        if (magic.visible) out->salvageMagicButton = magic.rect;
+        if (rare.visible) out->salvageRareButton = rare.rect;
         const UiControlState confirm = ui.Read(proc, kUiConfirm);
         out->confirmOpen = confirm.visible;
         if (out->confirmOpen) out->confirmOk = ui.Read(proc, kUiConfirmOk).rect;

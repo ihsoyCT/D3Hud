@@ -46,6 +46,8 @@ struct SalvageRules {
     // run safety (used by the runner, not by IsSalvageCandidate)
     int maxPerRun = 0;       // stop after this many items; 0 = no limit
     int extraDelayMs = 0;    // added to every wait between clicks
+    bool useGameSalvageAll = true;  // press the game's "salvage all blue/yellow" when that is safe
+    bool burst = true;       // click ordinary items without waiting for each to vanish (legendaries one by one)
 };
 
 // `type` is `name` or a class variant of it ("Helm" covers "Helm_Necromancer").
@@ -127,6 +129,25 @@ inline bool IsSalvageCandidate(const ItemSnapshot& it, const SafeArea& safe, con
     if ((rules.neverFamilies >> GearFamily(it.typeName)) & 1) return false;
     if (rules.protectEquippedAncients && IsEquippedUpgrade(it, items, itemCount)) return false;
     return true;  // identified or not: type and ancient rank are revealed
+}
+
+// The game's "salvage all blue / yellow" buttons destroy EVERY item of that quality in the backpack,
+// so they may only be pressed when each of those items is a salvage candidate under our rules (not in
+// the safe area, not a protected type, ...), when that quality is allowed at all, and when no item
+// is still unclassified (an unknown could be of that quality).
+inline bool CanSalvageAllOfQuality(ItemRarity quality, const ItemSnapshot* items, uint16_t itemCount,
+                                   const SafeArea& safe, const SalvageRules& rules) {
+    if (((rules.rarityMask >> static_cast<int>(quality)) & 1) == 0) return false;
+    bool any = false;
+    for (uint16_t i = 0; i < itemCount; ++i) {
+        const ItemSnapshot& it = items[i];
+        if (it.location != kItemLocationBackpack) continue;
+        if (it.rarity == ItemRarity::Unknown) return false;
+        if (it.rarity != quality) continue;
+        if (!IsSalvageCandidate(it, safe, rules, items, itemCount)) return false;
+        any = true;
+    }
+    return any;
 }
 
 }  // namespace d3hud

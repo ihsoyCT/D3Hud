@@ -150,6 +150,8 @@ bool MinimapLayout::Load(const char* path) {
             else if (!strcmp(k, "neverFamilies")) salvageRules.neverFamilies = static_cast<uint32_t>(v) & ((1u << kGearFamilyCount) - 1);
             else if (!strcmp(k, "maxPerRun")) salvageRules.maxPerRun = std::max(0, static_cast<int>(v));
             else if (!strcmp(k, "extraDelayMs")) salvageRules.extraDelayMs = std::clamp(static_cast<int>(v), 0, 2000);
+            else if (!strcmp(k, "useAll")) salvageRules.useGameSalvageAll = v != 0.f;
+            else if (!strcmp(k, "burst")) salvageRules.burst = v != 0.f;
             else if (!strcmp(k, "confirm")) salvageConfirm = v != 0.f;
             else if (!strcmp(k, "preview")) salvagePreview = v != 0.f;
             else if (!strcmp(k, "safeOnlyAtAnvil")) safeOnlyAtAnvil = v != 0.f;
@@ -290,6 +292,7 @@ bool MinimapLayout::Save(const char* path) const {
     std::print(f, "salvage.rarityMask={}\nsalvage.keepAncient={}\nsalvage.keepPrimal={}\nsalvage.neverFamilies={}\nsalvage.maxPerRun={}\nsalvage.extraDelayMs={}\n",
                salvageRules.rarityMask, salvageRules.keepAncient ? 1 : 0, salvageRules.keepPrimal ? 1 : 0,
                salvageRules.neverFamilies, salvageRules.maxPerRun, salvageRules.extraDelayMs);
+    std::print(f, "salvage.useAll={}\nsalvage.burst={}\n", salvageRules.useGameSalvageAll ? 1 : 0, salvageRules.burst ? 1 : 0);
     std::print(f, "salvage.confirm={}\nsalvage.preview={}\nsalvage.previewRgb={}\nsalvage.safeOnlyAtAnvil={}\n", salvageConfirm ? 1 : 0, salvagePreview ? 1 : 0, salvagePreviewRgb, safeOnlyAtAnvil ? 1 : 0);
     std::print(f, "readerAutostart={}\nreaderHz={}\ndiagFps={}\ndiagReader={}\n",
                readerAutostart ? 1 : 0, readerHz, diagFps ? 1 : 0, diagReader ? 1 : 0);
@@ -1503,6 +1506,11 @@ void HudRenderer::DrawSalvageSettings() {
         if (f % 5 != 4 && f + 1 < kGearFamilyCount) ImGui::SameLine();
     }
 
+    ImGui::SeparatorText("Speed");
+    ch |= ImGui::Checkbox("use the game's \"salvage all blue / yellow\" buttons when safe", &R.useGameSalvageAll);
+    ImGui::TextDisabled("Pressed only if every blue/yellow item in the backpack may be salvaged\n(none in the safe area, no protected type); otherwise they are clicked one by one.");
+    ch |= ImGui::Checkbox("fast mode: click ordinary items without waiting for each to vanish", &R.burst);
+    ImGui::TextDisabled("Legendary and set items are always done one at a time (they ask for confirmation).");
     ImGui::SeparatorText("Run safety");
     ch |= ImGui::Checkbox("confirm before starting (click the anvil button twice)", &layout_.salvageConfirm);
     ImGui::SliderInt("max items per run (0 = no limit)", &R.maxPerRun, 0, 100);

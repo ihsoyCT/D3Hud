@@ -1,7 +1,11 @@
-// Auto-salvage executor: with the blacksmith's salvage tab open, clicks the
-// anvil, then every salvage candidate in the backpack (see Salvage.h),
-// confirming the legendary prompt. Sends real mouse input to the game, one
-// step per tick, and verifies each item really disappeared before the next.
+// Auto-salvage executor: with the blacksmith's salvage tab open it
+//   1. presses the game's "salvage all blue / yellow" buttons for qualities where that is safe
+//      (every item of that quality is a salvage candidate, see CanSalvageAllOfQuality),
+//   2. arms the anvil and clicks every remaining candidate in the backpack (see Salvage.h),
+//      confirming the legendary prompt.
+// Ordinary items are clicked in a burst: the next click does not wait for the previous item to
+// vanish (a few clicks are "in flight" and verified afterwards); legendary/set items, which raise
+// a confirmation, are done one at a time. Sends real mouse input to the game.
 //
 // Stops at once on: Esc, the user moving the mouse, the game losing focus,
 // the salvage tab or inventory closing, or an item that does not vanish.
@@ -12,6 +16,7 @@
 #include <windows.h>
 
 #include <string>
+#include <vector>
 
 #include "Salvage.h"
 #include "Snapshot.h"
@@ -28,18 +33,29 @@ public:
     const std::string& status() const { return status_; }
 
 private:
-    enum class Step { Idle, Anvil, NextItem, WaitGone };
-    // Moves the cursor now, clicks on a later tick (the game wants a hover first).
-    void QueueClick(const UiRect& uiRect, float screenW, float screenH);
+    enum class Step { Idle, Batch, WaitBatch, Anvil, NextItem, WaitGone };
+    // Moves the cursor now, clicks on a later tick (the game wants a hover first); the next
+    // action waits `postMs` after the click.
+    void QueueClick(const UiRect& uiRect, float screenW, float screenH, ULONGLONG hoverMs, ULONGLONG postMs);
     bool CursorMovedByUser() const;
+    void Finish(const char* note);
+
+    struct Flight {
+        uint64_t id;
+        ULONGLONG at;
+    };
 
     Step step_ = Step::Idle;
     HWND overlay_ = nullptr, game_ = nullptr;
-    ULONGLONG nextAt_ = 0, startedAt_ = 0, clickedAt_ = 0, confirmAt_ = 0;
+    ULONGLONG nextAt_ = 0, startedAt_ = 0, confirmAt_ = 0;
     bool clickPending_ = false;
-    ULONGLONG clickAt_ = 0;
+    ULONGLONG clickAt_ = 0, postClickMs_ = 100;
     POINT cursor_ = {-1, -1};  // where we last put the cursor (screen px)
-    uint64_t target_ = 0;      // item being salvaged
+    std::vector<Flight> flights_;  // clicked items not yet seen gone
+    int batchIdx_ = 0;             // 0 = blue next, 1 = yellow next, 2 = done
+    ItemRarity batchQuality_ = ItemRarity::Magic;
+    int batchCount_ = 0;
+    ULONGLONG batchSince_ = 0;
     int done_ = 0;
     std::string status_ = "idle";
 };

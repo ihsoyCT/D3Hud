@@ -428,6 +428,38 @@ static void TestSalvageRules() {
     CHECK(GearFamily("Axe2H") == GearFamily("Sword") && GearFamily("Axe2H") == kGearFamilyCount - 1);
 }
 
+static void TestSalvageAll() {
+    SafeArea safe;
+    SalvageRules rules;
+    auto gear = [](ItemRarity r, int x, int y, const char* type = "Boots") {
+        ItemSnapshot it;
+        it.location = kItemLocationBackpack;
+        it.rarity = r;
+        it.gridX = static_cast<uint8_t>(x);
+        it.gridY = static_cast<uint8_t>(y);
+        strcpy_s(it.typeName, type);
+        strcpy_s(it.name, "Some Item");
+        return it;
+    };
+    ItemSnapshot items[3] = {gear(ItemRarity::Magic, 1, 0), gear(ItemRarity::Magic, 2, 0), gear(ItemRarity::Legendary, 3, 0)};
+    CHECK(CanSalvageAllOfQuality(ItemRarity::Magic, items, 3, safe, rules));
+    CHECK(!CanSalvageAllOfQuality(ItemRarity::Rare, items, 3, safe, rules));   // none of that quality
+    safe.Toggle(2, 0);                                                         // a blue item sits in the safe area
+    CHECK(!CanSalvageAllOfQuality(ItemRarity::Magic, items, 3, safe, rules));  // the game button would destroy it
+    safe.Toggle(2, 0);
+    rules.neverFamilies = 1u << GearFamily("Boots");
+    CHECK(!CanSalvageAllOfQuality(ItemRarity::Magic, items, 3, safe, rules));  // protected item type
+    rules = SalvageRules();
+    rules.rarityMask &= ~(1u << static_cast<int>(ItemRarity::Magic));
+    CHECK(!CanSalvageAllOfQuality(ItemRarity::Magic, items, 3, safe, rules));  // quality not allowed
+    rules = SalvageRules();
+    items[2].rarity = ItemRarity::Unknown;                                     // an unclassified item could be blue
+    CHECK(!CanSalvageAllOfQuality(ItemRarity::Magic, items, 3, safe, rules));
+    items[2].rarity = ItemRarity::Legendary;
+    items[0].location = 3;                                                     // equipped items are not in the bag
+    CHECK(CanSalvageAllOfQuality(ItemRarity::Magic, items, 3, safe, rules));
+}
+
 static void TestRiftProgress() {
     CHECK(RiftProgressFromRects(1505.f, 1827.f, 1504.67f) == 0.0f);    // marker at the start (slightly left): 0%
     CHECK(RiftProgressFromRects(1505.f, 1827.f, 1827.0f) == 1.0f);
@@ -666,6 +698,7 @@ int main() {
     TestSalvageRules();
     TestItemSearch();
     TestRiftProgress();
+    TestSalvageAll();
     TestSnapshotInterp();
     TestAcdItemDecode();
     TestMapOrientation();
