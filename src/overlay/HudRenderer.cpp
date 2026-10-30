@@ -93,7 +93,10 @@ MinimapLayout::MinimapLayout() { ResetMarkers(); }
 
 void MinimapLayout::ResetMarkers() {
     markerScale = 1.0f;
-    outline = bigMapMarkers = showScenes = sceneLabels = distanceLabels = pylonArrow = true;
+    outline = bigMapMarkers = showScenes = sceneLabels = distanceLabels = pylonArrow = eliteRing = true;
+    trashLimit = 0;
+    playerRgb = 0xFFFFFF;
+    playerSize = 7.0f;
     sceneAlpha = 1.0f;
     auto set = [&](ActorKind k, uint32_t rgb, float size, MarkerShape shape, float alpha = 1.0f,
                    bool label = false, bool pulse = false) {
@@ -159,6 +162,10 @@ bool MinimapLayout::Load(const char* path) {
         else if (!strcmp(key, "sceneLabels")) sceneLabels = v != 0.f;
         else if (!strcmp(key, "distanceLabels")) distanceLabels = v != 0.f;
         else if (!strcmp(key, "pylonArrow")) pylonArrow = v != 0.f;
+        else if (!strcmp(key, "eliteRing")) eliteRing = v != 0.f;
+        else if (!strcmp(key, "trashLimit")) trashLimit = std::max(0, static_cast<int>(v));
+        else if (!strcmp(key, "playerRgb")) playerRgb = static_cast<uint32_t>(v) & 0xFFFFFF;
+        else if (!strcmp(key, "playerSize")) playerSize = std::clamp(v, 2.f, 30.f);
         else if (!strncmp(key, "kind.", 5)) {
             // kind.<Name>.<show|color|size|shape|alpha|label|pulse> = v
             char kname[16], what[16] = {};
@@ -173,6 +180,7 @@ bool MinimapLayout::Load(const char* path) {
                     else if (!strcmp(what, "alpha")) ks.alpha = v;
                     else if (!strcmp(what, "label")) ks.label = v != 0.f;
                     else if (!strcmp(what, "pulse")) ks.pulse = v != 0.f;
+                    else if (!strcmp(what, "maxDist")) ks.maxDist = std::max(0.f, v);
                     break;
                 }
             }
@@ -212,13 +220,14 @@ bool MinimapLayout::Save(const char* path) const {
     std::print(f, "# marker look (color = 0xRRGGBB as decimal; shape 0 dot,1 ring,2 diamond,3 filled)\n");
     std::print(f, "markerScale={:.2f}\noutline={}\nbigMapMarkers={}\nshowScenes={}\nsceneAlpha={:.2f}\nsceneLabels={}\n",
                markerScale, outline ? 1 : 0, bigMapMarkers ? 1 : 0, showScenes ? 1 : 0, sceneAlpha, sceneLabels ? 1 : 0);
-    std::print(f, "distanceLabels={}\npylonArrow={}\n", distanceLabels ? 1 : 0, pylonArrow ? 1 : 0);
+    std::print(f, "distanceLabels={}\npylonArrow={}\neliteRing={}\ntrashLimit={}\nplayerRgb={}\nplayerSize={:.1f}\n",
+               distanceLabels ? 1 : 0, pylonArrow ? 1 : 0, eliteRing ? 1 : 0, trashLimit, playerRgb, playerSize);
     for (int k = 0; k < kKindCount; ++k) {
         const KindStyle& ks = kinds[k];
         std::print(f, "kind.{0}.show={1}\nkind.{0}.color={2}\nkind.{0}.size={3:.2f}\nkind.{0}.shape={4}\n"
-                      "kind.{0}.alpha={5:.2f}\nkind.{0}.label={6}\nkind.{0}.pulse={7}\n",
+                      "kind.{0}.alpha={5:.2f}\nkind.{0}.label={6}\nkind.{0}.pulse={7}\nkind.{0}.maxDist={8:.0f}\n",
                    ActorKindName(static_cast<ActorKind>(k)), ks.show ? 1 : 0, ks.rgb, ks.size,
-                   static_cast<int>(ks.shape), ks.alpha, ks.label ? 1 : 0, ks.pulse ? 1 : 0);
+                   static_cast<int>(ks.shape), ks.alpha, ks.label ? 1 : 0, ks.pulse ? 1 : 0, ks.maxDist);
     }
     static const char* kNames[kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
     std::print(f, "# panels: pinned open, hidden from the dock, position (fraction of window; <0 = docked)\n");
@@ -251,6 +260,7 @@ static void DrawActorMarker(ImDrawList* dl, const ActorSnapshot& a, Vec2 px, int
                             float dist = -1.f) {
     const KindStyle& st = L.kinds[static_cast<int>(a.kind)];
     if (!st.show) return;
+    if (st.maxDist > 0.f && dist > st.maxDist) return;
     if ((a.kind == ActorKind::Pylon || a.kind == ActorKind::Shrine) && (a.itemFlags & kActorFlagUsed)) return;
     alpha = static_cast<int>(alpha * st.alpha);
     if (alpha <= 0) return;
@@ -413,9 +423,17 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
 
     // Actors: inside the circle at full strength; beyond the rim (optional) at
     // their true scaled position anywhere on screen, faded.
+    int trashCount = 0;  // thinning: with a limit set, draw every `stride`-th trash/minion dot
+    if (layout_.trashLimit > 0)
+        for (uint16_t i = 0; i < snap.actorCount; ++i)
+            trashCount += snap.actors[i].kind == ActorKind::Trash || snap.actors[i].kind == ActorKind::Minion;
+    const int stride = layout_.trashLimit > 0 ? std::max(1, (trashCount + layout_.trashLimit - 1) / layout_.trashLimit) : 1;
+    int trashSeen = 0;
     for (uint16_t i = 0; i < snap.actorCount; ++i) {
         const ActorSnapshot& a = snap.actors[i];
         if (a.kind == ActorKind::Player) continue;  // the centre marker is the player
+        if ((a.kind == ActorKind::Trash || a.kind == ActorKind::Minion) && stride > 1 && (trashSeen++ % stride) != 0)
+            continue;
         Vec2 px;
         const bool inside = WorldToMinimap(a.world, snap.playerPos, unitsPerPx, center, radiusPx, &px,
                                            nullptr, opt.mapOrientation);
@@ -426,6 +444,25 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
         }
         DrawActorMarker(dl, a, px, inside ? 255 : 170, layout_,
                         std::hypot(a.world.x - snap.playerPos.x, a.world.y - snap.playerPos.y));
+    }
+
+    // Ring around the nearest rare/champion (inside the circle only).
+    if (layout_.eliteRing) {
+        const ActorSnapshot* best = nullptr;
+        float bestDist = FLT_MAX;
+        for (uint16_t i = 0; i < snap.actorCount; ++i) {
+            const ActorSnapshot& a = snap.actors[i];
+            if ((a.kind != ActorKind::Rare && a.kind != ActorKind::Champion) || !layout_.kinds[static_cast<int>(a.kind)].show)
+                continue;
+            const float d = std::hypot(a.world.x - snap.playerPos.x, a.world.y - snap.playerPos.y);
+            if (d < bestDist) { bestDist = d; best = &a; }
+        }
+        Vec2 px;
+        if (best != nullptr && WorldToMinimap(best->world, snap.playerPos, unitsPerPx, center, radiusPx, &px, nullptr,
+                                              opt.mapOrientation)) {
+            const float r = layout_.kinds[static_cast<int>(best->kind)].size * layout_.markerScale + 5.f;
+            dl->AddCircle(ImVec2(px.x, px.y), r, IM_COL32(255, 255, 255, 230), 20, 1.5f);
+        }
     }
 
     // Nearest unused pylon off the map: an arrow on the rim pointing to it, with the distance.
@@ -467,11 +504,11 @@ void HudRenderer::DrawMinimap(const WorldSnapshot& snap, const HudOptions& opt) 
         const Vec2 dir = OrientForMap({std::cos(snap.playerHeading), std::sin(snap.playerHeading)},
                                       opt.mapOrientation);
         const float ang = -std::atan2(dir.y, dir.x);
-        const float s = 7.0f;
+        const float s = layout_.playerSize;
         const ImVec2 tip(cx + s * 1.6f * std::cos(ang), cy + s * 1.6f * std::sin(ang));
         const ImVec2 left(cx + s * cosf(ang + 2.5f), cy + s * sinf(ang + 2.5f));
         const ImVec2 right(cx + s * cosf(ang - 2.5f), cy + s * sinf(ang - 2.5f));
-        dl->AddTriangleFilled(tip, left, right, IM_COL32(255, 255, 255, 255));
+        dl->AddTriangleFilled(tip, left, right, Rgba(layout_.playerRgb, 255));
         dl->AddTriangle(tip, left, right, IM_COL32(0, 0, 0, 160), 1.0f);
     }
 }
@@ -497,8 +534,20 @@ void HudRenderer::DrawMinimapSettings() {
     ImGui::Checkbox("distance on pylon/shrine names", &layout_.distanceLabels);
     ImGui::SameLine();
     ImGui::Checkbox("arrow to the nearest pylon when off the map", &layout_.pylonArrow);
+    ImGui::Checkbox("ring on the nearest rare/champion", &layout_.eliteRing);
+    ImGui::SliderInt("max trash dots (0 = all)", &layout_.trashLimit, 0, 200);
+    {
+        float c[3] = {((layout_.playerRgb >> 16) & 255) / 255.f, ((layout_.playerRgb >> 8) & 255) / 255.f,
+                      (layout_.playerRgb & 255) / 255.f};
+        if (ImGui::ColorEdit3("player arrow (own minimap)", c, ImGuiColorEditFlags_NoInputs))
+            layout_.playerRgb = (static_cast<uint32_t>(c[0] * 255.f + 0.5f) << 16) |
+                                (static_cast<uint32_t>(c[1] * 255.f + 0.5f) << 8) | static_cast<uint32_t>(c[2] * 255.f + 0.5f);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120.0f * layout_.uiScale);
+        ImGui::SliderFloat("size", &layout_.playerSize, 3.0f, 20.0f, "%.0f");
+    }
     ImGui::SliderFloat("prediction opacity", &layout_.sceneAlpha, 0.0f, 2.0f, "x%.2f");
-    if (ImGui::BeginTable("kinds", 7,
+    if (ImGui::BeginTable("kinds", 8,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
                           ImVec2(0.0f, std::max(120.0f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.2f)))) {
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -508,6 +557,7 @@ void HudRenderer::DrawMinimapSettings() {
         ImGui::TableSetupColumn("Shape", ImGuiTableColumnFlags_WidthFixed, 130.0f * layout_.uiScale);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 60.0f);
         ImGui::TableSetupColumn("Opacity", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Max dist", ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableSetupColumn("Extras", ImGuiTableColumnFlags_WidthFixed, 130.0f * layout_.uiScale);
         ImGui::TableHeadersRow();
         for (int k = 1; k < MinimapLayout::kKindCount; ++k) {  // 0 = player: the centre arrow, no marker
@@ -537,6 +587,9 @@ void HudRenderer::DrawMinimapSettings() {
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-FLT_MIN);
             ImGui::DragFloat("##alpha", &st.alpha, 0.01f, 0.0f, 1.0f, "%.2f");
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::DragFloat("##maxdist", &st.maxDist, 1.0f, 0.0f, 1000.0f, st.maxDist > 0.f ? "%.0f" : "off");
             ImGui::TableNextColumn();
             if (k == static_cast<int>(ActorKind::Pylon) || k == static_cast<int>(ActorKind::Shrine) ||
                 k == static_cast<int>(ActorKind::PylonSpawn)) {

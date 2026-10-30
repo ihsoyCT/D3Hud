@@ -27,6 +27,7 @@ struct KindStyle {
     float alpha = 1.0f;
     bool label = false;       // name next to the marker (shrines/pylons; "pylon?" for spawns)
     bool pulse = false;       // expanding ring (pylons)
+    float maxDist = 0.0f;     // hide beyond this many world units from the player; 0 = no limit
 };
 
 // Labels over legendary/set items lying on the ground, and the colours of the drop log.
@@ -59,6 +60,10 @@ struct MinimapLayout {
     bool sceneLabels = true;     // "Entrance" / "Exit" on the prediction
     bool distanceLabels = true;  // "Conduit Pylon  34m" on pylon/shrine names
     bool pylonArrow = true;      // rim arrow + distance to the nearest unused pylon when it is off the map
+    bool eliteRing = true;       // ring around the nearest rare/champion
+    int trashLimit = 0;          // max trash/minion dots drawn (thinned evenly); 0 = all
+    uint32_t playerRgb = 0xFFFFFF;  // own-minimap player arrow
+    float playerSize = 7.0f;
     void ResetMarkers();
     // auto salvage (stored in the same ini)
     SafeArea safeArea;
