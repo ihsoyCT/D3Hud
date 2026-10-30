@@ -916,6 +916,8 @@ assert(draw.contrast(0xFFFFFF, 255) == draw.BLACK, "a solid white fill: black te
 assert(draw.contrast(0x000000, 112) == draw.WHITE)
 assert(draw.argb(0x102030, 0x80) == 0x80102030 and draw.argb(0x102030) == 0xFF102030)
 assert(fmt.hms(3725) == "1:02:05" and fmt.pct(0.427) == "43%")
+assert(fmt.big(999) == "999" and fmt.big(1000) == "1.00K" and fmt.big(45600) == "45.6K" and fmt.big(1234567) == "1.23M")
+assert(fmt.big(1.5e12) == "1.50T" and fmt.big(0) == "0" and fmt.dur(3.14) == "3.1s" and fmt.dur(75) == "1:15")
 assert(fmt.pretty("x1_Fallen_Champion") == "Fallen Champion" and fmt.pretty("FallenHound") == "Fallen Hound")
 assert(store.pack_map({ b = 2, a = 1 }) == "a=1;b=2")
 assert(store.unpack_map("a=1;b=2", { number = true }).b == 2 and store.unpack_map("a=x;b=y").a == "x")
@@ -949,6 +951,81 @@ end)
     CHECK(fake::g.drawn.size() == 3 && fake::g.drawn[0] == "Molten" && fake::g.drawn[1] == "AAAA" && fake::g.drawn[2] == "BBBB");
     CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "71.0 19.0");  // 34 + 3 + 34 wide, 13 + 6 tall
     fs::remove_all(root, ec);
+}
+
+// plugins/damagemeter: damage from how the life of elites falls
+static void TestDamageMeter() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"damagemeter", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "damagemeter: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.panels.size() == 1);
+    auto tick = [&](double seconds, std::vector<d3h_actor> actors) {
+        fake::g.frame.time_ms = seconds * 1000.0;
+        fake::g.actors = std::move(actors);
+        fake::Fire(D3H_EVENT_SNAPSHOT);
+    };
+    auto panel = [&] {
+        fake::g.lines.clear();
+        fake::DrawPanels();
+        std::string text;
+        for (const std::string& l : fake::g.lines) text += l + "\n";
+        return text;
+    };
+    auto rare = [&](uint64_t id, float x, int life) {
+        d3h_actor a = fake::Actor(D3H_ACTOR_RARE, x, static_cast<float>(life) / 1000.f, "Rare");
+        a.id = id;
+        return a;
+    };
+
+    CHECK(panel().find("no fight right now") != std::string::npos);
+
+    // 100 life lost every 0.1 s from 1000: a rare dying within a second, next to a second one that is never hurt
+    for (int i = 0; i < 10; ++i) {
+        tick(i * 0.1, {rare(77, 100.f, 1000 - 100 * i), rare(99, 200.f, 1000)});
+        if (i == 5) {
+            fake::g.drawn.clear();
+            fake::Fire(D3H_EVENT_FRAME);  // the line on the screen
+            bool dps = false, ttk = false;
+            for (const std::string& d : fake::g.drawn) {
+                dps |= d.rfind("DPS ", 0) == 0;
+                ttk |= d.find("2 elites on the screen") != std::string::npos;
+            }
+            CHECK(dps && ttk);
+        }
+    }
+    tick(1.0, {rare(99, 200.f, 1000)});  // the first rare is gone at 10% life, just hurt: killed, its last life counts
+    if (p->disabled()) fprintf(stderr, "damagemeter: %s", p->lastError().c_str());
+    CHECK(!p->disabled());
+    std::string text = panel();
+    CHECK(text.find("this fight 1.00K") != std::string::npos);
+    CHECK(text.find("peak 1.00K/s") != std::string::npos);
+
+    // nothing hurt for the idle time: the fight is over and its summary is listed
+    for (int i = 1; i <= 60; ++i) tick(1.0 + i * 0.1, {rare(99, 200.f, 1000)});
+    text = panel();
+    CHECK(text.find("no fight right now") != std::string::npos);
+    CHECK(text.find("Rare   1.00K in 0.9s   1.11K/s   peak 1.00K/s   1 killed") != std::string::npos);
+    CHECK(text.find("best DPS 1.11K/s") != std::string::npos);
+    double best = 0;
+    CHECK(fake::g.settings.GetNumber("damagemeter.best_dps", best) && std::fabs(best - 1000.0 / 0.9) < 1.0);
+
+    // healing is not damage: no fight starts
+    tick(8.0, {rare(55, 300.f, 500)});
+    tick(8.1, {rare(55, 300.f, 600)});
+    CHECK(panel().find("no fight right now") != std::string::npos);
+
+    // a pause between snapshots (reader stopped) restarts the measuring instead of counting a huge jump
+    tick(8.2, {rare(55, 300.f, 600)});
+    tick(30.0, {rare(55, 300.f, 100)});
+    CHECK(panel().find("no fight right now") != std::string::npos);
+    CHECK(!p->disabled());
 }
 
 // plugins/healthbars: bars for champions, rares and bosses that are on screen and alive
@@ -1417,6 +1494,7 @@ int main() {
     TestTimeTracker();
     TestLuaLibraries();
     TestHealthBars();
+    TestDamageMeter();
     TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();

@@ -142,6 +142,11 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
   its settings page. The reader reads the life of those three
   kinds only, and only once it has found their data, so a bar can appear a few seconds late.
 
+- **Damage meter** (`plugins/damagemeter`) measures the damage you deal to champions, rares and bosses from how their
+  life falls: current DPS, the peak, the total and duration of each fight, a prediction of how long the elites on
+  the screen will live, and your records. It shows in a **DPS** tab of the dock and optionally as a line on the
+  screen. Trash is not counted (its life is not read).
+
 Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
 read game memory, press keys, or touch files. To write one see `plugins/README.md`. Restart the overlay
 after adding or changing a plugin.
