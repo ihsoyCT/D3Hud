@@ -88,6 +88,8 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 ## Style and process
 
 - Match the surrounding code: naming, comment density, idioms. Comments say *why*, not what.
+- Own resources with RAII, not paired calls: `UniqueHandle` (Win32.h) for kernel handles, `File` (Paths.h)
+  for `FILE*`, `PanelScope` (HudRenderer.h) for the five dock panels. No new manual `CloseHandle`/`fclose`.
 - Small, focused commits with an imperative message; do not mix unrelated changes. Build and test
   before committing; never commit a state that does not compile.
 - Keep `README.md` (user-facing) current when behaviour or options change; put investigations in
