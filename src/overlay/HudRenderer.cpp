@@ -987,7 +987,7 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
                 panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;
         }
         for (PluginPanel& p : pluginPanels_) {
-            if (St(p).hidden) continue;
+            if (St(p).hidden || p.off) continue;
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   St(p).pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
             if (!first) ImGui::SameLine();
@@ -2197,6 +2197,11 @@ void HudRenderer::AddPluginPanel(std::string id, std::string title, std::functio
     (void)t.Load(layoutPath_);  // no file yet is fine
 }
 
+void HudRenderer::SetPluginPanelOff(const std::string& id, bool off) {
+    for (PluginPanel& p : pluginPanels_)
+        if (p.id == id) p.off = off;
+}
+
 void HudRenderer::DrawPluginPanelSettings(const std::string& id) {
     for (PluginPanel& p : pluginPanels_) {
         if (p.id != id) continue;
@@ -2234,7 +2239,7 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     if (!opt.showPanels)
         for (PluginPanel& p : pluginPanels_) p.size = ImVec2(0.f, 0.f);
     for (PluginPanel& p : pluginPanels_)
-        if (St(p).hidden) p.size = ImVec2(0.f, 0.f);
+        if (St(p).hidden || p.off) p.size = ImVec2(0.f, 0.f);
     for (int i = 0; i < kPanels; ++i)
         if (layout_.panelHidden[i]) panelSize_[i] = ImVec2(0.f, 0.f);  // hidden in Settings
     if (opt.showPanels) {
@@ -2245,7 +2250,7 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
         if (visible(PanelId::Items)) DrawSalvagePanel(snap, opt);
         if (visible(PanelId::Actors)) DrawActorPanel(snap, opt);
         for (PluginPanel& p : pluginPanels_)
-            if (!St(p).hidden) DrawPluginPanel(p, opt);
+            if (!St(p).hidden && !p.off) DrawPluginPanel(p, opt);
         DrawSettings(snap, opt);  // always reachable
     }
     if (opt.showMinimap) DrawMinimap(snap, opt);

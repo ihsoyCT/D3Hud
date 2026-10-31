@@ -982,6 +982,53 @@ static void TestLuaEffects() {
     fs::remove_all(root, ec);
 }
 
+static void TestPluginSwitch() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_switch";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+
+    // a plugin that draws on every frame and has a panel
+    auto p = LuaPlugin::Load(WritePlugin(root, "draws",
+                                         "d3hud.on('frame', function() d3hud.draw_text(0, 0, 0xFFFFFFFF, 'tick') end)\n"
+                                         "d3hud.panel{ id = 'p', title = 'P', draw = function(ui) ui.text('panel body') end }"),
+                             host, err);
+    CHECK(p != nullptr && p->enabled());
+    if (p == nullptr) return;
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.drawn.size() == 1);
+    p->SetEnabled(false);  // the user's switch: nothing runs any more
+    CHECK(!p->enabled());
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.drawn.size() == 1);
+    fake::g.lines.clear();
+    fake::DrawPanels();
+    CHECK(fake::g.lines.size() == 1 && fake::g.lines[0].find("switched off") != std::string::npos);
+    p->SetEnabled(true);
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.drawn.size() == 2);
+    fake::g.lines.clear();
+    fake::DrawPanels();
+    CHECK(fake::g.lines.size() == 1 && fake::g.lines[0] == "panel body");
+
+    // a plugin that gave up after repeated errors gets another try when it is switched on again
+    fake::g.Reset();
+    auto bad = LuaPlugin::Load(WritePlugin(root, "bad", "d3hud.on('frame', function() error('boom') end)"), host, err);
+    CHECK(bad != nullptr);
+    if (bad == nullptr) return;
+    for (int i = 0; i < LuaPlugin::kMaxErrors + 2; ++i) fake::Fire(D3H_EVENT_FRAME);
+    CHECK(bad->disabled() && bad->errorCount() == LuaPlugin::kMaxErrors);
+    bad->SetEnabled(false);
+    bad->SetEnabled(true);
+    CHECK(!bad->disabled() && bad->errorCount() == 0 && bad->lastError().empty());
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(bad->errorCount() == 1);  // it runs again (and fails again)
+    fs::remove_all(root, ec);
+}
+
 static void TestTimeTracker() {
     namespace fs = std::filesystem;
     fake::g.Reset();
@@ -1780,6 +1827,7 @@ int main() {
     TestPluginSettings();
     TestLuaSandbox();
     TestLuaEffects();
+    TestPluginSwitch();
     TestTimeTracker();
     TestLuaLibraries();
     TestHealthBars();

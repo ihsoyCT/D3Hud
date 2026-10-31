@@ -220,6 +220,8 @@ public:
     void AddPluginPanel(std::string id, std::string title, std::function<void()> draw, ImVec2 defaultSize);
     // "show in dock / keep open / reset position" for one plugin panel (the plugin's Settings page).
     void DrawPluginPanelSettings(const std::string& id);
+    // A plugin switched off (Settings > Plugins) takes its dock tabs away; the panel's own "show in dock" is untouched.
+    void SetPluginPanelOff(const std::string& id, bool off);
     // Shows the Settings window pinned open on the page with this id (nothing is saved); false if unknown.
     bool OpenSettingsPage(const std::string& id);
     void Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName);
@@ -257,6 +259,7 @@ private:
         ImVec2 pos, size;
         float hoverUntil = 0.f;
         bool resizable = false, moved = false;
+        bool off = false;  // its plugin is switched off
     };
     PanelView ViewOf(PanelId id);
     PanelView ViewOf(PluginPanel& p);

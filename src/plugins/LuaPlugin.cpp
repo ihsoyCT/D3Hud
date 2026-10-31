@@ -665,8 +665,16 @@ bool LuaPlugin::Run(int nargs, int nresults) {
     return false;
 }
 
+void LuaPlugin::SetEnabled(bool on) {
+    enabled_ = on;
+    if (on) {
+        errors_ = 0;
+        lastError_.clear();
+    }
+}
+
 void LuaPlugin::OnEvent(const d3h_event& ev) {
-    if (disabled() || L_ == nullptr) return;
+    if (!enabled_ || disabled() || L_ == nullptr) return;
     lua_rawgeti(L_, LUA_REGISTRYINDEX, handlersRef_);
     lua_rawgeti(L_, -1, ev.type);
     if (!lua_istable(L_, -1)) {
@@ -689,6 +697,10 @@ void LuaPlugin::OnEvent(const d3h_event& ev) {
 
 void LuaPlugin::DrawPage(PageCtx& page, const d3h_ui& ui) {
     if (L_ == nullptr) return;
+    if (!enabled_) {
+        ui.text_disabled("This plugin is switched off (Settings > Plugins).");
+        return;
+    }
     if (disabled()) {
         ui.text_disabled(("Plugin disabled after repeated errors: " + lastError_).c_str());
         return;

@@ -158,7 +158,8 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
 
 Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
 read game memory, press keys, or touch files. To write one see `plugins/README.md`. Restart the overlay
-after adding or changing a plugin.
+after adding or changing a plugin. Settings > Plugins lists every plugin with what it costs and an **enabled**
+checkbox: switching a plugin off stops it at once (and takes its dock tabs away); the choice is remembered.
 
 ## Hotkeys
 

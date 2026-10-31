@@ -53,6 +53,9 @@ private:
     void DrawExtrasOf(const std::string& plugin);  // options + dock panel controls, at the end of the plugin's page
     bool HasExtras(const std::string& plugin) const;
     void AddSettingsPageFor(const std::string& plugin);
+    // The Plugins page's checkbox: pauses the plugin and hides its dock tabs, remembered in plugins.ini.
+    void SetPluginEnabled(Entry& e, bool on);
+    void ApplyEnabled(const Entry& e);
     void Save();
 
     HudRenderer& renderer_;
@@ -68,6 +71,7 @@ private:
         const std::string* plugin;
     };
     std::vector<Sub> subs_;
+    std::set<std::string> switchedOff_;  // plugins the user switched off (plugins.disabled in plugins.ini)
     std::set<std::string> pluginsWithPage_;               // plugins that registered a page of their own
     std::map<std::string, std::vector<std::string>> panelsOf_;  // plugin -> its dock panel ids
     const WorldSnapshot* snap_ = nullptr;  // valid during OnFrame

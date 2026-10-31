@@ -13,7 +13,9 @@ current one is 2; a plugin that uses `effects()` needs `api = 2`). The overlay l
 `timetracker/` (time per area: page, options, dock panel), `healthbars/` (draws on the screen from
 `actors()`) and `effects/` (a dock panel and bars from `effects()`) are complete examples.
 
-The Plugins page in Settings lists every plugin, whether it runs, its errors, its log lines and what it costs:
+The Plugins page in Settings lists every plugin with an **enabled** checkbox (off: its code stops at once and its dock
+tabs go away; remembered in `plugins.ini` as `plugins.disabled`; switching it on again also gives a plugin that stopped
+after repeated errors another try), whether it runs, its errors, its log lines and what it costs:
 microseconds spent in its code per drawn frame (average and worst frame, refreshed twice a second; event handlers
 and page / panel drawing included), so a slow plugin is easy to spot.
 `D3Hud.Overlay.exe --settings-page timetracker.timetracker` opens Settings on one page (ids are

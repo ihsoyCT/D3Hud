@@ -371,6 +371,24 @@ void PluginHost::LoadAll(const std::filesystem::path& pluginsDir, const std::fil
     namespace fs = std::filesystem;
     settingsFile_ = settingsFile;
     (void)settings_.Load(settingsFile_);  // none yet on a first start
+    d3h_setting_desc off{};  // the host's own setting: names of the plugins the user switched off, comma separated
+    off.size = sizeof(off);
+    off.key = "disabled";
+    off.type = D3H_SETTING_STRING;
+    off.label = "switched off";
+    off.def_string = "";
+    off.flags = D3H_SETTING_HIDDEN;
+    if (settings_.Define("plugins", off)) {
+        std::string list;
+        (void)settings_.GetString("plugins.disabled", list);
+        size_t from = 0;
+        while (from <= list.size()) {
+            size_t comma = list.find(',', from);
+            if (comma == std::string::npos) comma = list.size();
+            if (comma > from) switchedOff_.insert(list.substr(from, comma - from));
+            from = comma + 1;
+        }
+    }
 
     std::error_code ec;
     std::vector<fs::path> dirs;
@@ -387,6 +405,7 @@ void PluginHost::LoadAll(const std::filesystem::path& pluginsDir, const std::fil
             entry.name = entry.plugin->manifest().name;
             entry.version = entry.plugin->manifest().version;
             AddSettingsPageFor(entry.name);
+            ApplyEnabled(entry);
         } else {
             entry.name = entry.folder;
             entry.error = error;
@@ -394,6 +413,23 @@ void PluginHost::LoadAll(const std::filesystem::path& pluginsDir, const std::fil
         }
         plugins_.push_back(std::move(entry));
     }
+}
+
+void PluginHost::ApplyEnabled(const Entry& e) {
+    if (e.plugin == nullptr) return;
+    const bool off = switchedOff_.contains(e.name);
+    e.plugin->SetEnabled(!off);
+    if (const auto it = panelsOf_.find(e.name); it != panelsOf_.end())
+        for (const std::string& id : it->second) renderer_.SetPluginPanelOff(id, off);
+}
+
+void PluginHost::SetPluginEnabled(Entry& e, bool on) {
+    if (on) switchedOff_.erase(e.name);
+    else switchedOff_.insert(e.name);
+    ApplyEnabled(e);
+    std::string list;
+    for (const std::string& n : switchedOff_) list += (list.empty() ? "" : ",") + n;
+    (void)settings_.SetString("plugins.disabled", list);  // saved with the other settings
 }
 
 bool PluginHost::HasExtras(const std::string& plugin) const {
@@ -482,10 +518,19 @@ void PluginHost::DrawPluginsPage() {
         ImGui::Text("Time in plugin code: %.0f us per frame (%.2f%% of a 60 fps frame)", totalUs, totalUs / 166.67);
         ImGui::TextDisabled("Per drawn frame, averaged over about a second. Includes event handlers and page / panel drawing.");
     }
-    for (const Entry& e : plugins_) {
+    for (Entry& e : plugins_) {
         ImGui::SeparatorText(e.version.empty() ? e.name.c_str() : std::format("{} {}", e.name, e.version).c_str());
+        if (e.plugin != nullptr) {
+            bool on = e.plugin->enabled();
+            if (ImGui::Checkbox(("enabled##" + e.folder).c_str(), &on)) SetPluginEnabled(e, on);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Off: the plugin's code stops at once (no events, no drawing) and its dock tabs go away.\n"
+                                  "Remembered. Switching it on again also gives a plugin that stopped after errors another try.");
+        }
         if (e.plugin == nullptr) {
             ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "not loaded: %s", e.error.c_str());
+        } else if (!e.plugin->enabled()) {
+            ImGui::TextDisabled("switched off");
         } else if (e.plugin->disabled()) {
             ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "disabled after %d errors: %s", e.plugin->errorCount(),
                                e.plugin->lastError().c_str());
