@@ -127,6 +127,7 @@ struct LuaBinding {
         SetNum(L, "world_sno", f.world_sno);
         SetNum(L, "actor_count", f.actor_count);
         SetNum(L, "item_count", f.item_count);
+        SetNum(L, "effect_count", f.effect_count);
         SetNum(L, "hovered_item", f.hovered_item >= 0 ? f.hovered_item + 1 : 0);  // 1-based, 0 = none
         SetNum(L, "screen_w", f.screen_w);
         SetNum(L, "screen_h", f.screen_h);
@@ -215,6 +216,40 @@ struct LuaBinding {
             a.size = sizeof(a);
             if (!h.get_actor(i, &a)) break;
             PushActor(L, a, f);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
+        }
+        return 1;
+    }
+
+    // d3hud.effects() -> array of the player's running buffs and cooldowns:
+    //   { sno, name, code, kind = "buff" | "cooldown", stacks, duration, remaining, elapsed, fraction, timed }
+    // seconds of game time; fraction = remaining / duration (1 just started, 0 about to end); `timed` is false
+    // while the host does not know the game clock yet (remaining / elapsed / fraction are then 0).
+    static int Effects(lua_State* L) {
+        const d3h_host& h = Self(L)->host_;
+        d3h_frame f{};
+        f.size = sizeof(f);
+        h.get_frame(&f);
+        lua_createtable(L, static_cast<int>(f.effect_count), 0);
+        for (uint32_t i = 0; i < f.effect_count; ++i) {
+            d3h_effect e{};
+            e.size = sizeof(e);
+            if (!h.get_effect(i, &e)) break;
+            lua_createtable(L, 0, 10);
+            lua_pushinteger(L, e.sno);  // integers print as such ("266258", not "266258.0")
+            lua_setfield(L, -2, "sno");
+            SetStr(L, "name", e.name);
+            SetStr(L, "code", e.code);
+            SetStr(L, "kind", e.kind == D3H_EFFECT_COOLDOWN ? "cooldown" : "buff");
+            lua_pushinteger(L, e.stacks);
+            lua_setfield(L, -2, "stacks");
+            lua_pushinteger(L, e.slot);
+            lua_setfield(L, -2, "slot");
+            SetNum(L, "duration", e.duration);
+            SetNum(L, "remaining", e.remaining);
+            SetNum(L, "elapsed", e.elapsed);
+            SetNum(L, "fraction", e.duration > 0.f ? e.remaining / e.duration : 0.0);
+            SetBool(L, "timed", e.timed != 0);
             lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
         }
         return 1;
@@ -487,6 +522,89 @@ struct LuaBinding {
         return 0;
     }
 
+    // d3hud.box{ id=, title=, x=, y=, [fill=, fill_alpha=, border=, border_alpha=, padding=,] draw=function(x, y) ... return w, h end }:
+    // a place on the screen the user can move around, with a fill and border the host draws (colours the user can change).
+    // draw gets the top left corner of the content in pixels, draws relative to it with draw_text / draw_rect / ... and
+    // returns the room it used (nothing: nothing to show right now). x, y = the default corner, 0..1 of the screen.
+    static int Box(lua_State* L) {
+        LuaPlugin* p = Self(L);
+        luaL_checktype(L, 1, LUA_TTABLE);
+        const char* id = StrField(L, 1, "id");
+        const char* title = StrField(L, 1, "title");
+        if (id == nullptr || title == nullptr) return luaL_error(L, "box needs id and title");
+        lua_getfield(L, 1, "draw");
+        if (!lua_isfunction(L, -1)) return luaL_error(L, "box '%s' needs a draw function", id);
+        auto ctx = std::make_unique<LuaPlugin::PageCtx>();
+        ctx->plugin = p;
+        ctx->ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        d3h_box_desc d{};
+        d.size = sizeof(d);
+        d.id = id;
+        d.title = title;
+        d.draw = &LuaPlugin::BoxTrampoline;
+        d.user = ctx.get();
+        d.default_x = static_cast<float>(std::clamp(NumField(L, 1, "x", 0.4), 0.0, 1.0));
+        d.default_y = static_cast<float>(std::clamp(NumField(L, 1, "y", 0.3), 0.0, 1.0));
+        // the suggested look: fill / border are 0xRRGGBB with an opacity 0..255 (like the colour settings and the draw library)
+        lua_getfield(L, 1, "fill");
+        const bool hasFill = lua_isnumber(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "border");
+        const bool hasBorder = lua_isnumber(L, -1);
+        lua_pop(L, 1);
+        const auto argb = [&](const char* color, const char* alpha, double defaultAlpha) {
+            const auto a = static_cast<uint32_t>(std::clamp(NumField(L, 1, alpha, defaultAlpha), 0.0, 255.0));
+            return (a << 24) | (static_cast<uint32_t>(NumField(L, 1, color, 0)) & 0xFFFFFFu);
+        };
+        if (hasFill) {
+            d.flags |= D3H_BOX_FILL_SET;
+            d.fill = argb("fill", "fill_alpha", 130);
+        }
+        if (hasBorder) {
+            d.flags |= D3H_BOX_BORDER_SET;
+            d.border = argb("border", "border_alpha", 160);
+        }
+        d.padding = static_cast<float>(NumField(L, 1, "padding", 0));
+        if (!p->host_.register_box(&d)) return luaL_error(L, "box '%s' was rejected by the host", id);
+        p->pages_.push_back(std::move(ctx));
+        return 0;
+    }
+
+    // d3hud.image("fire.png") -> { id =, w =, h = } or nil, message. The file is read by the host from this plugin's own
+    // folder (a plain name, no directories); call it once at load, not every frame.
+    static int Image(lua_State* L) {
+        const char* name = luaL_checkstring(L, 1);
+        d3h_image img{};
+        img.size = sizeof(img);
+        if (!Self(L)->host_.load_image(name, &img) || img.id <= 0) {
+            lua_pushnil(L);
+            lua_pushfstring(L, "image '%s' could not be loaded (a plain name.png in the plugin's folder, at most 2 MB and 1024 px)", name);
+            return 2;
+        }
+        lua_createtable(L, 0, 3);
+        lua_pushinteger(L, img.id);
+        lua_setfield(L, -2, "id");
+        lua_pushinteger(L, img.width);
+        lua_setfield(L, -2, "w");
+        lua_pushinteger(L, img.height);
+        lua_setfield(L, -2, "h");
+        return 1;
+    }
+
+    // d3hud.draw_image(img, x, y [, w, h [, argb tint]]): the image at x, y (screen pixels); w, h default to its own size
+    static int DrawImage(lua_State* L) {
+        luaL_checktype(L, 1, LUA_TTABLE);
+        lua_getfield(L, 1, "id");
+        const auto id = static_cast<int32_t>(luaL_checkinteger(L, -1));
+        lua_pop(L, 1);
+        const double natW = NumField(L, 1, "w", 0), natH = NumField(L, 1, "h", 0);
+        const auto x = static_cast<float>(luaL_checknumber(L, 2)), y = static_cast<float>(luaL_checknumber(L, 3));
+        const auto w = static_cast<float>(luaL_optnumber(L, 4, natW)), h = static_cast<float>(luaL_optnumber(L, 5, natH));
+        const auto tint = static_cast<d3h_color>(luaL_optinteger(L, 6, static_cast<lua_Integer>(0xFFFFFFFFu)));
+        Self(L)->host_.draw_image(D3H_LAYER_OVERLAY, id, d3h_rect{x, y, x + w, y + h}, tint);
+        return 0;
+    }
+
     static d3h_color ColorArg(lua_State* L, int i) { return static_cast<d3h_color>(luaL_checkinteger(L, i)); }
 
     // d3hud.draw_rect(x0, y0, x1, y1, argb [, filled = true [, thickness]])
@@ -632,8 +750,16 @@ bool LuaPlugin::Run(int nargs, int nresults) {
     return false;
 }
 
+void LuaPlugin::SetEnabled(bool on) {
+    enabled_ = on;
+    if (on) {
+        errors_ = 0;
+        lastError_.clear();
+    }
+}
+
 void LuaPlugin::OnEvent(const d3h_event& ev) {
-    if (disabled() || L_ == nullptr) return;
+    if (!enabled_ || disabled() || L_ == nullptr) return;
     lua_rawgeti(L_, LUA_REGISTRYINDEX, handlersRef_);
     lua_rawgeti(L_, -1, ev.type);
     if (!lua_istable(L_, -1)) {
@@ -656,6 +782,10 @@ void LuaPlugin::OnEvent(const d3h_event& ev) {
 
 void LuaPlugin::DrawPage(PageCtx& page, const d3h_ui& ui) {
     if (L_ == nullptr) return;
+    if (!enabled_) {
+        ui.text_disabled("This plugin is switched off (Settings > Plugins).");
+        return;
+    }
     if (disabled()) {
         ui.text_disabled(("Plugin disabled after repeated errors: " + lastError_).c_str());
         return;
@@ -668,6 +798,23 @@ void LuaPlugin::DrawPage(PageCtx& page, const d3h_ui& ui) {
 }
 
 void LuaPlugin::EventTrampoline(const d3h_event* ev, void* user) { static_cast<LuaPlugin*>(user)->OnEvent(*ev); }
+
+void LuaPlugin::DrawBox(PageCtx& box, d3h_vec2 origin, d3h_vec2* size) {
+    *size = {0.f, 0.f};
+    if (L_ == nullptr || !enabled_ || disabled()) return;
+    lua_rawgeti(L_, LUA_REGISTRYINDEX, box.ref);
+    lua_pushnumber(L_, origin.x);
+    lua_pushnumber(L_, origin.y);
+    if (!Run(2, 2)) return;
+    if (lua_isnumber(L_, -2) && lua_isnumber(L_, -1))
+        *size = {std::max(0.f, static_cast<float>(lua_tonumber(L_, -2))), std::max(0.f, static_cast<float>(lua_tonumber(L_, -1)))};
+    lua_pop(L_, 2);
+}
+
+void LuaPlugin::BoxTrampoline(d3h_vec2 origin, d3h_vec2* size, void* user) {
+    auto* box = static_cast<PageCtx*>(user);
+    box->plugin->DrawBox(*box, origin, size);
+}
 
 void LuaPlugin::PageTrampoline(const d3h_ui* ui, void* user) {
     auto* page = static_cast<PageCtx*>(user);
@@ -787,6 +934,8 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         LuaBinding::Register(L, p.get(), "actors", LuaBinding::Actors);
     }
     if (D3H_HOST_HAS(&host, get_item)) LuaBinding::Register(L, p.get(), "item", LuaBinding::Item);
+    if (D3H_HOST_HAS(&host, get_effect) && host.get_effect != nullptr)
+        LuaBinding::Register(L, p.get(), "effects", LuaBinding::Effects);
     if (D3H_HOST_HAS(&host, world_to_screen) && host.world_to_screen != nullptr)
         LuaBinding::Register(L, p.get(), "world_to_screen", LuaBinding::WorldToScreenFn);
     if (D3H_HOST_HAS(&host, text_size) && host.text_size != nullptr)
@@ -801,6 +950,12 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         LuaBinding::Register(L, p.get(), "draw_rect", LuaBinding::DrawRect);
     if (D3H_HOST_HAS(&host, draw_line) && host.draw_line != nullptr)
         LuaBinding::Register(L, p.get(), "draw_line", LuaBinding::DrawLine);
+    if (D3H_HOST_HAS(&host, draw_image) && host.load_image != nullptr && host.draw_image != nullptr) {
+        LuaBinding::Register(L, p.get(), "image", LuaBinding::Image);
+        LuaBinding::Register(L, p.get(), "draw_image", LuaBinding::DrawImage);
+    }
+    if (D3H_HOST_HAS(&host, register_box) && host.register_box != nullptr)
+        LuaBinding::Register(L, p.get(), "box", LuaBinding::Box);
     if (D3H_HOST_HAS(&host, register_panel) && host.register_panel != nullptr)
         LuaBinding::Register(L, p.get(), "panel", LuaBinding::Panel);
     // names for the numbers in actor / item tables

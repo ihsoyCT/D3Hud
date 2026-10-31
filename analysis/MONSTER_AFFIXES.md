@@ -6,7 +6,7 @@ Research notes for the "affixes under the health bar" feature of the health bars
 
 The game's balance table `MonsterAffixes` (TurboHUD 2.6.10 ships it as `data/gamebalance_monster_affixes.bin`)
 has exactly **30 entries**; the ids are GBIDs (a hash of the affix name, so they do not change with patches).
-All of them are in `src/core/MonsterAffixes.h`, which the reader and, later, the plugin API use.
+All of them are in `src/core/MonsterAffixes.h`, which the reader and the plugin API (`d3hud.affixes`) use.
 
 | GBID | key | name | affix effect actors seen in `sno_actors.tsv` |
 |---:|---|---|---|
@@ -66,7 +66,7 @@ champion type). Not yet measured: rares (up to 6 affixes?) and bosses; the reade
 covers the eight slots and a little margin, and counts only ids of the table, so an unknown id is ignored.
 
 `AffixMaskFromAcdWords` (`src/core/MonsterAffixes.h`) does the decoding and is unit-tested with this record;
-the reader publishes the result as `ActorSnapshot::affixMask` (snapshot version 12), bit i =
+the reader publishes the result as `ActorSnapshot::affixMask` (since snapshot version 12), bit i =
 `kMonsterAffixes[i]`. Only champions, rares and bosses are read. The health bars plugin shows the chosen
 affixes under the bars (each affix has its own colour on the plugin's page).
 

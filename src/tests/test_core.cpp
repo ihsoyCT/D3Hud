@@ -7,6 +7,9 @@
 
 #include "AcdTable.h"
 #include "AttribTable.h"
+#include "Boxes.h"
+#include "PluginAssets.h"
+#include "Effects.h"
 #include "ActorList.h"
 #include "AobScanner.h"
 #include "PlayerTracker.h"
@@ -556,8 +559,15 @@ struct State {
     PluginSettings settings;
     std::vector<std::pair<int32_t, Sub>> subs;
     std::vector<Page> pages;
-    std::vector<std::string> logs, drawn, lines;
+    std::vector<std::string> logs, drawn, lines, tips;
+    std::string press;  // the fake ui answers a button whose label contains this with a click
     std::vector<d3h_actor> actors;
+    std::vector<d3h_effect> effects;
+    struct Box { std::string id, title; d3h_box_fn draw; void* user; d3h_box_desc desc; d3h_vec2 size{}; };
+    std::vector<Box> boxes;
+    std::vector<std::string> imageNames;  // load_image: id = index + 1 (a name loads once)
+    struct ImageDraw { int32_t layer, image; d3h_rect rect; d3h_color tint; };
+    std::vector<ImageDraw> imagesDrawn;
     std::vector<d3h_rect> rects;
     std::vector<Page> panels;
     size_t checkboxes = 0, swatches = 0;  // widgets a page drew
@@ -573,6 +583,12 @@ void Log(int32_t, const char* m) { g.logs.emplace_back(m); }
 void GetFrame(d3h_frame* out) {
     *out = g.frame;
     out->actor_count = static_cast<uint32_t>(g.actors.size());
+    out->effect_count = static_cast<uint32_t>(g.effects.size());
+}
+d3h_bool GetEffect(uint32_t i, d3h_effect* out) {
+    if (i >= g.effects.size()) return 0;
+    *out = g.effects[i];
+    return 1;
 }
 d3h_bool GetActor(uint32_t i, d3h_actor* out) {
     if (i >= g.actors.size()) return 0;
@@ -592,6 +608,28 @@ d3h_bool RegisterPanel(const d3h_panel_desc* d) {
 }
 void Subscribe(int32_t type, d3h_event_fn fn, void* user) { g.subs.push_back({type, {fn, user}}); }
 void DrawText(int32_t, d3h_vec2, d3h_color, const char* t, float) { g.drawn.emplace_back(t); }
+// like the real host: a plain name.png only, one id per name; "missing.png" is a file that does not exist
+d3h_bool LoadImage(const char* name, d3h_image* out) {
+    if (!IsPlainImageName(name) || std::string(name) == "missing.png") return 0;
+    auto it = std::find(g.imageNames.begin(), g.imageNames.end(), name);
+    if (it == g.imageNames.end()) it = g.imageNames.insert(g.imageNames.end(), name);
+    out->id = static_cast<int32_t>(it - g.imageNames.begin()) + 1;
+    out->width = 48;
+    out->height = 32;
+    return 1;
+}
+void DrawImage(int32_t layer, int32_t image, d3h_rect r, d3h_color tint) { g.imagesDrawn.push_back({layer, image, r, tint}); }
+d3h_bool RegisterBox(const d3h_box_desc* d) {
+    g.boxes.push_back({d->id, d->title, d->draw, d->user, *d, {}});
+    return 1;
+}
+// what the host does once per drawn frame: every box gets its corner (the default one here) and says how much room it took
+void DrawBoxes() {
+    for (State::Box& b : g.boxes) {
+        b.size = {0.f, 0.f};
+        b.draw({b.desc.default_x * g.frame.screen_w, b.desc.default_y * g.frame.screen_h}, &b.size, b.user);
+    }
+}
 d3h_bool RegisterPage(const d3h_page_desc* d) {
     g.pages.push_back({d->id, d->title, d->group, d->draw, d->user});
     return 1;
@@ -614,16 +652,19 @@ d3h_host MakeHost() {
     d3h_host h{};
     h.size = sizeof(h);
     h.api_version = D3H_API_VERSION;
-    h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.subscribe = Subscribe; h.draw_text = DrawText;
+    h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.get_effect = GetEffect; h.subscribe = Subscribe; h.draw_text = DrawText;
     h.world_to_screen = WorldToScreen; h.draw_rect = DrawRect; h.register_panel = RegisterPanel;
     h.text_size = TextSize;
-    h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
+    h.register_box = RegisterBox; h.load_image = LoadImage; h.draw_image = DrawImage; h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
     h.get_float = GetFloat; h.get_color = GetColor; h.get_string = GetString; h.set_value = SetValue; h.set_string = SetString;
     return h;
 }
 
 // A ui that records the text and answers the combo with g.comboPick.
 void UText(const char* t) { g.lines.emplace_back(t); }
+void UTextColored(d3h_color, const char* t) { g.lines.emplace_back(t); }
+d3h_bool UHovered() { return 1; }
+void UTooltip(const char* t) { g.tips.emplace_back(t); }
 void UNone() {}
 d3h_bool UCombo(const char*, int32_t* idx, const char*) {
     if (g.comboPick == 0) return 0;
@@ -631,13 +672,13 @@ d3h_bool UCombo(const char*, int32_t* idx, const char*) {
     return 1;
 }
 d3h_bool UInput(const char*, char*, size_t) { return 0; }
-d3h_bool UButton(const char*) { return 0; }
+d3h_bool UButton(const char* label) { return !g.press.empty() && strstr(label, g.press.c_str()) != nullptr; }
 d3h_bool UCheckbox(const char*, d3h_bool*) { ++g.checkboxes; return 0; }
 d3h_bool UColor(const char*, d3h_color*) { ++g.swatches; return 0; }
 d3h_ui MakeUi() {
     d3h_ui u{};
     u.size = sizeof(u);
-    u.text = UText; u.text_disabled = UText; u.separator = UNone; u.separator_text = UText;
+    u.text = UText; u.text_colored = UTextColored; u.is_item_hovered = UHovered; u.tooltip = UTooltip; u.text_disabled = UText; u.separator = UNone; u.separator_text = UText;
     u.same_line = UNone; u.spacing = UNone; u.button = UButton; u.checkbox = UCheckbox; u.combo = UCombo;
     u.input_text = UInput; u.color_edit = UColor;
     return u;
@@ -680,6 +721,121 @@ static std::filesystem::path WritePlugin(const std::filesystem::path& root, cons
     File s = OpenFile(dir / L"main.lua", L"wb");
     fwrite(mainLua.data(), 1, mainLua.size(), s);
     return dir;
+}
+
+// ---- effects: buffs and cooldowns from the player's attributes ---------------------------------------
+
+static AttribEntry Attr(uint32_t index, uint32_t sno, uint32_t value) { return {index, sno, value}; }
+
+static void TestEffects() {
+    // channeling pylon in slot 0 (60 s), cheat death cooldown buff: slot 1 expired (zeroed) and slot 3 running,
+    // a potion on cooldown, a skill whose cooldown is idle (sentinels), and noise
+    std::vector<AttribEntry> a = {
+        Attr(kAttrBuffStartTick, 266258, 74518), Attr(kAttrBuffEndTick, 266258, 78118), Attr(kAttrBuffCount, 266258, 1),
+        Attr(kAttrBuffStartTick + 1, 485530, 0), Attr(kAttrBuffEndTick + 1, 485530, 0), Attr(kAttrBuffCount + 1, 485530, 0),
+        Attr(kAttrBuffStartTick + 3, 485530, 58254), Attr(kAttrBuffEndTick + 3, 485530, 58344), Attr(kAttrBuffCount + 3, 485530, 2),
+        // Vengeance-like: the same buff in three more icon slots (identical times = one effect), and a power with a
+        // second, different buff in another slot (two effects)
+        Attr(kAttrBuffStartTick + 1, 266258, 74518), Attr(kAttrBuffEndTick + 1, 266258, 78118), Attr(kAttrBuffCount + 1, 266258, 1),
+        Attr(kAttrBuffStartTick + 2, 266258, 74518), Attr(kAttrBuffEndTick + 2, 266258, 78118), Attr(kAttrBuffCount + 2, 266258, 1),
+        Attr(kAttrBuffStartTick + 5, 485530, 58300), Attr(kAttrBuffEndTick + 5, 485530, 65500), Attr(kAttrBuffCount + 5, 485530, 1),
+        Attr(kAttrPowerCooldown, 30211, 77320), Attr(kAttrPowerCooldownStart, 30211, 75520),
+        Attr(kAttrPowerCooldown, 130695, kCooldownIdleFinish), Attr(kAttrPowerCooldownStart, 130695, kCooldownIdleStart),
+        {115, kAttribNoModifier, 1234},  // an attribute without a modifier
+        Attr(100, 130695, 5),            // another attribute of a power
+    };
+    std::vector<EffectSnapshot> fx;
+    ExtractEffects(a, &fx);
+    CHECK(fx.size() == 4);
+    CHECK(fx[0].sno == 266258 && fx[0].kind == EffectKind::Buff && fx[0].slot == 0 && fx[0].count == 1);  // slots 1, 2 merged
+    CHECK(fx[0].startTick == 74518 && fx[0].endTick == 78118);
+    CHECK(fx[1].sno == 485530 && fx[1].slot == 3 && fx[1].count == 2);  // the zeroed slot 1 is gone
+    CHECK(fx[2].sno == 485530 && fx[2].slot == 5 && fx[2].endTick == 65500);  // different times: its own effect
+    CHECK(fx[3].sno == 30211 && fx[3].kind == EffectKind::Cooldown && fx[3].startTick == 75520 && fx[3].endTick == 77320);
+
+    // times as of a tick
+    const EffectTimes t = TimesOf(fx[0], 74518 + 600);
+    CHECK(t.duration == 60.f && std::fabs(t.elapsed - 10.f) < 1e-3f && std::fabs(t.remaining - 50.f) < 1e-3f);
+    const EffectTimes late = TimesOf(fx[0], 90000);
+    CHECK(late.remaining == 0.f && late.elapsed == 60.f);
+
+    // the tick of a frame: extrapolated from a recent snapshot only
+    CHECK(TickAtTime(-1, 0, 100) < 0);
+    CHECK(TickAtTime(1000, 5000, 5100) == 1006.0);
+    CHECK(TickAtTime(1000, 5000, 9000) == 1000.0);  // stale snapshot: no extrapolation
+    CHECK(TickAtTime(1000, 5000, 100) == 1000.0);   // other clock (a replay)
+
+    // the cap
+    std::vector<AttribEntry> many;
+    for (uint32_t i = 0; i < 300; ++i) {
+        many.push_back(Attr(kAttrBuffStartTick, 1000 + i, 1));
+        many.push_back(Attr(kAttrBuffEndTick, 1000 + i, 100));
+        many.push_back(Attr(kAttrBuffCount, 1000 + i, 1));
+    }
+    ExtractEffects(many, &fx);
+    CHECK(fx.size() == static_cast<size_t>(kMaxEffects));
+}
+
+static void TestGameClock() {
+    auto buff = [](uint32_t sno, int32_t start, int32_t end) {
+        EffectSnapshot e;
+        e.sno = sno;
+        e.startTick = start;
+        e.endTick = end;
+        return e;
+    };
+    GameClock c;
+    CHECK(!c.valid() && c.Tick(0) < 0);
+    // first poll: the newest start is the best lower bound there is
+    std::vector<EffectSnapshot> fx = {buff(1, 1000, 5000), buff(2, 1200, 9000)};
+    c.Update(0, fx.data(), fx.size());
+    CHECK(c.valid() && c.Tick(0) == 1200);
+    CHECK(c.Tick(1000) == 1260);  // 60 ticks per second
+    // nothing changed: the estimate just runs on
+    c.Update(1000, fx.data(), fx.size());
+    CHECK(c.Tick(1000) == 1260);
+    // a passive refreshed: its start is "now" (ahead of the estimate) and becomes the anchor
+    fx[0].startTick = 1500;
+    fx[0].endTick = 1590;
+    c.Update(2000, fx.data(), fx.size());
+    CHECK(c.Tick(2000) == 1500 && c.Tick(3000) == 1560);
+    // a refresh that lands close to the extrapolation does not make the clock jitter backwards
+    fx[0].startTick = 1560 - 3;
+    c.Update(3000, fx.data(), fx.size());
+    CHECK(c.Tick(3000) == 1560);
+    // a stack decrement keeps an old start tick: not "now"
+    fx[1].startTick = 900;
+    c.Update(3100, fx.data(), fx.size());
+    CHECK(c.Tick(3100) == 1566);
+    // an effect still listed long after its end: the estimate was ahead, pull it back
+    GameClock d;
+    std::vector<EffectSnapshot> g2 = {buff(1, 2000, 2400)};
+    d.Update(0, g2.data(), g2.size());
+    d.Update(60000, g2.data(), g2.size());  // 60 s later the estimate is 5600, the buff claims to end at 2400
+    CHECK(d.Tick(60000) <= 2430);
+}
+
+static void TestPowerNames() {
+    CHECK(PowerNames::Prettify("Generic_EnchantressCheatDeathPassive") == "Enchantress Cheat Death Passive");
+    CHECK(PowerNames::Prettify("DemonHunter_SmokeScreen") == "Smoke Screen");
+    CHECK(PowerNames::Prettify("Generic_ItemPassiveUniqueRing735x1") == "Item Passive Unique Ring 735x1");
+    CHECK(PowerNames::Prettify("Generic_DOTSomething") == "DOT Something");
+    CHECK(PowerNames::Prettify("NoPrefix") == "No Prefix");
+
+    const char* path = "test_sno_powers.tsv";
+    {
+        File f = OpenFile(path, L"wb");
+        const char* text = "sno\tname\r\n266258\tGeneric_PagesBuffInfiniteCasting\r\n30211\tGeneric_DrinkHealthPotion\r\n";
+        fwrite(text, 1, strlen(text), f);
+    }
+    PowerNames n;
+    CHECK(n.Load(path) && n.size() == 2);
+    CHECK(n.Code(30211) != nullptr && *n.Code(30211) == "Generic_DrinkHealthPotion");
+    CHECK(n.Readable(266258) == "Pages Buff Infinite Casting");
+    CHECK(n.Code(1) == nullptr && n.Readable(1) == "Power 1");
+    CHECK(!n.Load("no_such_file.tsv"));
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
 }
 
 static void TestPluginSettings() {
@@ -728,7 +884,7 @@ static void TestLuaSandbox() {
 
     CHECK(load("ok", "assert(os == nil and io == nil and require == nil and dofile == nil and loadfile == nil and load == nil "
                      "and debug == nil and package == nil and collectgarbage == nil and print == nil)\n"
-                     "assert(string.dump == nil and d3hud.api == 1)\n"
+                     "assert(string.dump == nil and d3hud.api == 4)\n"
                      "assert(string.format('%d', 3) == '3' and math.floor(2.5) == 2 and #table.concat({'a','b'}) == 2)") != nullptr);
     CHECK(err.empty());
 
@@ -813,6 +969,237 @@ static void TestLuaSandbox() {
 }
 
 // Runs plugins/timetracker against the fake host: classification, percentages, persistence.
+static void TestLuaEffects() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_effects";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    d3h_effect e{};
+    e.size = sizeof(e);
+    e.sno = 266258;
+    e.kind = D3H_EFFECT_BUFF;
+    e.stacks = 1;
+    e.duration = 60.f;
+    e.remaining = 15.f;
+    e.elapsed = 45.f;
+    e.timed = 1;
+    e.slot = 5;
+    strncpy_s(e.name, sizeof(e.name), "Pages Buff Infinite Casting", _TRUNCATE);
+    strncpy_s(e.code, sizeof(e.code), "Generic_PagesBuffInfiniteCasting", _TRUNCATE);
+    fake::g.effects.push_back(e);
+    e.sno = 30211;
+    e.kind = D3H_EFFECT_COOLDOWN;
+    e.timed = 0;
+    e.remaining = 0.f;
+    fake::g.effects.push_back(e);
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    const fs::path dir = WritePlugin(root, "fx",
+        "local fx = d3hud.effects()\n"
+        "assert(#fx == 2 and d3hud.frame().effect_count == 2)\n"
+        "assert(fx[1].sno == 266258 and fx[1].kind == 'buff' and fx[1].stacks == 1 and fx[1].slot == 5)\n"
+        "assert(fx[1].name == 'Pages Buff Infinite Casting' and fx[1].code == 'Generic_PagesBuffInfiniteCasting')\n"
+        "assert(fx[1].duration == 60 and fx[1].remaining == 15 and fx[1].elapsed == 45 and fx[1].fraction == 0.25 and fx[1].timed)\n"
+        "assert(fx[2].kind == 'cooldown' and not fx[2].timed and fx[2].fraction == 0)\n");
+    CHECK(LuaPlugin::Load(dir, host, err) != nullptr);
+    CHECK(err.empty());
+    // a host without the function: the binding is simply absent
+    d3h_host old = fake::MakeHost();
+    old.size = static_cast<uint32_t>(offsetof(d3h_host, get_effect));
+    const fs::path dir2 = WritePlugin(root, "nofx", "assert(d3hud.effects == nil)");
+    err.clear();
+    CHECK(LuaPlugin::Load(dir2, old, err) != nullptr);
+    fs::remove_all(root, ec);
+}
+
+static void TestPluginSwitch() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_switch";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+
+    // a plugin that draws on every frame and has a panel
+    auto p = LuaPlugin::Load(WritePlugin(root, "draws",
+                                         "d3hud.on('frame', function() d3hud.draw_text(0, 0, 0xFFFFFFFF, 'tick') end)\n"
+                                         "d3hud.panel{ id = 'p', title = 'P', draw = function(ui) ui.text('panel body') end }"),
+                             host, err);
+    CHECK(p != nullptr && p->enabled());
+    if (p == nullptr) return;
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.drawn.size() == 1);
+    p->SetEnabled(false);  // the user's switch: nothing runs any more
+    CHECK(!p->enabled());
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.drawn.size() == 1);
+    fake::g.lines.clear();
+    fake::DrawPanels();
+    CHECK(fake::g.lines.size() == 1 && fake::g.lines[0].find("switched off") != std::string::npos);
+    p->SetEnabled(true);
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.drawn.size() == 2);
+    fake::g.lines.clear();
+    fake::DrawPanels();
+    CHECK(fake::g.lines.size() == 1 && fake::g.lines[0] == "panel body");
+
+    // a plugin that gave up after repeated errors gets another try when it is switched on again
+    fake::g.Reset();
+    auto bad = LuaPlugin::Load(WritePlugin(root, "bad", "d3hud.on('frame', function() error('boom') end)"), host, err);
+    CHECK(bad != nullptr);
+    if (bad == nullptr) return;
+    for (int i = 0; i < LuaPlugin::kMaxErrors + 2; ++i) fake::Fire(D3H_EVENT_FRAME);
+    CHECK(bad->disabled() && bad->errorCount() == LuaPlugin::kMaxErrors);
+    bad->SetEnabled(false);
+    bad->SetEnabled(true);
+    CHECK(!bad->disabled() && bad->errorCount() == 0 && bad->lastError().empty());
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(bad->errorCount() == 1);  // it runs again (and fails again)
+    fs::remove_all(root, ec);
+}
+
+// ---- movable boxes: placement math (pure) and the Lua binding -----------------------------------------
+
+static void TestBoxes() {
+    const Vec2 unset{kBoxUnset, kBoxUnset};
+    const Vec2 size{100.f, 40.f};
+    // never moved: the corner the plugin asked for
+    Vec2 o = BoxOrigin(unset, {0.5f, 0.25f}, size, 1920.f, 1080.f);
+    CHECK(o.x == 960.f && o.y == 270.f);
+    // moved: where the user put it
+    o = BoxOrigin({0.1f, 0.2f}, {0.5f, 0.25f}, size, 1920.f, 1080.f);
+    CHECK(std::fabs(o.x - 192.f) < 1e-3f && std::fabs(o.y - 216.f) < 1e-3f);
+    // always fully on the screen, also when the screen got smaller or the box bigger
+    o = BoxOrigin({1.f, 1.f}, {0.f, 0.f}, size, 1920.f, 1080.f);
+    CHECK(o.x == 1820.f && o.y == 1040.f);
+    o = BoxOrigin({0.5f, 0.5f}, {0.f, 0.f}, {5000.f, 4000.f}, 1920.f, 1080.f);
+    CHECK(o.x == 0.f && o.y == 0.f);
+    // dragging
+    o = BoxMoved({100.f, 100.f}, {30.f, -250.f}, size, 1920.f, 1080.f);
+    CHECK(o.x == 130.f && o.y == 0.f);
+    o = BoxMoved({1800.f, 1000.f}, {500.f, 500.f}, size, 1920.f, 1080.f);
+    CHECK(o.x == 1820.f && o.y == 1040.f);
+    // what is stored round-trips (a fraction, so another resolution keeps the place)
+    const Vec2 f = BoxFraction({960.f, 270.f}, 1920.f, 1080.f);
+    CHECK(f.x == 0.5f && f.y == 0.25f);
+    o = BoxOrigin(f, unset, size, 2560.f, 1440.f);
+    CHECK(o.x == 1280.f && o.y == 360.f);
+    const Vec2 bad = BoxFraction({10.f, 10.f}, 0.f, 0.f);
+    CHECK(bad.x < 0.f && bad.y < 0.f);
+}
+
+// ---- images: what a plugin may load, and the Lua binding ---------------------------------------------
+
+static void TestPluginAssets() {
+    CHECK(IsPlainImageName("fire.png") && IsPlainImageName("Fire_2-b.png") && IsPlainImageName("a.png"));
+    CHECK(!IsPlainImageName(".png") && !IsPlainImageName("") && !IsPlainImageName("fire"));
+    CHECK(!IsPlainImageName("fire.jpg") && !IsPlainImageName("fire.PNG") && !IsPlainImageName("fire.png.exe"));
+    CHECK(!IsPlainImageName("../fire.png") && !IsPlainImageName("sub/fire.png") && !IsPlainImageName("sub\\fire.png"));
+    CHECK(!IsPlainImageName("C:fire.png") && !IsPlainImageName("fi.re.png") && !IsPlainImageName("fire .png"));
+    CHECK(!IsPlainImageName(std::string(70, 'a') + ".png"));
+    CHECK(!IsPlainImageName(std::string_view("fi\0re.png", 9)));
+}
+
+static void TestLuaImage() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_image";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(WritePlugin(root, "pics",
+        "local a = d3hud.image('fire.png')\n"
+        "assert(a and a.id == 1 and a.w == 48 and a.h == 32)\n"
+        "assert(d3hud.image('fire.png').id == 1)  -- the same name is the same picture\n"
+        "local m, why = d3hud.image('missing.png')\n"
+        "assert(m == nil and why:find('missing.png'))\n"
+        "assert(d3hud.image('../secret.png') == nil and d3hud.image('dir/x.png') == nil and d3hud.image('x.jpg') == nil)\n"
+        "d3hud.draw_image(a, 10, 20)                       -- its own size\n"
+        "d3hud.draw_image(a, 100, 200, 24, 16, 0x80FF0000)  -- scaled and tinted\n"
+        "assert(not pcall(d3hud.draw_image, 5, 0, 0))       -- needs the table that image() returned\n",
+        "return { name = 'pics', version = '1', api = 4 }"), host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "pics: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.imageNames.size() == 1 && fake::g.imageNames[0] == "fire.png");  // only the one real, plain name got through
+    CHECK(fake::g.imagesDrawn.size() == 2);
+    if (fake::g.imagesDrawn.size() == 2) {
+        const auto& a = fake::g.imagesDrawn[0];
+        CHECK(a.layer == D3H_LAYER_OVERLAY && a.image == 1 && a.tint == 0xFFFFFFFFu);
+        CHECK(a.rect.x0 == 10.f && a.rect.y0 == 20.f && a.rect.x1 == 58.f && a.rect.y1 == 52.f);
+        const auto& b = fake::g.imagesDrawn[1];
+        CHECK(b.rect.x0 == 100.f && b.rect.x1 == 124.f && b.rect.y1 == 216.f && b.tint == 0x80FF0000u);
+    }
+
+    // a host without images: the binding is absent, so a plugin can check for it
+    d3h_host old = fake::MakeHost();
+    old.size = static_cast<uint32_t>(offsetof(d3h_host, load_image));
+    err.clear();
+    CHECK(LuaPlugin::Load(WritePlugin(root, "noimg", "assert(d3hud.image == nil and d3hud.draw_image == nil)"), old, err) != nullptr);
+    fs::remove_all(root, ec);
+}
+
+static void TestLuaBox() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_box";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    fake::g.frame.screen_w = 1920.f;
+    fake::g.frame.screen_h = 1080.f;
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(WritePlugin(root, "boxes",
+        "d3hud.box{ id = 'a', title = 'Box A', x = 0.25, y = 0.5, fill = 0x102030, fill_alpha = 200, padding = 9,\n"
+        "            draw = function(x, y) d3hud.log(x .. ' ' .. y) d3hud.draw_text(x, y, 0xFFFFFFFF, 'hi') return 40, 12 end }\n"
+        "d3hud.box{ id = 'b', title = 'Box B', border = 0x405060, draw = function(x, y) end }\n",
+        "return { name = 'boxes', version = '1', api = 3 }"), host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "boxes: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.boxes.size() == 2);
+    const d3h_box_desc& a = fake::g.boxes[0].desc;
+    CHECK(fake::g.boxes[0].id == "a" && fake::g.boxes[0].title == "Box A");
+    CHECK(a.default_x == 0.25f && a.default_y == 0.5f && a.padding == 9.f);
+    CHECK(a.flags == D3H_BOX_FILL_SET && a.fill == ((200u << 24) | 0x102030u));  // a suggested look, with the opacity given
+    const d3h_box_desc& b = fake::g.boxes[1].desc;
+    CHECK(b.default_x == 0.4f && b.default_y == 0.3f && b.padding == 0.f);       // defaults
+    CHECK(b.flags == D3H_BOX_BORDER_SET && b.border == ((160u << 24) | 0x405060u));  // the default opacity of a border
+
+    // the host calls draw with the corner of the content; the plugin says how much room it used
+    fake::DrawBoxes();
+    CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "480.0 540.0");
+    CHECK(fake::g.boxes[0].size.x == 40.f && fake::g.boxes[0].size.y == 12.f);
+    CHECK(fake::g.drawn.size() == 1 && fake::g.drawn[0] == "hi");
+    CHECK(fake::g.boxes[1].size.x == 0.f && fake::g.boxes[1].size.y == 0.f);  // nothing returned: nothing to show
+
+    // switched off: nothing is drawn and no room is taken
+    p->SetEnabled(false);
+    fake::g.drawn.clear();
+    fake::DrawBoxes();
+    CHECK(fake::g.drawn.empty() && fake::g.boxes[0].size.x == 0.f);
+    p->SetEnabled(true);
+
+    // a host without boxes: the binding is simply absent
+    d3h_host old = fake::MakeHost();
+    old.size = static_cast<uint32_t>(offsetof(d3h_host, register_box));
+    err.clear();
+    CHECK(LuaPlugin::Load(WritePlugin(root, "nobox", "assert(d3hud.box == nil)"), old, err) != nullptr);
+    // a box needs an id and a title
+    fake::g.boxes.clear();
+    err.clear();
+    CHECK(LuaPlugin::Load(WritePlugin(root, "badbox", "d3hud.box{ id = 'x', draw = function() end }"), host, err) == nullptr);
+    CHECK(fake::g.boxes.empty());
+    fs::remove_all(root, ec);
+}
+
 static void TestTimeTracker() {
     namespace fs = std::filesystem;
     fake::g.Reset();
@@ -862,6 +1249,15 @@ static void TestTimeTracker() {
     CHECK(page.find("42.9%") != std::string::npos);  // Rift 30 / 70
     CHECK(page.find("total 0:01:10") != std::string::npos);
     CHECK(!p->disabled());
+
+    // the split on the screen is a box: the plugin draws the percentages, the host the fill and border
+    CHECK(fake::g.settings.SetNumber("timetracker.show_hud", 1));
+    fake::g.frame.screen_w = 1920.f;
+    fake::g.frame.screen_h = 1080.f;
+    fake::g.drawn.clear();
+    fake::DrawBoxes();
+    CHECK(fake::g.boxes.size() == 1 && !fake::g.drawn.empty() && fake::g.drawn[0].find("Rift 43%") != std::string::npos);
+    CHECK(fake::g.boxes[0].size.x > 50.f && fake::g.boxes[0].size.y > 5.f);
 
     // the dock panel shows the same split
     fake::g.lines.clear();
@@ -916,6 +1312,8 @@ assert(draw.contrast(0xFFFFFF, 255) == draw.BLACK, "a solid white fill: black te
 assert(draw.contrast(0x000000, 112) == draw.WHITE)
 assert(draw.argb(0x102030, 0x80) == 0x80102030 and draw.argb(0x102030) == 0xFF102030)
 assert(fmt.hms(3725) == "1:02:05" and fmt.pct(0.427) == "43%")
+assert(fmt.big(999) == "999" and fmt.big(1000) == "1.00K" and fmt.big(45600) == "45.6K" and fmt.big(1234567) == "1.23M")
+assert(fmt.big(1.5e12) == "1.50T" and fmt.big(0) == "0" and fmt.dur(3.14) == "3.1s" and fmt.dur(75) == "1:15")
 assert(fmt.pretty("x1_Fallen_Champion") == "Fallen Champion" and fmt.pretty("FallenHound") == "Fallen Hound")
 assert(store.pack_map({ b = 2, a = 1 }) == "a=1;b=2")
 assert(store.unpack_map("a=1;b=2", { number = true }).b == 2 and store.unpack_map("a=x;b=y").a == "x")
@@ -949,6 +1347,341 @@ end)
     CHECK(fake::g.drawn.size() == 3 && fake::g.drawn[0] == "Molten" && fake::g.drawn[1] == "AAAA" && fake::g.drawn[2] == "BBBB");
     CHECK(fake::g.logs.size() == 1 && fake::g.logs[0] == "71.0 19.0");  // 34 + 3 + 34 wide, 13 + 6 tall
     fs::remove_all(root, ec);
+}
+
+// plugins/damagemeter: damage from how the life of elites falls
+static d3h_effect FxEntry(uint32_t sno, int32_t kind, float duration, float remaining, const char* name, const char* code,
+                          int32_t stacks = 1, bool timed = true) {
+    d3h_effect e{};
+    e.size = sizeof(e);
+    e.sno = sno;
+    e.kind = kind;
+    e.stacks = stacks;
+    e.duration = duration;
+    e.remaining = timed ? remaining : 0.f;
+    e.elapsed = timed ? duration - remaining : 0.f;
+    e.timed = timed ? 1 : 0;
+    strncpy_s(e.name, sizeof(e.name), name, _TRUNCATE);
+    strncpy_s(e.code, sizeof(e.code), code, _TRUNCATE);
+    return e;
+}
+
+static void TestEffectsPlugin() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"effects", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "effects: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.panels.size() == 1);
+    fake::g.frame.screen_w = 1920.f;
+    fake::g.frame.screen_h = 1080.f;
+    auto panel = [&] {
+        fake::Fire(D3H_EVENT_FRAME);  // the list is worked out once per drawn frame
+        fake::g.lines.clear();
+        fake::DrawPanels();
+        std::string text;
+        for (const std::string& l : fake::g.lines) text += l + "\n";
+        return text;
+    };
+    auto at = [](const std::string& text, const char* needle) { return text.find(needle); };
+
+    CHECK(panel().find("nothing running") != std::string::npos);
+
+    fake::g.effects = {
+        FxEntry(266258, D3H_EFFECT_BUFF, 60.f, 45.3f, "Pages Buff Infinite Casting", "Generic_PagesBuffInfiniteCasting"),
+        FxEntry(485530, D3H_EFFECT_BUFF, 120.f, 75.f, "Enchantress Cheat Death Passive", "Generic_EnchantressCheatDeathPassive"),
+        FxEntry(485530, D3H_EFFECT_BUFF, 1.5f, 0.5f, "Enchantress Cheat Death Passive", "Generic_EnchantressCheatDeathPassive"),
+        FxEntry(30211, D3H_EFFECT_COOLDOWN, 30.f, 12.f, "Drink Health Potion", "Generic_DrinkHealthPotion"),
+        FxEntry(90314, D3H_EFFECT_BUFF, 10.f, 4.f, "Monster Affix Molten", "Generic_MonsterAffixMolten"),
+        FxEntry(134334, D3H_EFFECT_BUFF, 36000.f, 30000.f, "Banter Cooldown", "Generic_BanterCooldown"),
+        FxEntry(318383, D3H_EFFECT_BUFF, 8.f, 3.f, "Item Passive Unique Ring 521x1", "Generic_ItemPassiveUniqueRing521x1", 3),
+    };
+    // the default: only the important ones. Cooldowns first (the potion 12 s, cheat death 1:15), then buffs (the pylon)
+    std::string text = panel();
+    CHECK(at(text, "Cooldowns") < at(text, "Health Potion") && at(text, "Health Potion") < at(text, "Cheat Death"));
+    CHECK(at(text, "Cheat Death") < at(text, "Buffs") && at(text, "Buffs") < at(text, "Channeling Pylon"));
+    CHECK(text.find("12.0s   Health Potion") != std::string::npos);
+    CHECK(text.find("1:15   Cheat Death") != std::string::npos);
+    CHECK(text.find("45.3s   Channeling Pylon") != std::string::npos);
+    CHECK(text.find("Molten") == std::string::npos && text.find("Banter") == std::string::npos &&
+          text.find("Item Passive") == std::string::npos);
+    // the short cheat death renewal, the affix, the 10 hour cooldown and the ring passive
+    CHECK(text.find("4 more hidden") != std::string::npos);
+    CHECK(!fake::g.tips.empty());
+    bool named = false;
+    for (const std::string& t : fake::g.tips) named |= t.find("Generic_PagesBuffInfiniteCasting\npower 266258") != std::string::npos;
+    CHECK(named);
+
+    // a power of your own on the list of important ones
+    CHECK(fake::g.settings.SetString("effects.extra", "1, 318383"));
+    text = panel();
+    CHECK(text.find("Item Passive Unique Ring 521x1  x3") != std::string::npos);
+    CHECK(text.find("3 more hidden") != std::string::npos);
+    CHECK(fake::g.settings.SetString("effects.extra", ""));
+
+    // without noise: the filter by duration and by name
+    CHECK(fake::g.settings.SetNumber("effects.mode", 1));  // stored 0-based: Without noise
+    text = panel();
+    CHECK(at(text, "Buffs") < at(text, "Item Passive Unique Ring 521x1  x3") &&
+          at(text, "Item Passive Unique Ring 521x1  x3") < at(text, "Channeling Pylon"));  // soonest first
+    CHECK(text.find("Molten") == std::string::npos && text.find("Banter") == std::string::npos);
+    CHECK(text.find("3 more hidden") != std::string::npos);
+
+    // everything
+    CHECK(fake::g.settings.SetNumber("effects.mode", 2));  // Everything
+    text = panel();
+    CHECK(text.find("Monster Affix Molten") != std::string::npos);
+    CHECK(text.find("Banter Cooldown") != std::string::npos);
+    CHECK(text.find("hidden") == std::string::npos);
+    CHECK(fake::g.settings.SetNumber("effects.mode", 0));  // Important only
+
+    // the game clock is not known yet: no times, nothing broken
+    fake::g.effects = {FxEntry(266258, D3H_EFFECT_BUFF, 60.f, 0.f, "Pages Buff Infinite Casting", "Generic_PagesBuffInfiniteCasting", 1, false)};
+    CHECK(panel().find("?   Channeling Pylon") != std::string::npos);
+
+    // the same list as bars on the screen
+    fake::g.effects = {
+        FxEntry(266258, D3H_EFFECT_BUFF, 60.f, 45.f, "Pages Buff Infinite Casting", "Generic_PagesBuffInfiniteCasting"),
+        FxEntry(30211, D3H_EFFECT_COOLDOWN, 30.f, 12.f, "Drink Health Potion", "Generic_DrinkHealthPotion"),
+    };
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    fake::DrawBoxes();
+    CHECK(fake::g.rects.empty());  // off by default
+    CHECK(fake::g.boxes.size() == 1 && fake::g.boxes[0].size.x == 0.f);  // nothing to show: no room taken
+    CHECK(fake::g.settings.SetNumber("effects.hud", 1));
+    fake::Fire(D3H_EVENT_FRAME);
+    fake::DrawBoxes();
+    CHECK(fake::g.rects.size() == 6);  // three rectangles per bar, two bars
+    bool potion = false, pylon = false;
+    for (const std::string& d : fake::g.drawn) {
+        potion |= d.find("Health Potion") != std::string::npos;
+        pylon |= d.find("Channeling Pylon") != std::string::npos;
+    }
+    CHECK(potion && pylon);
+    CHECK(fake::g.boxes[0].size.x > 100.f && fake::g.boxes[0].size.y > 30.f);  // two bars, one under the other
+    CHECK(!p->disabled());
+    if (p->disabled()) fprintf(stderr, "effects: %s", p->lastError().c_str());
+}
+
+static void TestConventionPlugin() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    fake::g.frame.screen_w = 1920.f;
+    fake::g.frame.screen_h = 1080.f;
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    const fs::path dir = fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"convention";
+    auto p = LuaPlugin::Load(dir, host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "convention: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.panels.size() == 1);
+
+    // the ring: one element buff of 4 s in the icon slot of the element that is active, plus the 16 s lap marker in slot 8
+    auto ring = [&](double t, const std::vector<int>& order) {
+        const double lapSeconds = 4.0 * static_cast<double>(order.size());
+        const double within = std::fmod(t, 4.0);
+        d3h_effect e = FxEntry(430674, D3H_EFFECT_BUFF, 4.f, static_cast<float>(4.0 - within), "Convention", "Generic_ConventionOfElements");
+        e.slot = order[static_cast<size_t>(t / 4.0) % order.size()];
+        d3h_effect marker = FxEntry(430674, D3H_EFFECT_BUFF, static_cast<float>(lapSeconds), static_cast<float>(lapSeconds - std::fmod(t, lapSeconds)),
+                                    "Convention", "Generic_ConventionOfElements");
+        marker.slot = 8;
+        fake::g.effects = {marker, e};
+    };
+    auto frame = [&](double t, const std::vector<int>& order) {
+        ring(t, order);
+        fake::g.frame.time_ms = t * 1000.0;
+        fake::g.drawn.clear();
+        fake::Fire(D3H_EVENT_FRAME);
+        fake::DrawBoxes();
+    };
+    auto hud = [&](const char* needle) {
+        for (const std::string& d : fake::g.drawn)
+            if (d.find(needle) != std::string::npos) return true;
+        return false;
+    };
+    auto panel = [&](const char* press = "") {
+        fake::g.press = press;
+        fake::g.lines.clear();
+        fake::DrawPanels();
+        fake::g.press.clear();
+        std::string text;
+        for (const std::string& l : fake::g.lines) text += l + "\n";
+        return text;
+    };
+    auto at = [](const std::string& text, const char* needle) { return text.find(needle); };
+    const std::vector<int> dh = {3, 5, 6, 2};  // the order seen on a Demon Hunter
+
+    CHECK(panel().find("not running") != std::string::npos);
+
+    // the first lap is spent learning: the order is known once an element has come round again
+    for (double t = 0; t <= 13.5; t += 0.5) frame(t, dh);
+    CHECK(panel().find("Learning the order") != std::string::npos);
+    for (double t = 14.0; t <= 16.5; t += 0.5) frame(t, dh);  // slot 3 again
+    std::string text = panel();
+    CHECK(text.find("Learning") == std::string::npos);
+    // slots 3 5 6 2 are Fire, Lightning, Physical, Cold (the elements in alphabetical order are the slots 1..7)
+    CHECK(at(text, "Fire") < at(text, "Lightning") && at(text, "Lightning") < at(text, "Physical") &&
+          at(text, "Physical") < at(text, "Cold"));
+    CHECK(text.find("now") != std::string::npos && text.find("yours") == std::string::npos);
+    CHECK(hud("pick your element"));
+
+    // choose Cold (slot 2): it is 3.5 s (rest of Fire) + 4 (Lightning) + 4 (Physical) away
+    text = panel("mine##2");
+    fake::g.imagesDrawn.clear();
+    frame(16.5, dh);
+    CHECK(hud("Cold in 11.5"));
+    // the icon of Cold (slot 2) is drawn left of the text: the box is a square icon + gap + text wide
+    CHECK(fake::g.imagesDrawn.size() == 1 && fake::g.imageNames.size() == 7);
+    if (fake::g.imagesDrawn.size() == 1) {
+        const auto cold = std::find(fake::g.imageNames.begin(), fake::g.imageNames.end(), "cold.png") - fake::g.imageNames.begin() + 1;
+        CHECK(fake::g.imagesDrawn[0].image == cold && fake::g.imagesDrawn[0].tint == 0xFFFFFFFFu);
+        CHECK(fake::g.boxes[0].size.x > fake::g.boxes[0].size.y * 2.f);
+    }
+    CHECK(panel().find("Cold    <- yours") != std::string::npos);
+    for (double t = 17.0; t <= 20.5; t += 0.5) frame(t, dh);  // Lightning active, 3.5 s left: Physical follows, then Cold
+    CHECK(hud("Cold in 7.5"));
+    for (double t = 21.0; t <= 29.0; t += 0.5) {
+        if (t == 28.0) {
+            // the moment between two elements, as polling often sees it: Physical has run out and Cold has not started
+            fake::g.effects.clear();
+            fake::g.frame.time_ms = t * 1000.0;
+            fake::g.drawn.clear();
+            fake::Fire(D3H_EVENT_FRAME);
+            fake::DrawBoxes();
+            CHECK(hud("Cold in 0.0"));
+            continue;
+        }
+        frame(t, dh);
+    }
+    CHECK(!p->disabled());
+    CHECK(hud("COLD NOW  3.0"));  // Cold, 3 s left
+    for (double t = 29.5; t <= 33.0; t += 0.5) frame(t, dh);
+
+    // the choice and the learned order survive a restart of the plugin
+    p.reset();
+    fake::g.subs.clear();
+    fake::g.panels.clear();
+    fake::g.pages.clear();
+    fake::g.boxes.clear();  // the old plugin's box is gone with it
+    p = LuaPlugin::Load(dir, host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) return;
+    frame(33.0, dh);  // element 3, 3 s left
+    CHECK(hud("Cold in 11.0"));
+
+    // no ring for a while, then a hero with another order of the same elements: the game contradicts the order that was
+    // learned, so it is learned again, and the choice (element 2) still applies: same elements
+    fake::g.effects.clear();
+    for (double t = 34.0; t < 38.0; t += 0.5) {
+        fake::g.frame.time_ms = t * 1000.0;
+        fake::Fire(D3H_EVENT_FRAME);
+    }
+    const std::vector<int> other = {3, 6, 5, 2};
+    for (double t = 40.0; t <= 58.0; t += 0.5) frame(t, other);
+    text = panel();
+    // Lightning is active; the order learned again is Lightning, Cold, Fire, Physical (before: Fire was followed by Lightning)
+    CHECK(at(text, "    Lightning") < at(text, "    Cold") && at(text, "    Cold") < at(text, "    Fire") &&
+          at(text, "    Fire") < at(text, "    Physical"));  // the rows (the first line also names an element)
+    CHECK(text.find("<- yours") != std::string::npos);
+
+    // a hero with other elements: nothing chosen for that cycle yet
+    fake::g.effects.clear();
+    for (double t = 59.0; t < 63.0; t += 0.5) {
+        fake::g.frame.time_ms = t * 1000.0;
+        fake::Fire(D3H_EVENT_FRAME);
+    }
+    const std::vector<int> wizard = {1, 4, 7};
+    for (double t = 64.0; t <= 80.0; t += 0.5) frame(t, wizard);
+    text = panel();
+    CHECK(text.find("Holy") != std::string::npos && text.find("<- yours") == std::string::npos);  // Arcane, Holy, Poison
+    CHECK(hud("pick your element"));
+    CHECK(!p->disabled());
+    if (p->disabled()) fprintf(stderr, "convention: %s", p->lastError().c_str());
+}
+
+static void TestDamageMeter() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"damagemeter", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "damagemeter: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.panels.size() == 1);
+    auto tick = [&](double seconds, std::vector<d3h_actor> actors) {
+        fake::g.frame.time_ms = seconds * 1000.0;
+        fake::g.actors = std::move(actors);
+        fake::Fire(D3H_EVENT_SNAPSHOT);
+    };
+    auto panel = [&] {
+        fake::g.lines.clear();
+        fake::DrawPanels();
+        std::string text;
+        for (const std::string& l : fake::g.lines) text += l + "\n";
+        return text;
+    };
+    auto rare = [&](uint64_t id, float x, int life) {
+        d3h_actor a = fake::Actor(D3H_ACTOR_RARE, x, static_cast<float>(life) / 1000.f, "Rare");
+        a.id = id;
+        return a;
+    };
+
+    CHECK(panel().find("no fight right now") != std::string::npos);
+
+    // 100 life lost every 0.1 s from 1000: a rare dying within a second, next to a second one that is never hurt
+    for (int i = 0; i < 10; ++i) {
+        tick(i * 0.1, {rare(77, 100.f, 1000 - 100 * i), rare(99, 200.f, 1000)});
+        if (i == 5) {
+            fake::g.drawn.clear();
+            fake::Fire(D3H_EVENT_FRAME);
+            fake::DrawBoxes();  // the line on the screen
+            bool dps = false, ttk = false;
+            for (const std::string& d : fake::g.drawn) {
+                dps |= d.rfind("DPS ", 0) == 0;
+                ttk |= d.find("2 elites on the screen") != std::string::npos;
+            }
+            CHECK(dps && ttk);
+        }
+    }
+    tick(1.0, {rare(99, 200.f, 1000)});  // the first rare is gone at 10% life, just hurt: killed, its last life counts
+    if (p->disabled()) fprintf(stderr, "damagemeter: %s", p->lastError().c_str());
+    CHECK(!p->disabled());
+    std::string text = panel();
+    CHECK(text.find("this fight 1.00K") != std::string::npos);
+    CHECK(text.find("peak 1.00K/s") != std::string::npos);
+
+    // nothing hurt for the idle time: the fight is over and its summary is listed
+    for (int i = 1; i <= 60; ++i) tick(1.0 + i * 0.1, {rare(99, 200.f, 1000)});
+    text = panel();
+    CHECK(text.find("no fight right now") != std::string::npos);
+    CHECK(text.find("Rare   1.00K in 0.9s   1.11K/s   peak 1.00K/s   1 killed") != std::string::npos);
+    CHECK(text.find("best DPS 1.11K/s") != std::string::npos);
+    double best = 0;
+    CHECK(fake::g.settings.GetNumber("damagemeter.best_dps", best) && std::fabs(best - 1000.0 / 0.9) < 1.0);
+
+    // healing is not damage: no fight starts
+    tick(8.0, {rare(55, 300.f, 500)});
+    tick(8.1, {rare(55, 300.f, 600)});
+    CHECK(panel().find("no fight right now") != std::string::npos);
+
+    // a pause between snapshots (reader stopped) restarts the measuring instead of counting a huge jump
+    tick(8.2, {rare(55, 300.f, 600)});
+    tick(30.0, {rare(55, 300.f, 100)});
+    CHECK(panel().find("no fight right now") != std::string::npos);
+    CHECK(!p->disabled());
 }
 
 // plugins/healthbars: bars for champions, rares and bosses that are on screen and alive
@@ -1011,30 +1744,33 @@ static void TestHealthBars() {
     fake::g.rects.clear();
     fake::g.drawn.clear();
     fake::Fire(D3H_EVENT_FRAME);
+    fake::DrawBoxes();
     CHECK(!p->disabled());
-    CHECK(fake::g.rects.size() == 1 + 3 * 3);  // box + champion, rare, boss
+    CHECK(fake::g.rects.size() == 3 * 3);  // champion, rare, boss: the fill and border behind them are the host's
+    CHECK(fake::g.boxes.size() == 1 && fake::g.boxes[0].size.x > 200.f && fake::g.boxes[0].size.y > 50.f);
     // per row: percentage (shadow, text) then name (shadow, text); the first row is the champion, 100 units away
     CHECK(fake::g.drawn.size() == 12);
     if (fake::g.drawn.size() == 12) {
         CHECK(fake::g.drawn[0] == "50%" && fake::g.drawn[2] == "Fallen Champion");  // prettified name
         CHECK(fake::g.drawn[8] == "90%" && fake::g.drawn[10] == "Boss, life not read");
     }
-    // the box and the bars sit on the left (default) side, inside the screen
+    // the bars start at the box's corner (its default place, the left side), inside the screen
     CHECK(fake::g.rects[0].x0 >= 0.f && fake::g.rects[0].x1 < 400.f);
 
-    // right side, lowest life first, no box
-    CHECK(fake::g.settings.SetNumber("healthbars.list_side", 1) && fake::g.settings.SetNumber("healthbars.list_sort", 1) &&
-          fake::g.settings.SetNumber("healthbars.list_box", 0));
+    // lowest life first
+    CHECK(fake::g.settings.SetNumber("healthbars.list_sort", 1));
     fake::g.rects.clear();
     fake::g.drawn.clear();
     fake::Fire(D3H_EVENT_FRAME);
-    CHECK(fake::g.rects.size() == 9 && fake::g.rects[0].x0 > 1920.f / 2);
+    fake::DrawBoxes();
+    CHECK(fake::g.rects.size() == 9);
     CHECK(fake::g.drawn.size() == 12 && fake::g.drawn[0] == "50%");  // champion has the lowest life (0.5)
 
     // a name too long for the bar is cut short
     strncpy_s(fake::g.actors[0].name, sizeof(fake::g.actors[0].name), "AVeryLongMonsterNameThatCannotFitInTheBar", _TRUNCATE);
     fake::g.drawn.clear();
     fake::Fire(D3H_EVENT_FRAME);
+    fake::DrawBoxes();
     bool cut = false;
     for (const std::string& d : fake::g.drawn) cut |= d.size() > 2 && d.ends_with("..");
     CHECK(cut);
@@ -1412,11 +2148,23 @@ int main() {
     TestHostApi();
     TestMonsterAffixes();
     TestAffixMask();
+    TestBoxes();
+    TestPluginAssets();
+    TestEffects();
+    TestGameClock();
+    TestPowerNames();
     TestPluginSettings();
     TestLuaSandbox();
+    TestLuaEffects();
+    TestPluginSwitch();
+    TestLuaBox();
+    TestLuaImage();
     TestTimeTracker();
     TestLuaLibraries();
     TestHealthBars();
+    TestDamageMeter();
+    TestEffectsPlugin();
+    TestConventionPlugin();
     TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();

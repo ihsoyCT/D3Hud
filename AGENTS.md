@@ -17,12 +17,13 @@ A Diablo III HUD for Windows x64, C++23, CMake + Visual Studio 2022.
 ## Layout
 
 ```
-src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h (pure, unit-tested),
-              HostApi.h (the plain-C plugin API)
+src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h, Effects.h (buffs/cooldowns,
+              game clock estimate, power names), Boxes.h (placement of plugin boxes), PluginAssets.h (what a plugin may load);
+              all pure and unit-tested. HostApi.h (the plain-C plugin API)
 src/plugins   LuaPlugin (sandboxed Lua + host API binding), PluginSettings (no UI, unit-tested)
 src/reader    Process, AobScanner, ActorList, AcdTable, AttribTable, UiControls, SceneTable, SnoTable, BasesCache, main.cpp
-src/overlay   main.cpp (window, loop, hotkeys), HudRenderer.{h,cpp} (all drawing, settings, panels), PluginHost (host API on ImGui),
-              SalvageRunner (real mouse clicks), ReaderProcess (launches the reader)
+src/overlay   main.cpp (window, loop, hotkeys), HudRenderer.{h,cpp} (all drawing, settings, panels, plugin boxes), PluginHost (host
+              API on ImGui), ImageStore (PNG to texture), SalvageRunner (real mouse clicks), ReaderProcess (launches the reader)
 src/tests     test_core.cpp (CHECK macro; run via ctest)
 analysis      shipped data tables (*.tsv, scene_cells.bin) + notes (ENGINE_MINING.md: how structures were found)
 tools         Python scripts that produced those tables (not needed at runtime)
@@ -49,7 +50,7 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 
 ## Rules that are easy to break
 
-1. **Snapshot ABI.** Any change to `WorldSnapshot`, `UiLayout`, `ActorSnapshot` or `ItemSnapshot`:
+1. **Snapshot ABI.** Any change to `WorldSnapshot`, `UiLayout`, `ActorSnapshot`, `ItemSnapshot` or `EffectSnapshot`:
    bump `kSnapshotVersion` (Snapshot.h) *and* `kReplayVersion` (ReplayIO.cpp), update the
    `static_assert(sizeof(...))` values, and rebuild reader and overlay together. Old replays are
    rejected by design. Appending a new `ActorKind` at the end is safe.
@@ -58,12 +59,12 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 3. **Settings** live in `MinimapLayout` (HudRenderer.h). Adding one needs three things: the field with a
    default, one `t.Add("key", field, lo, hi)` line in `MinimapLayout::Describe` (HudRenderer.cpp; it gives
    Load, Save and clamping), and a control on a settings page (pages are registered in
-   `RegisterBuiltinSettingsPages`: `SettingsPage` = id, title, group, order, draw callback; plugins will use
+   `RegisterBuiltinSettingsPages`: `SettingsPage` = id, title, group, order, draw callback; plugins use
    `AddSettingsPage` too). Without the `Describe` line the setting is silently not saved.
 4. **Finding new game data**: use `D3Hud.Reader.exe --attach "Diablo III64.exe" --ui <text>` to list UI
    controls and `--ui-watch <text> --seconds N` while playing to see which fields change. Measure first,
    then code; write what you found into `analysis/ENGINE_MINING.md`. Prefer reading UI geometry/values
-   over new memory scans.
+   over new memory scans. The player's own attributes (buffs, cooldowns) are watched with `--player-attrs`.
 5. **Pure logic goes in `src/core`** with a test in `src/tests/test_core.cpp`
    (examples: salvage rules, item search, rift progress/timer math).
 6. **The overlay window is `WS_EX_NOACTIVATE` and click-through** by default. Clickable regions are
@@ -82,9 +83,10 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
    is linked statically on purpose.
 10. **Plugin API** (`src/core/HostApi.h`) is plain C and versioned: structs start with `size`, additions go at the
    END, `D3H_API_VERSION` only grows. Never expose the Snapshot structs directly; copy into the API structs
-   (PluginHost.cpp). A new host function needs: the table entry, the implementation in `PluginHost.cpp`, the Lua
-   binding in `LuaPlugin.cpp` (registered only if the host provides it), a line in `plugins/README.md`, and a
-   test against the fake host in `test_core.cpp`. `HostApi.h` must keep compiling as C (`host_api_c.c`).
+   (PluginHost.cpp). A new host function needs: the table entry (and a new `D3H_API_VERSION`), the implementation in
+   `PluginHost.cpp`, the Lua binding in `LuaPlugin.cpp` (registered only if the host provides it), an entry in
+   `PLUGIN.md` (the interface reference; `plugins/README.md` is only the quick start), and a test against the fake host in
+   `test_core.cpp`. `HostApi.h` must keep compiling as C (`host_api_c.c`).
 11. **Lua is compiled as C++** (CMakeLists.txt): its errors are then C++ exceptions and the destructors of our bindings
    run. As C it uses longjmp, which skips them and crashed when an error passed through a binding that owned a
    `std::string`. Do not switch it back, and include the Lua headers without `extern "C"`.
@@ -94,6 +96,12 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 13. **Plugin sandbox.** Lua gets only base (whitelisted), string, table, math, utf8, coroutine; text chunks only; a
    memory cap and an instruction budget per call. Do not add io/os/debug/package, `load`, or any function that
    reaches game memory, injects input, or touches files or the network; plugins stay unable to play the game.
+   The one file access is `d3hud.image`: the HOST reads a PNG from the plugin's own folder by a plain `name.png`
+   (`IsPlainImageName`, size caps in `PluginAssets.h`); the plugin never sees a path. Keep it that narrow.
+14. **Boxes.** What a plugin draws at a fixed place on the screen goes through `d3hud.box` (`register_box`), not through
+   coordinates and position settings of its own: the host owns the position (`Boxes.h`, stored in `d3hud.ini` as
+   `pluginbox.<id>.*`) and draws the fill and border the user picks. Things that follow the world (a bar over a monster)
+   are drawn at their screen position without a box.
 
 ## Safety boundaries (do not weaken without asking)
 
@@ -109,11 +117,11 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 
 - Match the surrounding code: naming, comment density, idioms. Comments say *why*, not what.
 - Own resources with RAII, not paired calls: `UniqueHandle` (Win32.h) for kernel handles, `File` (Paths.h)
-  for `FILE*`, `PanelScope` (HudRenderer.h) for the five dock panels. No new manual `CloseHandle`/`fclose`.
+  for `FILE*`, `PanelScope` (HudRenderer.h) for the dock panels. No new manual `CloseHandle`/`fclose`.
 - Small, focused commits with an imperative message; do not mix unrelated changes. Build and test
   before committing; never commit a state that does not compile.
-- Keep `README.md` (user-facing) current when behaviour or options change; put investigations in
-  `FEATURE_IDEAS.md` / `analysis/`; the plugin idea is in `PLUGIN_PLAN.md`.
+- Keep `README.md` (user-facing) current when behaviour or options change, and `PLUGIN.md` when the plugin interface
+  changes; put investigations in `FEATURE_IDEAS.md` / `analysis/`; the plugin design is in `PLUGIN_PLAN.md`.
 - Probe output (`rift_*watch*.txt`) and `dist/`, `build/` are git-ignored.
 
 ## Tooling pitfalls seen here

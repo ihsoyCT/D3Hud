@@ -1,6 +1,11 @@
 # Engine mining — TurboHUD.exe decompilation (2026-10-30)
 
-## Status: decompilation infrastructure COMPLETE, offsets located, extraction next
+## Status (updated 2026-10-31): the findings below are implemented in the reader
+
+Written as a log, oldest first: an early claim can be retracted further down (one is struck out), and the sections from
+"Old TurboHUD ... de-protected" on are the current knowledge (actor list, ACDs, attributes, UI controls, scenes, gizmos, rift
+progress, and at the end buffs, cooldowns and the ring). The first sections describe how the engine was taken apart and are kept
+for the method.
 
 ## What was beaten
 
@@ -301,3 +306,94 @@ the marker position (the float drops to 0 at the end while the marker stays at 1
 square the minimap icons are placed in: (1515,80)-(1815,380) UI units, i.e. centre (1665,230) and radius 150.
 That equals the hand-calibrated overlay placement (0.19 H from the top, ~0.168 H from the right on 16:9,
 radius ~0.125 H), so the overlay follows this control instead of using calibrated offsets.
+
+## Buffs, cooldowns and timers (how TurboHUD does it; confirmed live 2026-10-31 with `--player-attrs`)
+
+All of it is attributes of the **player's** ACD attribute group, the same `idx | mod<<12` map as items/monsters
+(AttribTable.h), where the modifier is the **power SNO** (a pylon, a passive, a skill, an item power).
+Indices are the 2.6.10 ones from `attributes.tsv` +5 from ~380 (check each one live before trusting it).
+
+- **Buff running**: for power P the attributes `Buff_Icon_Start_Tick<N>` and `Buff_Icon_End_Tick<N>` (N = 0..31, the
+  buff's icon slot; 589+N and 621+N in 2.6.10, so shifted) exist with modifier P. Value = game tick.
+  `Buff_Icon_Count<N>` = stack count.
+  time left = (End_Tick<N>[P] - game tick) / 60;  elapsed = (game tick - Start_Tick<N>[P]) / 60.
+  An attribute that is absent or has End <= now means the buff is gone. TurboHUD's pylon timers and
+  its cheat death *buff* (the "ready/active" icon) are this.
+- **Skill / passive cooldown**: `Power_Cooldown` (357) = tick at which it is ready again, `Power_Cooldown_Start` (358) =
+  tick it started, both with modifier = the power SNO; only meaningful when > 0. Remaining = (Power_Cooldown - tick)/60,
+  total = (Power_Cooldown - Power_Cooldown_Start)/60. Cheat death is a passive on a cooldown, so it is this pair
+  (powers: Generic_ScoundrelCheatDeathPassive 485531, Generic_TemplarCheatDeathPassive 485532,
+  Generic_EnchantressCheatDeathPassive 485530, Generic_EnchantressCheatDeath 484963; follower versions).
+  Also `Skill_Charges` (modifier = power) for charge based skills, `Reincarnation_Buff` (523).
+- **Game tick** ("CurrentGameTick", 60 per second of game time): a single int in the game state, not an attribute.
+  Not located by us yet. a probe that snapshots the game's private memory twice a few seconds apart and keeps the int32 values that advanced by 60 per second finds ~200 such counters in a live game, clustered in a few families (one
+  family had >25 identical copies). To pick the real one: read `Power_Cooldown_Start` / `Buff_Icon_Start_Tick` right
+  after using a skill or clicking a pylon; that value equals the tick at that moment.
+- **What is needed in the reader**: (1) the player's ACD id -> `attribGroup` (should work like monsters: the player
+  actor has an ACD), (2) an enumerate-all-entries call on the group (AttribTable only has Get by exact key), or Get
+  with modifier for a watch list of power SNOs, (3) the game tick, (4) publish a small `BuffSnapshot[]`
+  (power sno, start, end, count) + cooldowns in WorldSnapshot (ABI bump). Names/icons for the power SNOs come from
+  the Turbo.SNO power table, like `sno_actors.tsv` does for actors.
+
+**Verified live (`D3Hud.Reader.exe --attach "Diablo III64.exe" --player-attrs --seconds N`)**
+
+- The player's ACD +0x130 group exists, but its **inline map is empty**. The hero's attributes (1071 entries) are in a
+  second map the group points to at **group +0x10**: same layout as the inline one (u32 mask at +0, u64 pointer to the
+  buckets at +0x10; live: mask 0x1FF, buckets at map+0x1C). `AttribTable::Enumerate` walks both. `Get` only reads
+  the inline map, so a hero attribute needs the external one too (monsters/items did not).
+- **Indices in this client** (2.6.10 + 5 already below 357): `Power_Cooldown` **362** (finish tick), `Power_Cooldown_Start`
+  **363**, `Buff_Icon_Start_Tick<N>` **594+N**, `Buff_Icon_End_Tick<N>` **626+N**, `Buff_Icon_Count<N>` **767+N**
+  (N = 0..31, modifier = power SNO). Idle values are sentinels: cooldown finish 0xFFFFFFFF and start 0x7FFFFFFF
+  (not on cooldown), buff ticks 0. A running buff e.g. SNO 485530 (Enchantress cheat death passive) had
+  Start 45298 / End 45388 in slot 3, i.e. 90 ticks (1.5 s) and the start was refreshed every 30 ticks.
+- **Game tick**: the values of fresh start ticks (~47,200 at that moment, 60/s) are the tick. Memory scanning
+  found only per-object copies (two smooth counters, both inside heap records, no stable address). Until the
+  global is found, "now" can be estimated as: the newest changed Start_Tick/Power_Cooldown_Start seen by the
+  reader, advanced with the wall clock at 60 ticks/s (error < one poll interval).
+
+**Cheat death cooldown, seen live (a 90 s `--player-attrs` log)**
+
+- The Enchantress follower's cheat death passive (SNO 485530) holds a **buff slot of its own for the cooldown**:
+  slot 1 had Start 55268 / End 62468 / Count 1, i.e. **7200 ticks = 120 s**. Slot 3 of the same SNO is a separate
+  short buff that is re-armed every 60 ticks (start/end both advance; it is the "passive is on" refresh, not the cooldown).
+  Other passives/ring powers refresh the same way every 30 or 60 ticks (485107 combined shield, 485108, the unique ring passives).
+- At 69.5 s into the log the cooldown slot went to 0 in Start, End and Count (and idx 871 1 -> 0): the buff
+  expires by being zeroed, not by the entry disappearing. The tick at that moment was ~62468 = its End tick, and
+  tick(t) = 58314 + 60*(t - 0.27) matched to within ~8 ticks over 69 s, so the wall-clock estimate of the tick
+  (anchored on a freshly refreshed Start tick) is good enough for timers.
+- Reading a timer therefore = find the slots N where `Buff_Icon_Count<N>[P] > 0` and `End_Tick<N>[P] > now`, and use the
+  slot whose duration (End - Start) is the interesting one; a power can occupy several slots at once.
+- Generic_BanterCooldown (134334) shows a stack count falling 3 -> 1 (slot 0): not every "buff" is a visible status.
+- Not captured in that log: a pylon click and the `Power_Cooldown` (362/363) pair, which stayed at their sentinels
+  (skills with real cooldowns were not used).
+
+**Pylon and skill cooldown, seen live (pylon.log, 90 s)**
+
+- **Pylon duration**: Channeling pylon = power 266258 `Generic_PagesBuffInfiniteCasting`, slot 0: Start 74518, End 78118
+  = **3600 ticks = 60 s**. It was zeroed (Start, End, Count, idx 865) at exactly the tick the End tick named
+  (log second 48.7 -> tick ~78118). So a pylon's remaining time is the same buff-slot arithmetic as cheat death.
+- **Skill / item cooldown**: `Power_Cooldown` 362 (finish) and `Power_Cooldown_Start` 363 with modifier = power SNO;
+  health potion = power 30211 `Generic_DrinkHealthPotion`: Start 75520, finish 77320 = **1800 ticks = 30 s**; both go back to
+  the sentinels (0xFFFFFFFF / 0x7FFFFFFF) when the cooldown ends (seen twice, to the tick). Each potion also started a
+  10 minute buff (36000 ticks) under 30479 `Generic_ShrineDesecratedFrenzied` / 260348 `..DesecratedHoarder`
+  (not understood; probably a season/shrine effect that rides on the potion).
+- **Tick rate check**: ticks 75520 (log 5.53 s) and 78241 (log 50.84 s): 2721 ticks / 45.31 s = 60.05 per second.
+- Monster affix casts on the player are buffs too (MonsterAffixMolten 90314, VortexCast 120305, DesecratorCast, FrozenCast,
+  FastMummyDiseaseCloud) with short durations (18..280 ticks), so a plugin must filter by power SNO.
+- Slot layout recap (all modifier = power SNO): Start 594+N, End 626+N, Count 767+N (N = 0..31), the
+  Power_Buff_<N>_Visual_Effect_None flag at 865+6*N (1 while active; seen 865, 871, 895 for slots 0, 1, 5).
+
+**In the product (2026-10-31)**: the reader enumerates the player's attribute map at ~10 Hz (`AttribTable::Enumerate`),
+`ExtractEffects` (src/core/Effects.cpp) turns it into `WorldSnapshot::effects` and `GameClock` estimates `gameTick` from the
+start ticks that just changed. Plugins get it as `d3hud.effects()`. Names: analysis/sno_powers.tsv (2788 powers TurboHUD
+names; the rest show as "Power <sno>"). Live check: 14 effects, tick advancing 300 per 5 s, no change in publish rate.
+
+**Convention of Elements (ring), seen live on a Demon Hunter (2026-10-31)**: power 430674 (`IBuff ConventionOfElements` in
+TurboHUD). The active element is a buff of 240 ticks (4 s) in the icon slot of that element, and the next one starts on the
+tick the last ends: slots 3 -> 5 -> 6 -> 2 -> 3 ... for 70 s. A second slot (8) holds a 960 tick (16 s) span that restarts
+with every lap. The order differs between hero classes (the slot is the element, the order is not fixed), so the plugin
+learns it from the transitions. Slot = element, the seven in alphabetical order: 1 Arcane, 2 Cold, 3 Fire, 4 Holy,
+5 Lightning, 6 Physical, 7 Poison (the plugin's slot is TurboHUD's IconIndex 1..7). Evidence: TurboHUD's ConventionOfElements
+plugin lists the slots each hero class uses, and they are the classes' elements: Wizard 1 2 3 5 (Arcane, Cold, Fire,
+Lightning), Witch Doctor 2 3 6 7 (Cold, Fire, Physical, Poison), Crusader 2 3 4 5 6, Monk 3 4 5 6, Necromancer 2 6 7,
+Barbarian and Demon Hunter 2 3 5 6; the Demon Hunter lap seen live was Fire, Lightning, Physical, Cold.

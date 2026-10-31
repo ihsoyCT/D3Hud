@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "imgui.h"
+#include "Boxes.h"
 #include "ItemSearch.h"
 #include "Paths.h"
 #include "imgui_internal.h"
@@ -241,6 +242,21 @@ void MinimapLayout::DescribePluginPanel(SettingsTable& t, const std::string& id)
     t.Add(p + "y", st.y, lo, hi, 4);
     t.Add(p + "w", st.w, lo, hi, 4);
     t.Add(p + "h", st.h, lo, hi, 4);
+}
+
+// ini keys of a plugin box: pluginbox.<id>.<x|y>
+void MinimapLayout::DescribePluginBox(SettingsTable& t, const std::string& id) {
+    PluginBoxState& st = pluginBoxes[id];
+    const std::string p = "pluginbox." + id + ".";
+    t.Add(p + "x", st.x, -1.f, 1.f, 4);
+    t.Add(p + "y", st.y, -1.f, 1.f, 4);
+    t.Add(p + "styled", st.styled);
+    t.Add(p + "fill", st.fill, 0u, 0xFFFFFFu);
+    t.Add(p + "fill_alpha", st.fillAlpha, 0, 255);
+    t.Add(p + "border", st.border, 0u, 0xFFFFFFu);
+    t.Add(p + "border_alpha", st.borderAlpha, 0, 255);
+    t.Add(p + "border_width", st.borderWidth, 0.f, 8.f);
+    t.Add(p + "padding", st.padding, 0.f, 40.f);
 }
 
 bool MinimapLayout::Load(const std::filesystem::path& path) {
@@ -987,7 +1003,7 @@ void HudRenderer::DrawDock(const HudOptions& opt) {
                 panelHoverUntil_[i] = (float)ImGui::GetTime() + 0.30f;
         }
         for (PluginPanel& p : pluginPanels_) {
-            if (St(p).hidden) continue;
+            if (St(p).hidden || p.off) continue;
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   St(p).pinned ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.85f, 0.85f, 0.9f, 1.0f));
             if (!first) ImGui::SameLine();
@@ -2197,6 +2213,181 @@ void HudRenderer::AddPluginPanel(std::string id, std::string title, std::functio
     (void)t.Load(layoutPath_);  // no file yet is fine
 }
 
+void HudRenderer::AddPluginBox(std::string id, std::string title, BoxDraw draw, ImVec2 defaultPos, BoxLook look) {
+    PluginBox& b = pluginBoxes_.emplace_back();
+    b.id = std::move(id);
+    b.title = std::move(title);
+    b.draw = std::move(draw);
+    b.defaultPos = defaultPos;
+    b.look = look;
+    (void)layout_.pluginBoxes[b.id];  // creates the entry the table below binds to
+    SettingsTable t;  // where the user put it in an earlier session: the layout file was read before the plugin registered
+    layout_.DescribePluginBox(t, b.id);
+    (void)t.Load(layoutPath_);  // no file yet is fine
+}
+
+void HudRenderer::SetPluginBoxOff(const std::string& id, bool off) {
+    for (PluginBox& b : pluginBoxes_)
+        if (b.id == id) b.off = off;
+}
+
+namespace {
+
+// How a box looks right now: the user's choice if there is one, else what its plugin suggested, else the standard.
+struct BoxStyle {
+    ImU32 fill, border;
+    float borderWidth, padding;
+};
+
+ImU32 ArgbColor(uint32_t argb) { return IM_COL32((argb >> 16) & 255, (argb >> 8) & 255, argb & 255, argb >> 24); }
+ImU32 RgbAlpha(uint32_t rgb, int alpha) { return IM_COL32((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, std::clamp(alpha, 0, 255)); }
+
+}  // namespace
+
+// The plugins' boxes, every frame (independent of F9, like the world labels). A box is drawn by its plugin; the host puts
+// a fill and a border behind it (colours the user can change) and, while the user moves boxes, a frame, the title and a
+// drag area as well, and a small toolbar offers Done / Reset.
+void HudRenderer::DrawPluginBoxes(HudOptions& opt) {
+    if (pluginBoxes_.empty()) return;
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float k = layout_.uiScale;
+    if (editBoxes_) {
+        ImGui::SetNextWindowPos(ImVec2(display.x * 0.5f, 8.f * k), ImGuiCond_Always, ImVec2(0.5f, 0.f));
+        if (ImGui::Begin("##box_toolbar", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
+            ImGui::TextUnformatted("Drag the boxes where you want them.");
+            ImGui::SameLine();
+            if (ImGui::Button("Done")) editBoxes_ = false;
+            ImGui::SameLine();
+            if (ImGui::Button("Reset positions")) {
+                for (auto& [id, st] : layout_.pluginBoxes) st.x = st.y = kBoxUnset;
+                SaveLayout();
+            }
+            const ImVec2 p = ImGui::GetWindowPos(), sz = ImGui::GetWindowSize();
+            opt.AddHot(p.x, p.y, p.x + sz.x, p.y + sz.y);
+        }
+        ImGui::End();
+    }
+    ImDrawList* fg = ImGui::GetForegroundDrawList();  // where the plugins' draw_* calls land
+    for (PluginBox& b : pluginBoxes_) {
+        if (b.off) continue;
+        MinimapLayout::PluginBoxState& st = layout_.pluginBoxes[b.id];
+        BoxStyle style;
+        if (st.styled) {
+            style = {RgbAlpha(st.fill, st.fillAlpha), RgbAlpha(st.border, st.borderAlpha), st.borderWidth, st.padding};
+        } else {
+            style = {b.look.hasFill ? ArgbColor(b.look.fillArgb) : RgbAlpha(0x000000, 130),
+                     b.look.hasBorder ? ArgbColor(b.look.borderArgb) : RgbAlpha(0x7A8696, 160), 1.f,
+                     b.look.padding > 0.f ? b.look.padding : 6.f};
+        }
+        style.padding *= k;
+        const Vec2 outer = BoxOrigin({st.x, st.y}, {b.defaultPos.x, b.defaultPos.y}, {b.size.x, b.size.y}, display.x, display.y);
+        // the plugin draws on channel 1 and reports its size; the fill and border then go underneath, on channel 0
+        fg->ChannelsSplit(2);
+        fg->ChannelsSetCurrent(1);
+        ImVec2 used(0.f, 0.f);
+        b.draw(ImVec2(outer.x + style.padding, outer.y + style.padding), &used);
+        fg->ChannelsSetCurrent(0);
+        const bool empty = used.x <= 0.f && used.y <= 0.f;
+        b.size = empty ? ImVec2(0.f, 0.f) : ImVec2(used.x + 2.f * style.padding, used.y + 2.f * style.padding);
+        const ImVec2 a(outer.x, outer.y), c(outer.x + b.size.x, outer.y + b.size.y);
+        if (!empty) {
+            fg->AddRectFilled(a, c, style.fill, 3.f * k);
+            if (style.borderWidth > 0.f) fg->AddRect(a, c, style.border, 3.f * k, 0, style.borderWidth);
+        }
+        fg->ChannelsMerge();
+        if (!editBoxes_) continue;
+        // moving: a frame around the box, even when it has nothing to show now (a minimum size keeps it findable)
+        const ImVec2 shown(std::max(b.size.x, 150.f * k), std::max(b.size.y, 26.f * k));
+        ImGui::SetNextWindowPos(a, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(shown, ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+        const bool open = ImGui::Begin(("##box." + b.id).c_str(), nullptr,
+                                       ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
+                                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                           ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar);
+        ImGui::PopStyleVar();
+        if (open) {
+            // the frame and the label go on the foreground list, on top of what the plugins draw (a window's own list is below it)
+            const ImVec2 e(a.x + shown.x, a.y + shown.y);
+            ImGui::InvisibleButton("##drag", shown);
+            const bool active = ImGui::IsItemActive();
+            fg->AddRectFilled(a, e, IM_COL32(60, 170, 255, active ? 80 : 36));
+            fg->AddRect(a, e, IM_COL32(120, 210, 255, 240), 0.f, 0, 2.f);
+            // "plugin: box", e.g. "convention: Convention of Elements" (just the title when it is the plugin's name)
+            const std::string plugin = b.id.substr(0, b.id.find('.'));
+            const bool same = _stricmp(plugin.c_str(), b.title.c_str()) == 0;
+            const std::string label = same ? b.title : plugin + ": " + b.title;
+            const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+            const float lx = std::clamp(a.x, 0.f, std::max(0.f, display.x - ts.x - 10.f));
+            const ImVec2 tp(lx, a.y - ts.y - 5.f >= 0.f ? a.y - ts.y - 5.f : a.y);  // above the box; inside it at the top of the screen
+            fg->AddRectFilled(tp, ImVec2(tp.x + ts.x + 10.f, tp.y + ts.y + 4.f), IM_COL32(20, 90, 140, 245));
+            fg->AddRect(tp, ImVec2(tp.x + ts.x + 10.f, tp.y + ts.y + 4.f), IM_COL32(120, 210, 255, 255));
+            fg->AddText(ImVec2(tp.x + 5.f, tp.y + 2.f), IM_COL32(255, 255, 255, 255), label.c_str());
+            if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.f)) {
+                const ImVec2 md = ImGui::GetIO().MouseDelta;
+                const Vec2 moved = BoxMoved(outer, {md.x, md.y}, {shown.x, shown.y}, display.x, display.y);
+                const Vec2 f = BoxFraction(moved, display.x, display.y);
+                st.x = f.x;
+                st.y = f.y;
+            }
+            if (ImGui::IsItemDeactivated()) SaveLayout();
+            opt.AddHot(std::min(tp.x, a.x), std::min(tp.y, a.y), std::max(e.x, tp.x + ts.x + 10.f), e.y);
+        }
+        ImGui::End();
+    }
+}
+
+// Settings page of the plugin: move it, and pick its look (the host draws the fill and border).
+void HudRenderer::DrawPluginBoxSettings(const std::string& id) {
+    for (PluginBox& b : pluginBoxes_) {
+        if (b.id != id) continue;
+        MinimapLayout::PluginBoxState& st = layout_.pluginBoxes[b.id];
+        ImGui::PushID(b.id.c_str());
+        ImGui::TextUnformatted(b.title.c_str());
+        ImGui::SameLine();
+        if (ImGui::Button(editBoxes_ ? "Done moving" : "Move on the screen")) editBoxes_ = !editBoxes_;
+        if (!st.styled) {  // start from what it looks like now, so the first edit changes just that
+            st.fill = b.look.hasFill ? (b.look.fillArgb & 0xFFFFFFu) : 0x000000u;
+            st.fillAlpha = b.look.hasFill ? static_cast<int>(b.look.fillArgb >> 24) : 130;
+            st.border = b.look.hasBorder ? (b.look.borderArgb & 0xFFFFFFu) : 0x7A8696u;
+            st.borderAlpha = b.look.hasBorder ? static_cast<int>(b.look.borderArgb >> 24) : 160;
+            st.borderWidth = 1.f;
+            st.padding = b.look.padding > 0.f ? b.look.padding : 6.f;
+        }
+        bool changed = false;
+        auto colour = [&](const char* label, uint32_t& rgb, int& alpha) {
+            float c[4] = {((rgb >> 16) & 255) / 255.f, ((rgb >> 8) & 255) / 255.f, (rgb & 255) / 255.f, alpha / 255.f};
+            if (!ImGui::ColorEdit4(label, c, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) return;
+            const auto byte = [](float f) { return static_cast<uint32_t>(std::clamp(f, 0.f, 1.f) * 255.f + 0.5f); };
+            rgb = (byte(c[0]) << 16) | (byte(c[1]) << 8) | byte(c[2]);
+            alpha = static_cast<int>(byte(c[3]));
+            st.styled = true;
+            changed = true;
+        };
+        colour("fill", st.fill, st.fillAlpha);
+        ImGui::SameLine();
+        colour("border", st.border, st.borderAlpha);
+        if (ImGui::SliderFloat("border width", &st.borderWidth, 0.f, 6.f, "%.1f")) st.styled = changed = true;
+        if (ImGui::SliderFloat("padding", &st.padding, 0.f, 30.f, "%.0f")) st.styled = changed = true;
+        if (ImGui::Button("default look")) {
+            st.styled = false;
+            changed = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Move it with the button; a fully transparent fill and border hide the box's background.");
+        ImGui::PopID();
+        if (changed) SaveLayout();
+        return;
+    }
+}
+
+void HudRenderer::SetPluginPanelOff(const std::string& id, bool off) {
+    for (PluginPanel& p : pluginPanels_)
+        if (p.id == id) p.off = off;
+}
+
 void HudRenderer::DrawPluginPanelSettings(const std::string& id) {
     for (PluginPanel& p : pluginPanels_) {
         if (p.id != id) continue;
@@ -2234,7 +2425,7 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
     if (!opt.showPanels)
         for (PluginPanel& p : pluginPanels_) p.size = ImVec2(0.f, 0.f);
     for (PluginPanel& p : pluginPanels_)
-        if (St(p).hidden) p.size = ImVec2(0.f, 0.f);
+        if (St(p).hidden || p.off) p.size = ImVec2(0.f, 0.f);
     for (int i = 0; i < kPanels; ++i)
         if (layout_.panelHidden[i]) panelSize_[i] = ImVec2(0.f, 0.f);  // hidden in Settings
     if (opt.showPanels) {
@@ -2245,10 +2436,11 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
         if (visible(PanelId::Items)) DrawSalvagePanel(snap, opt);
         if (visible(PanelId::Actors)) DrawActorPanel(snap, opt);
         for (PluginPanel& p : pluginPanels_)
-            if (!St(p).hidden) DrawPluginPanel(p, opt);
+            if (!St(p).hidden && !p.off) DrawPluginPanel(p, opt);
         DrawSettings(snap, opt);  // always reachable
     }
     if (opt.showMinimap) DrawMinimap(snap, opt);
+    DrawPluginBoxes(opt);        // the plugins' on-screen boxes: independent of F9
     DrawGroundLabels(snap, opt); // independent of F9, like the game's own item labels
     DrawItemBadges(snap);        // independent of F9: only while the game shows inventory/stash
     DrawAutoSalvage(snap, opt);  // safe area + salvage preview while the inventory is open

@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "Effects.h"
+#include "ImageStore.h"
 #include "LuaPlugin.h"
 #include "PluginSettings.h"
 #include "Snapshot.h"
@@ -35,6 +37,8 @@ public:
     // snapshot advanced), WORLD_CHANGE / INVENTORY_* / ITEM_HOVER on changes, then FRAME.
     void OnFrame(const WorldSnapshot& snap, float screenW, float screenH);
     void Shutdown();  // saves the settings
+    // The graphics device the plugins' images become textures on; call before LoadAll.
+    void SetDevice(ID3D11Device* device) { images_.SetDevice(device); }
 
     struct Entry {
         std::string folder, name, version, error;
@@ -52,6 +56,9 @@ private:
     void DrawExtrasOf(const std::string& plugin);  // options + dock panel controls, at the end of the plugin's page
     bool HasExtras(const std::string& plugin) const;
     void AddSettingsPageFor(const std::string& plugin);
+    // The Plugins page's checkbox: pauses the plugin and hides its dock tabs, remembered in plugins.ini.
+    void SetPluginEnabled(Entry& e, bool on);
+    void ApplyEnabled(const Entry& e);
     void Save();
 
     HudRenderer& renderer_;
@@ -67,9 +74,17 @@ private:
         const std::string* plugin;
     };
     std::vector<Sub> subs_;
+    ImageStore images_;                                   // the plugins' pictures (d3hud.image)
+    std::filesystem::path loadingDir_;                    // the folder of the plugin whose main.lua is running right now
+    std::map<std::string, std::filesystem::path> pluginDirs_;  // plugin -> its folder
+    std::map<std::string, std::set<std::string>> imagesOf_;    // plugin -> the images it has loaded
+    std::set<std::string> switchedOff_;  // plugins the user switched off (plugins.disabled in plugins.ini)
     std::set<std::string> pluginsWithPage_;               // plugins that registered a page of their own
     std::map<std::string, std::vector<std::string>> panelsOf_;  // plugin -> its dock panel ids
+    std::map<std::string, std::vector<std::string>> boxesOf_;   // plugin -> its movable box ids
     const WorldSnapshot* snap_ = nullptr;  // valid during OnFrame
+    double tickNow_ = -1;  // the game tick of this frame (extrapolated from the snapshot), -1 unknown
+    PowerNames powers_;    // names for the effects
     float screenW_ = 0, screenH_ = 0;
     uint64_t lastFrameIndex_ = ~0ull;
     uint32_t lastWorld_ = 0;

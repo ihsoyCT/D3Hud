@@ -1,5 +1,9 @@
 # M1b/M2a analysis — findings (all captures + live check 2026-10-30)
 
+> **Historical.** This is how the player was first found, by a standing-cluster scan (`PlayerTracker`, `--find-player`). The
+> reader now takes the player from the actor list (`ActorList.h`, see `ENGINE_MINING.md`); `PlayerTracker` stays as the fallback
+> when the actor array is not found. Kept for the method and the captures it used.
+
 ## STATUS: live player tracking WORKS (M2a done)
 
 - `D3Hud.Reader --find-player`: attach -> position in ~2.5 s live.

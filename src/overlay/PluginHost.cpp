@@ -7,6 +7,8 @@
 
 #include "HudRenderer.h"
 #include "Paths.h"
+#include "PluginAssets.h"
+#include "Win32.h"
 #include "imgui.h"
 
 namespace d3hud {
@@ -71,6 +73,7 @@ struct PluginHost::HostFns {
             f.rift_progress = u.riftProgress;
             f.rift_timer_fraction = u.riftTimerFraction;
             f.stash_tab = u.stashTab;
+            f.effect_count = s->effectCount;
         }
         // a plugin built against a shorter struct gets just that prefix
         memcpy(out, &f, std::min<size_t>(size, sizeof(f)));
@@ -93,6 +96,30 @@ struct PluginHost::HostFns {
         r.rarity = static_cast<int32_t>(a.itemRarity);
         r.flags = a.itemFlags;
         strncpy_s(r.name, sizeof(r.name), a.name, _TRUNCATE);
+        r.size = out->size;  // the caller's struct size: a prefix is copied
+        memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
+        return 1;
+    }
+
+    static d3h_bool GetEffect(uint32_t i, d3h_effect* out) {
+        const WorldSnapshot* s = g_host->snap_;
+        if (s == nullptr || i >= s->effectCount || i >= static_cast<uint32_t>(kMaxEffects)) return 0;
+        const EffectSnapshot& e = s->effects[i];
+        d3h_effect r{};
+        r.sno = e.sno;
+        r.kind = e.kind == EffectKind::Cooldown ? D3H_EFFECT_COOLDOWN : D3H_EFFECT_BUFF;
+        r.stacks = e.count;
+        r.slot = e.slot;
+        const EffectTimes t = TimesOf(e, g_host->tickNow_);
+        r.duration = t.duration;
+        if (g_host->tickNow_ >= 0) {
+            r.timed = 1;
+            r.remaining = t.remaining;
+            r.elapsed = t.elapsed;
+        }
+        const std::string readable = g_host->powers_.Readable(e.sno);
+        strncpy_s(r.name, sizeof(r.name), readable.c_str(), _TRUNCATE);
+        if (const std::string* code = g_host->powers_.Code(e.sno)) strncpy_s(r.code, sizeof(r.code), code->c_str(), _TRUNCATE);
         r.size = out->size;  // the caller's struct size: a prefix is copied
         memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
         return 1;
@@ -171,6 +198,63 @@ struct PluginHost::HostFns {
         host->renderer_.AddPluginPanel(id, d->title, [host, draw, user] { draw(&host->ui_, user); },
                                        ImVec2(d->default_w, d->default_h));
         host->panelsOf_[*plugin].push_back(id);
+        return 1;
+    }
+
+    // d3hud.image: a plain "name.png" from the plugin's own folder, read and decoded here, never by the plugin
+    static d3h_bool LoadImage(const char* name, d3h_image* out) {
+        const std::string* plugin = CurrentPluginName();
+        if (plugin == nullptr || name == nullptr || out == nullptr) return 0;
+        PluginHost* host = g_host;
+        const auto refuse = [&](const std::string& why) {
+            Log(D3H_LOG_WARN, std::format("image '{}': {}", name, why).c_str());
+            return 0;
+        };
+        if (!IsPlainImageName(name)) return refuse("not a plain name.png (letters, digits, _ and -; no directories)");
+        const auto dir = host->pluginDirs_.find(*plugin);
+        const std::filesystem::path folder = dir != host->pluginDirs_.end() ? dir->second : host->loadingDir_;
+        if (folder.empty()) return refuse("the plugin's folder is not known");
+        std::set<std::string>& mine = host->imagesOf_[*plugin];
+        if (!mine.contains(name) && mine.size() >= static_cast<size_t>(kMaxImagesPerPlugin)) return refuse("too many images");
+        ImageStore::Loaded loaded;
+        std::string why;
+        if (!host->images_.Load(folder / std::string(name), &loaded, &why)) return refuse(why);
+        mine.insert(name);
+        out->id = loaded.id;
+        out->width = loaded.width;
+        out->height = loaded.height;
+        return 1;
+    }
+
+    static void DrawImage(int32_t layer, int32_t image, d3h_rect r, d3h_color tint) {
+        const ImTextureID texture = g_host->images_.Texture(image);
+        if (texture == 0) return;
+        ListFor(layer)->AddImage(texture, ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), ImVec2(0.f, 0.f), ImVec2(1.f, 1.f),
+                                 ArgbToImColor(tint));
+    }
+
+    static d3h_bool RegisterBox(const d3h_box_desc* d) {
+        const std::string* plugin = CurrentPluginName();
+        if (plugin == nullptr || d->id == nullptr || d->title == nullptr || d->draw == nullptr) return 0;
+        PluginHost* host = g_host;
+        const d3h_box_fn draw = d->draw;
+        void* const user = d->user;
+        const std::string id = *plugin + "." + d->id;
+        HudRenderer::BoxLook look;
+        look.hasFill = (d->flags & D3H_BOX_FILL_SET) != 0;
+        look.hasBorder = (d->flags & D3H_BOX_BORDER_SET) != 0;
+        look.fillArgb = d->fill;
+        look.borderArgb = d->border;
+        look.padding = d->padding;
+        host->renderer_.AddPluginBox(
+            id, d->title,
+            [draw, user](ImVec2 origin, ImVec2* size) {
+                d3h_vec2 used{0.f, 0.f};
+                draw({origin.x, origin.y}, &used, user);
+                *size = ImVec2(used.x, used.y);
+            },
+            ImVec2(std::clamp(d->default_x, 0.f, 1.f), std::clamp(d->default_y, 0.f, 1.f)), look);
+        host->boxesOf_[*plugin].push_back(id);
         return 1;
     }
 
@@ -296,11 +380,16 @@ PluginHost::PluginHost(HudRenderer& renderer) : renderer_(renderer) {
     host_.get_frame = HostFns::GetFrame;
     host_.get_actor = HostFns::GetActor;
     host_.get_item = HostFns::GetItem;
+    host_.get_effect = HostFns::GetEffect;
+    if (!powers_.Load(ExeDir() / "sno_powers.tsv")) std::print(stderr, "no sno_powers.tsv - effects get generic names\n");
     host_.world_to_screen = HostFns::WorldToScreenFn;
     host_.subscribe = HostFns::Subscribe;
     host_.draw_text = HostFns::DrawText;
     host_.register_page = HostFns::RegisterPage;
     host_.register_panel = HostFns::RegisterPanel;
+    host_.register_box = HostFns::RegisterBox;
+    host_.load_image = HostFns::LoadImage;
+    host_.draw_image = HostFns::DrawImage;
     host_.draw_line = HostFns::DrawLine;
     host_.draw_rect = HostFns::DrawRect;
     host_.text_size = HostFns::TextSize;
@@ -344,6 +433,24 @@ void PluginHost::LoadAll(const std::filesystem::path& pluginsDir, const std::fil
     namespace fs = std::filesystem;
     settingsFile_ = settingsFile;
     (void)settings_.Load(settingsFile_);  // none yet on a first start
+    d3h_setting_desc off{};  // the host's own setting: names of the plugins the user switched off, comma separated
+    off.size = sizeof(off);
+    off.key = "disabled";
+    off.type = D3H_SETTING_STRING;
+    off.label = "switched off";
+    off.def_string = "";
+    off.flags = D3H_SETTING_HIDDEN;
+    if (settings_.Define("plugins", off)) {
+        std::string list;
+        (void)settings_.GetString("plugins.disabled", list);
+        size_t from = 0;
+        while (from <= list.size()) {
+            size_t comma = list.find(',', from);
+            if (comma == std::string::npos) comma = list.size();
+            if (comma > from) switchedOff_.insert(list.substr(from, comma - from));
+            from = comma + 1;
+        }
+    }
 
     std::error_code ec;
     std::vector<fs::path> dirs;
@@ -355,11 +462,15 @@ void PluginHost::LoadAll(const std::filesystem::path& pluginsDir, const std::fil
         Entry entry;
         entry.folder = Utf8(dir.filename());
         std::string error;
+        loadingDir_ = dir;  // images asked for while main.lua runs come from here
         entry.plugin = LuaPlugin::Load(dir, host_, error);
+        loadingDir_.clear();
         if (entry.plugin != nullptr) {
+            pluginDirs_[entry.plugin->manifest().name] = dir;
             entry.name = entry.plugin->manifest().name;
             entry.version = entry.plugin->manifest().version;
             AddSettingsPageFor(entry.name);
+            ApplyEnabled(entry);
         } else {
             entry.name = entry.folder;
             entry.error = error;
@@ -369,9 +480,28 @@ void PluginHost::LoadAll(const std::filesystem::path& pluginsDir, const std::fil
     }
 }
 
+void PluginHost::ApplyEnabled(const Entry& e) {
+    if (e.plugin == nullptr) return;
+    const bool off = switchedOff_.contains(e.name);
+    e.plugin->SetEnabled(!off);
+    if (const auto it = panelsOf_.find(e.name); it != panelsOf_.end())
+        for (const std::string& id : it->second) renderer_.SetPluginPanelOff(id, off);
+    if (const auto it = boxesOf_.find(e.name); it != boxesOf_.end())
+        for (const std::string& id : it->second) renderer_.SetPluginBoxOff(id, off);
+}
+
+void PluginHost::SetPluginEnabled(Entry& e, bool on) {
+    if (on) switchedOff_.erase(e.name);
+    else switchedOff_.insert(e.name);
+    ApplyEnabled(e);
+    std::string list;
+    for (const std::string& n : switchedOff_) list += (list.empty() ? "" : ",") + n;
+    (void)settings_.SetString("plugins.disabled", list);  // saved with the other settings
+}
+
 bool PluginHost::HasExtras(const std::string& plugin) const {
     return std::ranges::any_of(settings_.Of(plugin), [](const PluginSettingDef* d) { return !d->hidden; }) ||
-           panelsOf_.contains(plugin);
+           panelsOf_.contains(plugin) || boxesOf_.contains(plugin);
 }
 
 // A plugin without a page of its own still gets one for its options and dock panels.
@@ -389,6 +519,10 @@ void PluginHost::DrawExtrasOf(const std::string& plugin) {
     if (const auto it = panelsOf_.find(plugin); it != panelsOf_.end()) {
         ImGui::SeparatorText("Dock panel");
         for (const std::string& id : it->second) renderer_.DrawPluginPanelSettings(id);
+    }
+    if (const auto it = boxesOf_.find(plugin); it != boxesOf_.end()) {
+        ImGui::SeparatorText("On the screen");
+        for (const std::string& id : it->second) renderer_.DrawPluginBoxSettings(id);
     }
 }
 
@@ -448,6 +582,12 @@ void PluginHost::DrawSettingsOf(const std::string& plugin) {
 void PluginHost::DrawPluginsPage() {
     ImGui::TextDisabled("Lua plugins from the plugins folder next to the exe. See PLUGIN_PLAN.md and plugins/ for examples.");
     if (plugins_.empty()) ImGui::TextUnformatted("No plugins found.");
+    if (renderer_.PluginBoxCount() > 0) {
+        if (ImGui::Button(renderer_.EditingBoxes() ? "Done moving" : "Move on-screen boxes"))
+            renderer_.SetEditBoxes(!renderer_.EditingBoxes());
+        ImGui::SameLine();
+        ImGui::TextDisabled("Shows a frame around every box the plugins draw on the screen; drag them where you want them.");
+    }
     double totalUs = 0;
     for (const Entry& e : plugins_)
         if (e.plugin != nullptr) totalUs += e.plugin->timing().avgUs;
@@ -455,10 +595,19 @@ void PluginHost::DrawPluginsPage() {
         ImGui::Text("Time in plugin code: %.0f us per frame (%.2f%% of a 60 fps frame)", totalUs, totalUs / 166.67);
         ImGui::TextDisabled("Per drawn frame, averaged over about a second. Includes event handlers and page / panel drawing.");
     }
-    for (const Entry& e : plugins_) {
+    for (Entry& e : plugins_) {
         ImGui::SeparatorText(e.version.empty() ? e.name.c_str() : std::format("{} {}", e.name, e.version).c_str());
+        if (e.plugin != nullptr) {
+            bool on = e.plugin->enabled();
+            if (ImGui::Checkbox(("enabled##" + e.folder).c_str(), &on)) SetPluginEnabled(e, on);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Off: the plugin's code stops at once (no events, no drawing) and its dock tabs go away.\n"
+                                  "Remembered. Switching it on again also gives a plugin that stopped after errors another try.");
+        }
         if (e.plugin == nullptr) {
             ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "not loaded: %s", e.error.c_str());
+        } else if (!e.plugin->enabled()) {
+            ImGui::TextDisabled("switched off");
         } else if (e.plugin->disabled()) {
             ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "disabled after %d errors: %s", e.plugin->errorCount(),
                                e.plugin->lastError().c_str());
@@ -490,6 +639,12 @@ void PluginHost::OnFrame(const WorldSnapshot& snap, float screenW, float screenH
     for (const Entry& e : plugins_)
         if (e.plugin != nullptr) e.plugin->EndFrame();  // the previous frame's calls, page draws included
     snap_ = &snap;
+    {
+        LARGE_INTEGER freq, now;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&now);
+        tickNow_ = TickAtTime(snap.gameTick, snap.timestampMs, 1000.0 * static_cast<double>(now.QuadPart) / static_cast<double>(freq.QuadPart));
+    }
     screenW_ = screenW;
     screenH_ = screenH;
     if (snap.frameIndex != lastFrameIndex_) {

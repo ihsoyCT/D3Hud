@@ -498,6 +498,103 @@ static int ProbeAffixes(const Process& proc, const std::filesystem::path& snoPat
     return 0;
 }
 
+// Research probe (--player-attrs [--seconds N]): the player's attribute group, where buffs and cooldowns live
+// (modifier = power SNO, see analysis/ENGINE_MINING.md). Writes the full group to dumps/player_attrs.tsv, then
+// prints every entry that appears, disappears or changes while you play (click a pylon, use a skill, take a
+// hit with cheat death). A value that equals "now" in game ticks is a start tick; one that is a few seconds
+// of ticks (60 per second) ahead is an end tick / cooldown finish.
+static int WatchPlayerAttribs(const Process& proc, const std::filesystem::path& snoPath, double seconds) {
+    SnoTable sno;
+    if (!LoadSno(snoPath, &sno)) return 1;
+    uint64_t base = 0;
+    int votes = 0;
+    if (!ActorList::FindBase(proc, &base, &votes, true)) {
+        std::print(stderr, "actor array not found (in menus? try again in-world)\n");
+        return 1;
+    }
+    ActorList list;
+    list.setBase(base);
+    std::vector<RawActor> raw;
+    if (!list.Read(proc, &raw)) std::print(stderr, "warning: the actor list is not readable\n");
+    const std::unordered_set<uint32_t> snoIds = sno.Ids();
+    AcdTable acds;
+    acds.Discover(proc, raw, &snoIds, false);
+    uint32_t group = 0;
+    for (const RawActor& a : raw) {
+        const SnoInfo* info = sno.Find(a.sno);
+        ActorKind kind;
+        uint32_t quality;
+        bool unresolved;
+        AcdItemRecord r;
+        if (!ClassifyWithQuality(proc, &acds, info, a, &kind, &quality, &unresolved) || kind != ActorKind::Player ||
+            !a.hasAcd() || !acds.ReadItem(proc, a.acd, &r))
+            continue;
+        std::print("player {} acd {:08X} attribute group {}\n", info->name, a.acd, r.attribGroup);
+        group = r.attribGroup;
+        break;
+    }
+    if (group == 0) {
+        std::print(stderr, "the player's ACD / attribute group was not found\n");
+        return 1;
+    }
+    AttribTable attribs;
+    if (attribs.Discover(proc, {group}, true) == 0) {
+        std::print(stderr, "no attribute block holds group {}\n", group);
+        return 1;
+    }
+
+    using Key = std::pair<uint32_t, uint32_t>;  // index, modifier
+    std::map<Key, uint32_t> prev;
+    std::map<Key, int> changes;
+    std::vector<AttribEntry> es;
+    const ULONGLONG t0 = GetTickCount64();
+    bool first = true;
+    while (GetTickCount64() - t0 < static_cast<ULONGLONG>(seconds * 1000.0)) {
+        if (attribs.Enumerate(proc, group, &es) != AttribTable::Result::Found) {
+            std::print(stderr, "group {} not readable\n", group);
+            return 1;
+        }
+        const double t = static_cast<double>(GetTickCount64() - t0) / 1000.0;
+        std::map<Key, uint32_t> cur;
+        for (const AttribEntry& e : es) cur[{e.index, e.modifier}] = e.value;
+        auto line = [&](const char* what, const Key& k, uint32_t was, uint32_t now) {
+            float f;
+            memcpy(&f, &now, 4);
+            const int n = ++changes[k];
+            if (n > 12) return;  // continuously changing values would flood the output
+            std::print("t={:.2f} {:<7} idx {:4} mod {:7} {:>11} -> {:>11} (0x{:08X}, f {:.3f}){}\n", t, what, k.first,
+                       k.second == kAttribNoModifier ? std::string("-") : std::to_string(k.second), was, now, now, f,
+                       n == 12 ? "  [muted]" : "");
+        };
+        if (first) {
+            const std::filesystem::path out = ExeDir() / "dumps" / "player_attrs.tsv";
+            std::filesystem::create_directories(out.parent_path());
+            if (File f = OpenFile(out, L"wb")) {
+                fprintf(f, "index\tmodifier\tvalue\thex\tfloat\n");
+                for (const auto& [k, v] : cur) {
+                    float fl;
+                    memcpy(&fl, &v, 4);
+                    fprintf(f, "%u\t%u\t%u\t%08X\t%g\n", k.first, k.second == kAttribNoModifier ? 0u : k.second, v, v, fl);
+                }
+            }
+            std::print("{} attributes (dumped to {}); now watching for changes for {:.0f} s\n", cur.size(),
+                       Utf8(out), seconds);
+        } else {
+            for (const auto& [k, v] : cur) {
+                const auto it = prev.find(k);
+                if (it == prev.end()) line("new", k, 0, v);
+                else if (it->second != v) line("changed", k, it->second, v);
+            }
+            for (const auto& [k, v] : prev)
+                if (!cur.count(k)) line("gone", k, v, 0);
+        }
+        first = false;
+        prev = std::move(cur);
+        Sleep(250);
+    }
+    return 0;
+}
+
 // Why an actor is not on the minimap (mirrors ClassifyActor's rules).
 static const char* HiddenReason(const SnoInfo* info, const RawActor& a) {
     if (info == nullptr) return "unknown-sno";
@@ -983,6 +1080,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
     std::unordered_map<uint32_t, ItemSnapshot> groundCache;  // acd id -> described ground item
     std::vector<uint32_t> itemGroups;  // attribute group ids of the current inventory + stash
     std::vector<uint32_t> hpGroups;    // elites whose life attribute is in no known block yet
+    uint32_t effectGroupMissing = 0;   // the player's attribute group is in no known block yet
     ULONGLONG hpScanAt = 0;
     // map prediction: scene shapes (file) + the scenes in memory (found in the background)
     SceneCells sceneCells;
@@ -1032,6 +1130,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         acdJob.snapshot = actorsToo ? raw : std::vector<RawActor>{};
         acdJob.groupIds = itemGroups;
         acdJob.groupIds.insert(acdJob.groupIds.end(), hpGroups.begin(), hpGroups.end());
+        if (effectGroupMissing != 0) acdJob.groupIds.push_back(effectGroupMissing);
         acdJob.scanScenes = scenesToo && sceneCells.sceneCount() > 0;
         acdJob.scanUi = false;
         acdJob.player = lastPlayer;
@@ -1070,6 +1169,18 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
     ULONGLONG statSince = GetTickCount64();
     // inventory changes slowly: refresh ~1 Hz, copy into every snapshot
     ULONGLONG inventoryAt = 0;
+    // buffs and cooldowns of the player: its whole attribute map is ~1000 entries, so read it ~10 Hz and
+    // copy the result into every snapshot; the game clock is extrapolated between reads (Effects.h)
+    uint32_t playerAcd = 0xFFFFFFFF;
+    ULONGLONG effectsAt = 0;
+    std::vector<AttribEntry> playerAttrs;
+    std::vector<EffectSnapshot> effects;
+    GameClock gameClock;
+    auto qpcMs = [&qpcFreq]() {
+        LARGE_INTEGER n;
+        QueryPerformanceCounter(&n);
+        return 1000.0 * static_cast<double>(n.QuadPart) / qpcFreq.QuadPart;
+    };
 
     while (true) {
         QueryPerformanceCounter(&tickStart);
@@ -1077,6 +1188,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         memset(&snap, 0, sizeof(snap));
         snap.magic = 0x44573348;
         snap.version = kSnapshotVersion;
+        snap.gameTick = -1;
         bool ok = false;
         statTicks++;
         if (actors.valid()) {
@@ -1107,6 +1219,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                 }
                 if (havePlayer) {
                     lastPlayer = {player.x, player.z};
+                    playerAcd = player.acd;
                     snap.playerPos = lastPlayer;
                     snap.playerHeading = player.heading;
                     ok = true;
@@ -1133,9 +1246,9 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         if (GetTickCount64() - statSince >= 5000 && statTicks > 0) {
             const double secs = (GetTickCount64() - statSince) / 1000.0;
             std::print("[stats] {:.1f} ticks/s, {:.1f} published/s | read {:.2f} ms, classify {:.2f} ms avg | "
-                   "{} actors, {} monsters without acd record\n",
+                   "{} actors, {} monsters without acd record | {} effects, game tick {}\n",
                    statTicks / secs, statPublished / secs, statRead / statTicks,
-                   statFill / statTicks, raw.size(), statUnresolved);
+                   statFill / statTicks, raw.size(), statUnresolved, effects.size(), gameClock.Tick(qpcMs()));
             statRead = statFill = 0;
             statTicks = statPublished = 0;
             statSince = GetTickCount64();
@@ -1173,6 +1286,31 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
             snap.itemCount = static_cast<uint16_t>(inventory.size());
             std::copy(inventory.begin(), inventory.end(), snap.items);
             ReadGameUi(proc, gameUi, &snap.ui);
+            if (playerAcd != 0xFFFFFFFF && acds.baseCount() > 0) {
+                const ULONGLONG nowMs = GetTickCount64();
+                if (nowMs - effectsAt >= 100) {
+                    effectsAt = nowMs;
+                    AcdItemRecord pr;
+                    if (acds.ReadItem(proc, playerAcd, &pr) && pr.attribGroup != 0) {
+                        const double readMs = qpcMs();
+                        const AttribTable::Result res = attribs.Enumerate(proc, pr.attribGroup, &playerAttrs);
+                        if (res == AttribTable::Result::Found) {
+                            effectGroupMissing = 0;
+                            ExtractEffects(playerAttrs, &effects);
+                            gameClock.Update(readMs, effects.data(), effects.size());
+                        } else if (res == AttribTable::Result::Unresolved) {
+                            effectGroupMissing = pr.attribGroup;
+                            if (!acdJob.busy && (itemScanAt == 0 || nowMs - itemScanAt > 10000)) {
+                                itemScanAt = nowMs;
+                                startScan(false, false);
+                            }
+                        }
+                    }
+                }
+                snap.effectCount = static_cast<uint32_t>(effects.size());
+                std::copy(effects.begin(), effects.end(), snap.effects);
+                snap.gameTick = gameClock.Tick(qpcMs());
+            }
             // items lying on the ground (actors linked to an item ACD): legendary/set
             // and bonus drops - the overlay's drop log and world labels. Described
             // once per item, then cached.
@@ -1346,6 +1484,7 @@ int main(int argc, char** argv) {
     bool dumpItems = false;
     bool dumpScenes = false;
     bool probeAffixes = false;
+    bool playerAttribs = false;
     const char* uiFilter = nullptr;
     const char* uiWatch = nullptr;  // --ui-watch <substring>
     double publishSeconds = 0;  // 0 = forever
@@ -1361,6 +1500,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--items")) dumpItems = true;
         else if (!strcmp(argv[i], "--scenes")) dumpScenes = true;
         else if (!strcmp(argv[i], "--affixes")) probeAffixes = true;
+        else if (!strcmp(argv[i], "--player-attrs")) playerAttribs = true;
         else if (!strcmp(argv[i], "--ui") && i + 1 < argc) uiFilter = argv[++i];
         else if (!strcmp(argv[i], "--ui-watch") && i + 1 < argc) uiWatch = argv[++i];
         else if (!strcmp(argv[i], "--sno") && i + 1 < argc) snoPath = argv[++i];
@@ -1423,6 +1563,7 @@ int main(int argc, char** argv) {
         if (dumpItems) return DumpItems(*proc, sno);
         if (dumpScenes) return DumpScenes(*proc, sno);
         if (probeAffixes) return ProbeAffixes(*proc, sno);
+        if (playerAttribs) return WatchPlayerAttribs(*proc, sno, publishSeconds > 0 ? publishSeconds : 120.0);
         if (uiWatch != nullptr) {
             // --ui-watch <substring> [--seconds N]: poll the memory of the matching UI controls
             // and report which 4-byte fields change (and how often). A value that only ever

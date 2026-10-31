@@ -148,6 +148,16 @@ struct MinimapLayout {
     };
     std::map<std::string, PluginPanelState> pluginPanels;
     void DescribePluginPanel(SettingsTable& table, const std::string& id);
+    // Movable boxes of plugins (d3hud.box): the top left corner as a fraction of the screen, < 0 = never moved.
+    struct PluginBoxState {
+        float x = -1.f, y = -1.f;
+        bool styled = false;  // false: the look the plugin suggested (or the host's)
+        uint32_t fill = 0x000000, border = 0x7A8696;  // 0xRRGGBB, with the opacities below (0..255)
+        int fillAlpha = 130, borderAlpha = 160;
+        float borderWidth = 1.f, padding = 6.f;
+    };
+    std::map<std::string, PluginBoxState> pluginBoxes;
+    void DescribePluginBox(SettingsTable& table, const std::string& id);
     [[nodiscard]] bool Load(const std::filesystem::path& path);
     [[nodiscard]] bool Save(const std::filesystem::path& path) const;
 };
@@ -192,7 +202,7 @@ struct HudOptions {
     // interactive while the cursor is inside, so they are clickable without F8: the
     // anvil's salvage button, the safe-area toolbar (and grid while editing), the search box.
     struct HotRect { float x0, y0, x1, y1; };
-    static constexpr int kMaxHot = 8;
+    static constexpr int kMaxHot = 32;
     HotRect hot[kMaxHot] = {};
     int hotCount = 0;
     void AddHot(float x0, float y0, float x1, float y1) {
@@ -220,6 +230,24 @@ public:
     void AddPluginPanel(std::string id, std::string title, std::function<void()> draw, ImVec2 defaultSize);
     // "show in dock / keep open / reset position" for one plugin panel (the plugin's Settings page).
     void DrawPluginPanelSettings(const std::string& id);
+    // A plugin switched off (Settings > Plugins) takes its dock tabs away; the panel's own "show in dock" is untouched.
+    void SetPluginPanelOff(const std::string& id, bool off);
+    // A movable box of a plugin: `draw(origin, &size)` is called once per drawn frame with the box's top left corner in
+    // pixels and says how much room it used; `defaultPos` = where the corner is until the user moves it, as a fraction of
+    // the screen. While boxes are being moved (SetEditBoxes) each one gets a frame and a title and can be dragged.
+    using BoxDraw = std::function<void(ImVec2 origin, ImVec2* size)>;
+    struct BoxLook {  // what the plugin suggests; unset = the host's standard look
+        bool hasFill = false, hasBorder = false;
+        uint32_t fillArgb = 0, borderArgb = 0;  // 0xAARRGGBB
+        float padding = 0.f;                     // <= 0: standard
+    };
+    void AddPluginBox(std::string id, std::string title, BoxDraw draw, ImVec2 defaultPos, BoxLook look = {});
+    // "move it" and the colour pickers of one box (the plugin's Settings page)
+    void DrawPluginBoxSettings(const std::string& id);
+    void SetPluginBoxOff(const std::string& id, bool off);  // its plugin is switched off
+    [[nodiscard]] size_t PluginBoxCount() const { return pluginBoxes_.size(); }
+    void SetEditBoxes(bool on) { editBoxes_ = on; }
+    [[nodiscard]] bool EditingBoxes() const { return editBoxes_; }
     // Shows the Settings window pinned open on the page with this id (nothing is saved); false if unknown.
     bool OpenSettingsPage(const std::string& id);
     void Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName);
@@ -257,6 +285,7 @@ private:
         ImVec2 pos, size;
         float hoverUntil = 0.f;
         bool resizable = false, moved = false;
+        bool off = false;  // its plugin is switched off
     };
     PanelView ViewOf(PanelId id);
     PanelView ViewOf(PluginPanel& p);
@@ -287,6 +316,17 @@ private:
         bool open_;
     };
     std::deque<PluginPanel> pluginPanels_;
+    struct PluginBox {
+        std::string id, title;
+        BoxDraw draw;
+        ImVec2 defaultPos;
+        BoxLook look;
+        ImVec2 size;  // what it took last frame, padding included
+        bool off = false;
+    };
+    std::deque<PluginBox> pluginBoxes_;
+    bool editBoxes_ = false;
+    void DrawPluginBoxes(HudOptions& opt);
     void DrawPluginPanel(PluginPanel& p, const HudOptions& opt);
     void DrawDock(const HudOptions& opt);
     void DrawSettings(const WorldSnapshot& snap, const HudOptions& opt);

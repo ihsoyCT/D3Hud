@@ -2,5 +2,5 @@
 return {
     name = "timetracker",
     version = "1.0",
-    api = 1,
+    api = 3,
 }

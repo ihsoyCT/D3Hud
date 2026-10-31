@@ -49,6 +49,10 @@ public:
 
     [[nodiscard]] const PluginManifest& manifest() const { return manifest_; }
     [[nodiscard]] bool disabled() const { return errors_ >= kMaxErrors; }
+    // The user's switch (Settings > Plugins): off = no events, no panel or page drawing, no cost, at once. Switching
+    // it on again also clears the error count, so a plugin that gave up after repeated errors gets another try.
+    void SetEnabled(bool on);
+    [[nodiscard]] bool enabled() const { return enabled_; }
     [[nodiscard]] int errorCount() const { return errors_; }
     [[nodiscard]] const std::string& lastError() const { return lastError_; }
 
@@ -78,14 +82,17 @@ private:
     void Fail(const std::string& msg);
     void OnEvent(const d3h_event& ev);
     void DrawPage(PageCtx& page, const d3h_ui& ui);
+    void DrawBox(PageCtx& box, d3h_vec2 origin, d3h_vec2* size);
     static void EventTrampoline(const d3h_event* ev, void* user);
     static void PageTrampoline(const d3h_ui* ui, void* user);
+    static void BoxTrampoline(d3h_vec2 origin, d3h_vec2* size, void* user);
 
     const d3h_host& host_;
     lua_State* L_ = nullptr;
     std::unique_ptr<LuaHeap> heap_;
     PluginManifest manifest_;
     int errors_ = 0;
+    bool enabled_ = true;
     Timing timing_;
     double accumUs_ = 0;  // the frame in progress
     int accumCalls_ = 0;
