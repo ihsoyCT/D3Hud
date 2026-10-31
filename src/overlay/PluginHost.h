@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "Effects.h"
 #include "LuaPlugin.h"
 #include "PluginSettings.h"
 #include "Snapshot.h"
@@ -70,6 +71,8 @@ private:
     std::set<std::string> pluginsWithPage_;               // plugins that registered a page of their own
     std::map<std::string, std::vector<std::string>> panelsOf_;  // plugin -> its dock panel ids
     const WorldSnapshot* snap_ = nullptr;  // valid during OnFrame
+    double tickNow_ = -1;  // the game tick of this frame (extrapolated from the snapshot), -1 unknown
+    PowerNames powers_;    // names for the effects
     float screenW_ = 0, screenH_ = 0;
     uint64_t lastFrameIndex_ = ~0ull;
     uint32_t lastWorld_ = 0;

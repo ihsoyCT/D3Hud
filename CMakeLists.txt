@@ -28,7 +28,8 @@ add_library(d3hud_core STATIC
     src/core/ReplayIO.cpp
     src/core/SharedRing.cpp
     src/core/SnapshotInterp.cpp
-    src/core/SceneCells.cpp)
+    src/core/SceneCells.cpp
+    src/core/Effects.cpp)
 target_include_directories(d3hud_core PUBLIC src/core)
 target_compile_definitions(d3hud_core PUBLIC _CRT_SECURE_NO_WARNINGS)
 
@@ -73,6 +74,8 @@ add_custom_command(TARGET D3Hud.Reader POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/analysis/items_gbid.tsv $<TARGET_FILE_DIR:D3Hud.Reader>/items_gbid.tsv
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/analysis/sno_powers.tsv $<TARGET_FILE_DIR:D3Hud.Reader>/sno_powers.tsv
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/analysis/scene_cells.bin $<TARGET_FILE_DIR:D3Hud.Reader>/scene_cells.bin)
 
 add_executable(d3hud_tests src/tests/test_core.cpp src/tests/host_api_c.c)
@@ -102,6 +105,7 @@ install(TARGETS D3Hud.Overlay D3Hud.Reader RUNTIME DESTINATION .)
 install(FILES
     analysis/sno_actors.tsv
     analysis/items_gbid.tsv
+    analysis/sno_powers.tsv
     analysis/scene_cells.bin
     README.md
     DESTINATION .)

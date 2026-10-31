@@ -7,6 +7,7 @@
 
 #include "HudRenderer.h"
 #include "Paths.h"
+#include "Win32.h"
 #include "imgui.h"
 
 namespace d3hud {
@@ -71,6 +72,7 @@ struct PluginHost::HostFns {
             f.rift_progress = u.riftProgress;
             f.rift_timer_fraction = u.riftTimerFraction;
             f.stash_tab = u.stashTab;
+            f.effect_count = s->effectCount;
         }
         // a plugin built against a shorter struct gets just that prefix
         memcpy(out, &f, std::min<size_t>(size, sizeof(f)));
@@ -93,6 +95,29 @@ struct PluginHost::HostFns {
         r.rarity = static_cast<int32_t>(a.itemRarity);
         r.flags = a.itemFlags;
         strncpy_s(r.name, sizeof(r.name), a.name, _TRUNCATE);
+        r.size = out->size;  // the caller's struct size: a prefix is copied
+        memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
+        return 1;
+    }
+
+    static d3h_bool GetEffect(uint32_t i, d3h_effect* out) {
+        const WorldSnapshot* s = g_host->snap_;
+        if (s == nullptr || i >= s->effectCount || i >= static_cast<uint32_t>(kMaxEffects)) return 0;
+        const EffectSnapshot& e = s->effects[i];
+        d3h_effect r{};
+        r.sno = e.sno;
+        r.kind = e.kind == EffectKind::Cooldown ? D3H_EFFECT_COOLDOWN : D3H_EFFECT_BUFF;
+        r.stacks = e.count;
+        const EffectTimes t = TimesOf(e, g_host->tickNow_);
+        r.duration = t.duration;
+        if (g_host->tickNow_ >= 0) {
+            r.timed = 1;
+            r.remaining = t.remaining;
+            r.elapsed = t.elapsed;
+        }
+        const std::string readable = g_host->powers_.Readable(e.sno);
+        strncpy_s(r.name, sizeof(r.name), readable.c_str(), _TRUNCATE);
+        if (const std::string* code = g_host->powers_.Code(e.sno)) strncpy_s(r.code, sizeof(r.code), code->c_str(), _TRUNCATE);
         r.size = out->size;  // the caller's struct size: a prefix is copied
         memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
         return 1;
@@ -296,6 +321,8 @@ PluginHost::PluginHost(HudRenderer& renderer) : renderer_(renderer) {
     host_.get_frame = HostFns::GetFrame;
     host_.get_actor = HostFns::GetActor;
     host_.get_item = HostFns::GetItem;
+    host_.get_effect = HostFns::GetEffect;
+    if (!powers_.Load(ExeDir() / "sno_powers.tsv")) std::print(stderr, "no sno_powers.tsv - effects get generic names\n");
     host_.world_to_screen = HostFns::WorldToScreenFn;
     host_.subscribe = HostFns::Subscribe;
     host_.draw_text = HostFns::DrawText;
@@ -490,6 +517,12 @@ void PluginHost::OnFrame(const WorldSnapshot& snap, float screenW, float screenH
     for (const Entry& e : plugins_)
         if (e.plugin != nullptr) e.plugin->EndFrame();  // the previous frame's calls, page draws included
     snap_ = &snap;
+    {
+        LARGE_INTEGER freq, now;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&now);
+        tickNow_ = TickAtTime(snap.gameTick, snap.timestampMs, 1000.0 * static_cast<double>(now.QuadPart) / static_cast<double>(freq.QuadPart));
+    }
     screenW_ = screenW;
     screenH_ = screenH;
     if (snap.frameIndex != lastFrameIndex_) {

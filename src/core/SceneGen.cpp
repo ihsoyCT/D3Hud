@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstring>
 
+#include "Effects.h"
+
 namespace d3hud {
 namespace {
 
@@ -123,6 +125,25 @@ void SceneGen::Generate(WorldSnapshot* out) {
     item("Grim Wagon", "Cloak", ItemRarity::Rare, true, false, false, SalvageVerdict::Junk, 1006);
     item("", "Ring", ItemRarity::Rare, false, false, false, SalvageVerdict::Junk, 1007);
     item("Sage's Journey", "Boots", ItemRarity::Set, true, false, false, SalvageVerdict::Junk, 1008);
+
+    // Effects: a channeling pylon (60 s of every 90 s), the cheat death cooldown (120 s of every 150 s) and the
+    // health potion cooldown (30 s of every 40 s), on a game clock of 60 ticks per demo second.
+    const int32_t nowTick = 10000 + static_cast<int32_t>(t * kTicksPerSecond);
+    out->gameTick = nowTick;
+    auto effect = [&](EffectKind kind, uint32_t sno, uint8_t slot, int periodSec, int activeSec) {
+        const int32_t period = periodSec * 60;
+        const int32_t startTick = nowTick - (nowTick % period);
+        if (nowTick - startTick >= activeSec * 60 || out->effectCount >= static_cast<uint32_t>(kMaxEffects)) return;
+        EffectSnapshot& e = out->effects[out->effectCount++];
+        e.sno = sno;
+        e.kind = kind;
+        e.slot = slot;
+        e.startTick = startTick;
+        e.endTick = startTick + activeSec * 60;
+    };
+    effect(EffectKind::Buff, 266258, 0, 90, 60);
+    effect(EffectKind::Buff, 485530, 1, 150, 120);
+    effect(EffectKind::Cooldown, 30211, 0, 40, 30);
 
     frame_++;
 }

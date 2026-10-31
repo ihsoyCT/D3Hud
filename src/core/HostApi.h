@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-#define D3H_API_VERSION 1
+#define D3H_API_VERSION 2 /* 2: effects (get_effect), d3h_frame.effect_count */
 #define D3H_NAME_LEN 48
 
 typedef int32_t d3h_bool; /* 0 / 1 */
@@ -84,6 +84,8 @@ typedef struct d3h_frame {
     float rift_progress;       /* 0..1, valid with D3H_UI_RIFT */
     float rift_timer_fraction; /* greater rift: elapsed share of the limit, -1 unknown */
     int32_t stash_tab;         /* selected global stash tab, -1 unknown */
+    /* appended in API 2 */
+    uint32_t effect_count;     /* running buffs and cooldowns of the player, see d3h_effect */
 } d3h_frame;
 
 typedef struct d3h_actor {
@@ -115,6 +117,25 @@ typedef struct d3h_item {
     char name[D3H_NAME_LEN];
     char type_name[D3H_NAME_LEN];
 } d3h_item;
+
+typedef enum d3h_effect_kind {
+    D3H_EFFECT_BUFF = 0,    /* a status on the player: pylon, passive, item power, a monster's affix */
+    D3H_EFFECT_COOLDOWN = 1 /* a power that cannot be used again yet: potion, skill */
+} d3h_effect_kind;
+
+/* A running effect on the player. Times are seconds of game time, as of the snapshot that is current. */
+typedef struct d3h_effect {
+    uint32_t size;
+    uint32_t sno;      /* the power's SNO: stable, use it to recognise an effect (name may be reworded) */
+    int32_t kind;      /* d3h_effect_kind */
+    int32_t stacks;    /* buffs; 1 for cooldowns */
+    float duration;    /* total length: end - start */
+    float remaining;   /* time left; 0 when the game clock is not known yet */
+    float elapsed;     /* time since it started; 0 when the game clock is not known yet */
+    d3h_bool timed;    /* 0 while the game clock is not known: remaining / elapsed are not meaningful */
+    char name[D3H_NAME_LEN]; /* readable: "Enchantress Cheat Death Passive"; "Power <sno>" when the power is unknown */
+    char code[D3H_NAME_LEN]; /* the internal name: "Generic_EnchantressCheatDeathPassive"; empty when unknown */
+} d3h_effect;
 
 /* ---- Events ----------------------------------------------------------------------------- */
 
@@ -274,6 +295,9 @@ typedef struct d3h_host {
 
     /* size in screen pixels of `text` as draw_text would draw it at `scale` */
     d3h_vec2 (*text_size)(const char* text, float scale);
+
+    /* the effects (buffs and cooldowns) running on the player, 0 <= index < d3h_frame.effect_count. API 2. */
+    d3h_bool (*get_effect)(uint32_t index, d3h_effect* out);
 } d3h_host;
 
 /* True when the host's table is large enough to contain `field` (a newer plugin on an older host). */

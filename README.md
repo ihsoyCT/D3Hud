@@ -147,6 +147,15 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
   the screen will live, and your records. It shows in a **DPS** tab of the dock and optionally as a line on the
   screen. Trash is not counted (its life is not read).
 
+- **Effects** (`plugins/effects`) lists what is running on your character with the time left, in an **Effects** tab of
+  the dock: cooldowns (health potion, the cheat death cooldown) and buffs (pylons, shrines), the soonest to end first,
+  highlighted in yellow below 5 seconds. By default it shows only the important ones: pylons, shrines, cheat death and the
+  health potion. A selector at the bottom of the tab switches to *Without noise* (everything except item powers that renew
+  themselves every second and the statuses monsters put on you) or *Everything*; hover an entry for the game's name and
+  number of the power, and add the numbers of powers you care about to the options to make them important too. The same
+  list can also be drawn as bars on the screen. The times follow the game's clock, which the program estimates; they are
+  right to about a tenth of a second.
+
 Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
 read game memory, press keys, or touch files. To write one see `plugins/README.md`. Restart the overlay
 after adding or changing a plugin.
@@ -208,7 +217,7 @@ Next to the exes (the folder is relocatable, nothing is written elsewhere):
 
 | File | |
 |---|---|
-| `sno_actors.tsv`, `items_gbid.tsv`, `scene_cells.bin` | Data tables the program needs (shipped) |
+| `sno_actors.tsv`, `items_gbid.tsv`, `sno_powers.tsv`, `scene_cells.bin` | Data tables the program needs (shipped) |
 | `d3hud.ini` | All settings, panel positions, hotkeys and the safe area (created on first save) |
 | `d3hud.<name>.ini` | Saved profiles |
 | `plugins/`, `plugins.ini` | Lua plugins (shipped) and the settings and data they keep |

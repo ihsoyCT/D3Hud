@@ -7,6 +7,7 @@
 
 #include "AcdTable.h"
 #include "AttribTable.h"
+#include "Effects.h"
 #include "ActorList.h"
 #include "AobScanner.h"
 #include "PlayerTracker.h"
@@ -556,8 +557,9 @@ struct State {
     PluginSettings settings;
     std::vector<std::pair<int32_t, Sub>> subs;
     std::vector<Page> pages;
-    std::vector<std::string> logs, drawn, lines;
+    std::vector<std::string> logs, drawn, lines, tips;
     std::vector<d3h_actor> actors;
+    std::vector<d3h_effect> effects;
     std::vector<d3h_rect> rects;
     std::vector<Page> panels;
     size_t checkboxes = 0, swatches = 0;  // widgets a page drew
@@ -573,6 +575,12 @@ void Log(int32_t, const char* m) { g.logs.emplace_back(m); }
 void GetFrame(d3h_frame* out) {
     *out = g.frame;
     out->actor_count = static_cast<uint32_t>(g.actors.size());
+    out->effect_count = static_cast<uint32_t>(g.effects.size());
+}
+d3h_bool GetEffect(uint32_t i, d3h_effect* out) {
+    if (i >= g.effects.size()) return 0;
+    *out = g.effects[i];
+    return 1;
 }
 d3h_bool GetActor(uint32_t i, d3h_actor* out) {
     if (i >= g.actors.size()) return 0;
@@ -614,7 +622,7 @@ d3h_host MakeHost() {
     d3h_host h{};
     h.size = sizeof(h);
     h.api_version = D3H_API_VERSION;
-    h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.subscribe = Subscribe; h.draw_text = DrawText;
+    h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.get_effect = GetEffect; h.subscribe = Subscribe; h.draw_text = DrawText;
     h.world_to_screen = WorldToScreen; h.draw_rect = DrawRect; h.register_panel = RegisterPanel;
     h.text_size = TextSize;
     h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
@@ -624,6 +632,9 @@ d3h_host MakeHost() {
 
 // A ui that records the text and answers the combo with g.comboPick.
 void UText(const char* t) { g.lines.emplace_back(t); }
+void UTextColored(d3h_color, const char* t) { g.lines.emplace_back(t); }
+d3h_bool UHovered() { return 1; }
+void UTooltip(const char* t) { g.tips.emplace_back(t); }
 void UNone() {}
 d3h_bool UCombo(const char*, int32_t* idx, const char*) {
     if (g.comboPick == 0) return 0;
@@ -637,7 +648,7 @@ d3h_bool UColor(const char*, d3h_color*) { ++g.swatches; return 0; }
 d3h_ui MakeUi() {
     d3h_ui u{};
     u.size = sizeof(u);
-    u.text = UText; u.text_disabled = UText; u.separator = UNone; u.separator_text = UText;
+    u.text = UText; u.text_colored = UTextColored; u.is_item_hovered = UHovered; u.tooltip = UTooltip; u.text_disabled = UText; u.separator = UNone; u.separator_text = UText;
     u.same_line = UNone; u.spacing = UNone; u.button = UButton; u.checkbox = UCheckbox; u.combo = UCombo;
     u.input_text = UInput; u.color_edit = UColor;
     return u;
@@ -680,6 +691,121 @@ static std::filesystem::path WritePlugin(const std::filesystem::path& root, cons
     File s = OpenFile(dir / L"main.lua", L"wb");
     fwrite(mainLua.data(), 1, mainLua.size(), s);
     return dir;
+}
+
+// ---- effects: buffs and cooldowns from the player's attributes ---------------------------------------
+
+static AttribEntry Attr(uint32_t index, uint32_t sno, uint32_t value) { return {index, sno, value}; }
+
+static void TestEffects() {
+    // channeling pylon in slot 0 (60 s), cheat death cooldown buff: slot 1 expired (zeroed) and slot 3 running,
+    // a potion on cooldown, a skill whose cooldown is idle (sentinels), and noise
+    std::vector<AttribEntry> a = {
+        Attr(kAttrBuffStartTick, 266258, 74518), Attr(kAttrBuffEndTick, 266258, 78118), Attr(kAttrBuffCount, 266258, 1),
+        Attr(kAttrBuffStartTick + 1, 485530, 0), Attr(kAttrBuffEndTick + 1, 485530, 0), Attr(kAttrBuffCount + 1, 485530, 0),
+        Attr(kAttrBuffStartTick + 3, 485530, 58254), Attr(kAttrBuffEndTick + 3, 485530, 58344), Attr(kAttrBuffCount + 3, 485530, 2),
+        // Vengeance-like: the same buff in three more icon slots (identical times = one effect), and a power with a
+        // second, different buff in another slot (two effects)
+        Attr(kAttrBuffStartTick + 1, 266258, 74518), Attr(kAttrBuffEndTick + 1, 266258, 78118), Attr(kAttrBuffCount + 1, 266258, 1),
+        Attr(kAttrBuffStartTick + 2, 266258, 74518), Attr(kAttrBuffEndTick + 2, 266258, 78118), Attr(kAttrBuffCount + 2, 266258, 1),
+        Attr(kAttrBuffStartTick + 5, 485530, 58300), Attr(kAttrBuffEndTick + 5, 485530, 65500), Attr(kAttrBuffCount + 5, 485530, 1),
+        Attr(kAttrPowerCooldown, 30211, 77320), Attr(kAttrPowerCooldownStart, 30211, 75520),
+        Attr(kAttrPowerCooldown, 130695, kCooldownIdleFinish), Attr(kAttrPowerCooldownStart, 130695, kCooldownIdleStart),
+        {115, kAttribNoModifier, 1234},  // an attribute without a modifier
+        Attr(100, 130695, 5),            // another attribute of a power
+    };
+    std::vector<EffectSnapshot> fx;
+    ExtractEffects(a, &fx);
+    CHECK(fx.size() == 4);
+    CHECK(fx[0].sno == 266258 && fx[0].kind == EffectKind::Buff && fx[0].slot == 0 && fx[0].count == 1);  // slots 1, 2 merged
+    CHECK(fx[0].startTick == 74518 && fx[0].endTick == 78118);
+    CHECK(fx[1].sno == 485530 && fx[1].slot == 3 && fx[1].count == 2);  // the zeroed slot 1 is gone
+    CHECK(fx[2].sno == 485530 && fx[2].slot == 5 && fx[2].endTick == 65500);  // different times: its own effect
+    CHECK(fx[3].sno == 30211 && fx[3].kind == EffectKind::Cooldown && fx[3].startTick == 75520 && fx[3].endTick == 77320);
+
+    // times as of a tick
+    const EffectTimes t = TimesOf(fx[0], 74518 + 600);
+    CHECK(t.duration == 60.f && std::fabs(t.elapsed - 10.f) < 1e-3f && std::fabs(t.remaining - 50.f) < 1e-3f);
+    const EffectTimes late = TimesOf(fx[0], 90000);
+    CHECK(late.remaining == 0.f && late.elapsed == 60.f);
+
+    // the tick of a frame: extrapolated from a recent snapshot only
+    CHECK(TickAtTime(-1, 0, 100) < 0);
+    CHECK(TickAtTime(1000, 5000, 5100) == 1006.0);
+    CHECK(TickAtTime(1000, 5000, 9000) == 1000.0);  // stale snapshot: no extrapolation
+    CHECK(TickAtTime(1000, 5000, 100) == 1000.0);   // other clock (a replay)
+
+    // the cap
+    std::vector<AttribEntry> many;
+    for (uint32_t i = 0; i < 300; ++i) {
+        many.push_back(Attr(kAttrBuffStartTick, 1000 + i, 1));
+        many.push_back(Attr(kAttrBuffEndTick, 1000 + i, 100));
+        many.push_back(Attr(kAttrBuffCount, 1000 + i, 1));
+    }
+    ExtractEffects(many, &fx);
+    CHECK(fx.size() == static_cast<size_t>(kMaxEffects));
+}
+
+static void TestGameClock() {
+    auto buff = [](uint32_t sno, int32_t start, int32_t end) {
+        EffectSnapshot e;
+        e.sno = sno;
+        e.startTick = start;
+        e.endTick = end;
+        return e;
+    };
+    GameClock c;
+    CHECK(!c.valid() && c.Tick(0) < 0);
+    // first poll: the newest start is the best lower bound there is
+    std::vector<EffectSnapshot> fx = {buff(1, 1000, 5000), buff(2, 1200, 9000)};
+    c.Update(0, fx.data(), fx.size());
+    CHECK(c.valid() && c.Tick(0) == 1200);
+    CHECK(c.Tick(1000) == 1260);  // 60 ticks per second
+    // nothing changed: the estimate just runs on
+    c.Update(1000, fx.data(), fx.size());
+    CHECK(c.Tick(1000) == 1260);
+    // a passive refreshed: its start is "now" (ahead of the estimate) and becomes the anchor
+    fx[0].startTick = 1500;
+    fx[0].endTick = 1590;
+    c.Update(2000, fx.data(), fx.size());
+    CHECK(c.Tick(2000) == 1500 && c.Tick(3000) == 1560);
+    // a refresh that lands close to the extrapolation does not make the clock jitter backwards
+    fx[0].startTick = 1560 - 3;
+    c.Update(3000, fx.data(), fx.size());
+    CHECK(c.Tick(3000) == 1560);
+    // a stack decrement keeps an old start tick: not "now"
+    fx[1].startTick = 900;
+    c.Update(3100, fx.data(), fx.size());
+    CHECK(c.Tick(3100) == 1566);
+    // an effect still listed long after its end: the estimate was ahead, pull it back
+    GameClock d;
+    std::vector<EffectSnapshot> g2 = {buff(1, 2000, 2400)};
+    d.Update(0, g2.data(), g2.size());
+    d.Update(60000, g2.data(), g2.size());  // 60 s later the estimate is 5600, the buff claims to end at 2400
+    CHECK(d.Tick(60000) <= 2430);
+}
+
+static void TestPowerNames() {
+    CHECK(PowerNames::Prettify("Generic_EnchantressCheatDeathPassive") == "Enchantress Cheat Death Passive");
+    CHECK(PowerNames::Prettify("DemonHunter_SmokeScreen") == "Smoke Screen");
+    CHECK(PowerNames::Prettify("Generic_ItemPassiveUniqueRing735x1") == "Item Passive Unique Ring 735x1");
+    CHECK(PowerNames::Prettify("Generic_DOTSomething") == "DOT Something");
+    CHECK(PowerNames::Prettify("NoPrefix") == "No Prefix");
+
+    const char* path = "test_sno_powers.tsv";
+    {
+        File f = OpenFile(path, L"wb");
+        const char* text = "sno\tname\r\n266258\tGeneric_PagesBuffInfiniteCasting\r\n30211\tGeneric_DrinkHealthPotion\r\n";
+        fwrite(text, 1, strlen(text), f);
+    }
+    PowerNames n;
+    CHECK(n.Load(path) && n.size() == 2);
+    CHECK(n.Code(30211) != nullptr && *n.Code(30211) == "Generic_DrinkHealthPotion");
+    CHECK(n.Readable(266258) == "Pages Buff Infinite Casting");
+    CHECK(n.Code(1) == nullptr && n.Readable(1) == "Power 1");
+    CHECK(!n.Load("no_such_file.tsv"));
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
 }
 
 static void TestPluginSettings() {
@@ -728,7 +854,7 @@ static void TestLuaSandbox() {
 
     CHECK(load("ok", "assert(os == nil and io == nil and require == nil and dofile == nil and loadfile == nil and load == nil "
                      "and debug == nil and package == nil and collectgarbage == nil and print == nil)\n"
-                     "assert(string.dump == nil and d3hud.api == 1)\n"
+                     "assert(string.dump == nil and d3hud.api == 2)\n"
                      "assert(string.format('%d', 3) == '3' and math.floor(2.5) == 2 and #table.concat({'a','b'}) == 2)") != nullptr);
     CHECK(err.empty());
 
@@ -813,6 +939,49 @@ static void TestLuaSandbox() {
 }
 
 // Runs plugins/timetracker against the fake host: classification, percentages, persistence.
+static void TestLuaEffects() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_effects";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    d3h_effect e{};
+    e.size = sizeof(e);
+    e.sno = 266258;
+    e.kind = D3H_EFFECT_BUFF;
+    e.stacks = 1;
+    e.duration = 60.f;
+    e.remaining = 15.f;
+    e.elapsed = 45.f;
+    e.timed = 1;
+    strncpy_s(e.name, sizeof(e.name), "Pages Buff Infinite Casting", _TRUNCATE);
+    strncpy_s(e.code, sizeof(e.code), "Generic_PagesBuffInfiniteCasting", _TRUNCATE);
+    fake::g.effects.push_back(e);
+    e.sno = 30211;
+    e.kind = D3H_EFFECT_COOLDOWN;
+    e.timed = 0;
+    e.remaining = 0.f;
+    fake::g.effects.push_back(e);
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    const fs::path dir = WritePlugin(root, "fx",
+        "local fx = d3hud.effects()\n"
+        "assert(#fx == 2 and d3hud.frame().effect_count == 2)\n"
+        "assert(fx[1].sno == 266258 and fx[1].kind == 'buff' and fx[1].stacks == 1)\n"
+        "assert(fx[1].name == 'Pages Buff Infinite Casting' and fx[1].code == 'Generic_PagesBuffInfiniteCasting')\n"
+        "assert(fx[1].duration == 60 and fx[1].remaining == 15 and fx[1].elapsed == 45 and fx[1].fraction == 0.25 and fx[1].timed)\n"
+        "assert(fx[2].kind == 'cooldown' and not fx[2].timed and fx[2].fraction == 0)\n");
+    CHECK(LuaPlugin::Load(dir, host, err) != nullptr);
+    CHECK(err.empty());
+    // a host without the function: the binding is simply absent
+    d3h_host old = fake::MakeHost();
+    old.size = static_cast<uint32_t>(offsetof(d3h_host, get_effect));
+    const fs::path dir2 = WritePlugin(root, "nofx", "assert(d3hud.effects == nil)");
+    err.clear();
+    CHECK(LuaPlugin::Load(dir2, old, err) != nullptr);
+    fs::remove_all(root, ec);
+}
+
 static void TestTimeTracker() {
     namespace fs = std::filesystem;
     fake::g.Reset();
@@ -954,6 +1123,122 @@ end)
 }
 
 // plugins/damagemeter: damage from how the life of elites falls
+static d3h_effect FxEntry(uint32_t sno, int32_t kind, float duration, float remaining, const char* name, const char* code,
+                          int32_t stacks = 1, bool timed = true) {
+    d3h_effect e{};
+    e.size = sizeof(e);
+    e.sno = sno;
+    e.kind = kind;
+    e.stacks = stacks;
+    e.duration = duration;
+    e.remaining = timed ? remaining : 0.f;
+    e.elapsed = timed ? duration - remaining : 0.f;
+    e.timed = timed ? 1 : 0;
+    strncpy_s(e.name, sizeof(e.name), name, _TRUNCATE);
+    strncpy_s(e.code, sizeof(e.code), code, _TRUNCATE);
+    return e;
+}
+
+static void TestEffectsPlugin() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"effects", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "effects: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.panels.size() == 1);
+    fake::g.frame.screen_w = 1920.f;
+    fake::g.frame.screen_h = 1080.f;
+    auto panel = [&] {
+        fake::Fire(D3H_EVENT_FRAME);  // the list is worked out once per drawn frame
+        fake::g.lines.clear();
+        fake::DrawPanels();
+        std::string text;
+        for (const std::string& l : fake::g.lines) text += l + "\n";
+        return text;
+    };
+    auto at = [](const std::string& text, const char* needle) { return text.find(needle); };
+
+    CHECK(panel().find("nothing running") != std::string::npos);
+
+    fake::g.effects = {
+        FxEntry(266258, D3H_EFFECT_BUFF, 60.f, 45.3f, "Pages Buff Infinite Casting", "Generic_PagesBuffInfiniteCasting"),
+        FxEntry(485530, D3H_EFFECT_BUFF, 120.f, 75.f, "Enchantress Cheat Death Passive", "Generic_EnchantressCheatDeathPassive"),
+        FxEntry(485530, D3H_EFFECT_BUFF, 1.5f, 0.5f, "Enchantress Cheat Death Passive", "Generic_EnchantressCheatDeathPassive"),
+        FxEntry(30211, D3H_EFFECT_COOLDOWN, 30.f, 12.f, "Drink Health Potion", "Generic_DrinkHealthPotion"),
+        FxEntry(90314, D3H_EFFECT_BUFF, 10.f, 4.f, "Monster Affix Molten", "Generic_MonsterAffixMolten"),
+        FxEntry(134334, D3H_EFFECT_BUFF, 36000.f, 30000.f, "Banter Cooldown", "Generic_BanterCooldown"),
+        FxEntry(318383, D3H_EFFECT_BUFF, 8.f, 3.f, "Item Passive Unique Ring 521x1", "Generic_ItemPassiveUniqueRing521x1", 3),
+    };
+    // the default: only the important ones. Cooldowns first (the potion 12 s, cheat death 1:15), then buffs (the pylon)
+    std::string text = panel();
+    CHECK(at(text, "Cooldowns") < at(text, "Health Potion") && at(text, "Health Potion") < at(text, "Cheat Death"));
+    CHECK(at(text, "Cheat Death") < at(text, "Buffs") && at(text, "Buffs") < at(text, "Channeling Pylon"));
+    CHECK(text.find("12.0s   Health Potion") != std::string::npos);
+    CHECK(text.find("1:15   Cheat Death") != std::string::npos);
+    CHECK(text.find("45.3s   Channeling Pylon") != std::string::npos);
+    CHECK(text.find("Molten") == std::string::npos && text.find("Banter") == std::string::npos &&
+          text.find("Item Passive") == std::string::npos);
+    // the short cheat death renewal, the affix, the 10 hour cooldown and the ring passive
+    CHECK(text.find("4 more hidden") != std::string::npos);
+    CHECK(!fake::g.tips.empty());
+    bool named = false;
+    for (const std::string& t : fake::g.tips) named |= t.find("Generic_PagesBuffInfiniteCasting\npower 266258") != std::string::npos;
+    CHECK(named);
+
+    // a power of your own on the list of important ones
+    CHECK(fake::g.settings.SetString("effects.extra", "1, 318383"));
+    text = panel();
+    CHECK(text.find("Item Passive Unique Ring 521x1  x3") != std::string::npos);
+    CHECK(text.find("3 more hidden") != std::string::npos);
+    CHECK(fake::g.settings.SetString("effects.extra", ""));
+
+    // without noise: the filter by duration and by name
+    CHECK(fake::g.settings.SetNumber("effects.mode", 1));  // stored 0-based: Without noise
+    text = panel();
+    CHECK(at(text, "Buffs") < at(text, "Item Passive Unique Ring 521x1  x3") &&
+          at(text, "Item Passive Unique Ring 521x1  x3") < at(text, "Channeling Pylon"));  // soonest first
+    CHECK(text.find("Molten") == std::string::npos && text.find("Banter") == std::string::npos);
+    CHECK(text.find("3 more hidden") != std::string::npos);
+
+    // everything
+    CHECK(fake::g.settings.SetNumber("effects.mode", 2));  // Everything
+    text = panel();
+    CHECK(text.find("Monster Affix Molten") != std::string::npos);
+    CHECK(text.find("Banter Cooldown") != std::string::npos);
+    CHECK(text.find("hidden") == std::string::npos);
+    CHECK(fake::g.settings.SetNumber("effects.mode", 0));  // Important only
+
+    // the game clock is not known yet: no times, nothing broken
+    fake::g.effects = {FxEntry(266258, D3H_EFFECT_BUFF, 60.f, 0.f, "Pages Buff Infinite Casting", "Generic_PagesBuffInfiniteCasting", 1, false)};
+    CHECK(panel().find("?   Channeling Pylon") != std::string::npos);
+
+    // the same list as bars on the screen
+    fake::g.effects = {
+        FxEntry(266258, D3H_EFFECT_BUFF, 60.f, 45.f, "Pages Buff Infinite Casting", "Generic_PagesBuffInfiniteCasting"),
+        FxEntry(30211, D3H_EFFECT_COOLDOWN, 30.f, 12.f, "Drink Health Potion", "Generic_DrinkHealthPotion"),
+    };
+    fake::g.rects.clear();
+    fake::g.drawn.clear();
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.rects.empty());  // off by default
+    CHECK(fake::g.settings.SetNumber("effects.hud", 1));
+    fake::Fire(D3H_EVENT_FRAME);
+    CHECK(fake::g.rects.size() == 6);  // three rectangles per bar, two bars
+    bool potion = false, pylon = false;
+    for (const std::string& d : fake::g.drawn) {
+        potion |= d.find("Health Potion") != std::string::npos;
+        pylon |= d.find("Channeling Pylon") != std::string::npos;
+    }
+    CHECK(potion && pylon);
+    CHECK(!p->disabled());
+    if (p->disabled()) fprintf(stderr, "effects: %s", p->lastError().c_str());
+}
+
 static void TestDamageMeter() {
     namespace fs = std::filesystem;
     fake::g.Reset();
@@ -1489,12 +1774,17 @@ int main() {
     TestHostApi();
     TestMonsterAffixes();
     TestAffixMask();
+    TestEffects();
+    TestGameClock();
+    TestPowerNames();
     TestPluginSettings();
     TestLuaSandbox();
+    TestLuaEffects();
     TestTimeTracker();
     TestLuaLibraries();
     TestHealthBars();
     TestDamageMeter();
+    TestEffectsPlugin();
     TestRaii();
     TestSnapshotInterp();
     TestAcdItemDecode();

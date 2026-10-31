@@ -110,8 +110,9 @@ rift progress and timer), the player position and an area id.
 
 **Big projects (research needed, high value)**
 
-BuffLists (cheat death, Convention of Elements, buff timers), SkillBars, PlayerSkill, CooldownSoundPlayer and
-SkillRangeHelper all need the player's powers, buffs and cooldowns, which the reader does not read at all.
+BuffLists (cheat death, Convention of Elements, buff timers) and CooldownSoundPlayer can now be written: the snapshot has the
+player's buffs and cooldowns (`d3hud.effects()`, API 2). SkillBars, PlayerSkill and SkillRangeHelper also need which skills
+are equipped on the action bar and their ranges, which the reader does not read yet.
 
 **Low value here:** Pickup / multiplayer XP range circles (an attribute and multiplayer), OtherPlayers, HeadStone and
 Banner (multiplayer), StashPreview and StashUsedSpace (the stash is only visible one tab at a time; the overlay's own

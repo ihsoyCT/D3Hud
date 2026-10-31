@@ -9,9 +9,9 @@ plugins/myplugin/
 ```
 
 `name` is letters, digits, `-` and `_`. `api` is the host API version the plugin was written for (the
-current one is 1). The overlay loads every folder at start; **restart the overlay to reload**.
-`timetracker/` (time per area: page, options, dock panel) and `healthbars/` (draws on the screen from
-`actors()`) are complete examples.
+current one is 2; a plugin that uses `effects()` needs `api = 2`). The overlay loads every folder at start; **restart the overlay to reload**.
+`timetracker/` (time per area: page, options, dock panel), `healthbars/` (draws on the screen from
+`actors()`) and `effects/` (a dock panel and bars from `effects()`) are complete examples.
 
 The Plugins page in Settings lists every plugin, whether it runs, its errors, its log lines and what it costs:
 microseconds spent in its code per drawn frame (average and worst frame, refreshed twice a second; event handlers
@@ -38,6 +38,7 @@ memory, press keys or click, touch files or the network. (See `PLUGIN_PLAN.md` f
 | `d3hud.on(event, fn)` | subscribe; `fn(ev)` gets `ev.type`, `ev.index` (1-based, 0 = none), `ev.value`, `ev.text` |
 | `d3hud.frame()` | a table with the current facts (below) |
 | `d3hud.actors()` | **all** actors of the snapshot as an array of tables (fields below) |
+| `d3hud.effects()` | the player's running **buffs and cooldowns** as an array of tables (below). Needs `api = 2` |
 | `d3hud.actor(i)`, `d3hud.item(i)` | the i-th (1-based) actor / item of the snapshot, or `nil` |
 | `d3hud.world_to_screen(x, y [, height])` | screen pixels of a world position, or `nil` when off screen |
 | `d3hud.draw_text(x, y, argb, text [, scale])` | text on the screen, from a `frame` event handler |
@@ -63,9 +64,29 @@ and bosses their affixes: `affixes` (keys such as `"molten"`) and `affix_names` 
 is everything the reader publishes about an actor. Other game attributes are not part of the snapshot; making one
 available means reading it in the reader and extending the snapshot (see `AGENTS.md`, rule 1).
 
+**Effects** (`d3hud.effects()`, API 2): everything that is running on the player right now, as the game keeps it:
+buffs (pylons, passives, item powers, and the status a monster's affix puts on you) and powers on cooldown
+(health potion, skills, and the cooldown of cheat death, which the game keeps as a buff). Each entry has `sno`
+(the power's SNO: stable, match on this), `name` (readable, e.g. `"Pages Buff Infinite Casting"`; `"Power 123"` for an unknown power),
+`code` (the internal name, `"Generic_PagesBuffInfiniteCasting"`; empty when unknown), `kind` (`"buff"` or `"cooldown"`), `stacks`,
+`duration`, `remaining`, `elapsed` (seconds of game time), `fraction` (`remaining / duration`: 1 just started, 0 about to end) and
+`timed` (false while the game clock is not known yet; `remaining`, `elapsed` and `fraction` are then 0). The list
+is noisy on purpose: item passives refresh themselves every second or so and some entries are not meant to be
+seen (`Cooldown`, `Banter Cooldown`), so filter by `sno`. Known ones: Channeling Pylon `266258` (60 s), health potion `30211`
+(cooldown, 30 s), Enchantress cheat death `485530` (a 120 s buff is the cooldown; the same power also refreshes a short one),
+`d3hud.frame().effect_count` is their number. The timings follow the game clock, which the reader estimates from the
+ticks of the effects themselves (accurate to about 0.1 s once something has changed on the player; see
+`analysis/ENGINE_MINING.md`).
+
+```lua
+for _, e in ipairs(d3hud.effects()) do
+    if e.sno == 266258 and e.timed then d3hud.draw_text(20, 200, 0xFFFFFFFF, string.format("%s %.0f s", e.name, e.remaining)) end
+end
+```
+
 **`d3hud.frame()`** returns `frame_index`, `time_ms`, `player_x`, `player_y`, `player_heading`,
 `world_sno` (not the game's world SNO but an id of the kind of place, derived from the scenes: stable for a town, 0 while unknown), `actor_count`, `item_count`, `hovered_item` (1-based, 0 = none), `screen_w`, `screen_h`,
-`rift_progress` (0..1), `rift_timer_fraction` (-1 unknown), `stash_tab`, and `ui`:
+`rift_progress` (0..1), `rift_timer_fraction` (-1 unknown), `stash_tab`, `effect_count`, and `ui`:
 `ui.inventory`, `ui.stash`, `ui.salvage`, `ui.big_map`, `ui.minimap`, `ui.rift`, `ui.greater_rift`.
 
 **Settings:** `d3hud.setting{ key = "x", type = "bool"|"int"|"float"|"color"|"string"|"choice",

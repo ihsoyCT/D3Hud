@@ -11,11 +11,12 @@
 
 namespace d3hud {
 
-constexpr uint32_t kSnapshotVersion = 12;  // 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect; 12: ActorSnapshot::affixMask
+constexpr uint32_t kSnapshotVersion = 13;  // 13: effects (buffs and cooldowns of the player) + gameTick; 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect; 12: ActorSnapshot::affixMask
 constexpr int kMaxScenes = 512;  // scenes of the current world (a rift has ~100-250)
 constexpr int kMaxActors = 256;
 constexpr int kMaxItems = 256;  // inventory + equipped + the visible stash tab (70)
 constexpr int kNameLen = 48;
+constexpr int kMaxEffects = 128;  // the player has ~30-60 live buffs/cooldowns, most of them item passives refreshing
 
 enum class ActorKind : uint8_t {
     Player = 0,
@@ -218,6 +219,20 @@ struct SceneSnapshot {
     float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
 };
 
+// A running effect on the player: a buff (pylon, passive, monster affix) or a power on cooldown (potion,
+// skill). Both are attributes of the player with the power SNO as modifier; ticks are the game's clock,
+// 60 per second (analysis/ENGINE_MINING.md, "Buffs, cooldowns and timers"). Effects.h builds these.
+enum class EffectKind : uint8_t { Buff = 0, Cooldown };
+
+struct EffectSnapshot {
+    uint32_t sno = 0;      // the power
+    int32_t startTick = 0;
+    int32_t endTick = 0;   // buff: runs out; cooldown: ready again
+    uint16_t count = 1;    // stacks (buffs)
+    EffectKind kind = EffectKind::Buff;
+    uint8_t slot = 0;      // buff icon slot (a power can hold several), 0 for cooldowns
+};
+
 inline UiRect UiToScreen(UiRect r, float screenW, float screenH) {
     const float ratio = screenH / 1200.0f;
     const float offX = (screenW - screenH / 3.0f * 4.0f) * 600.0f / screenH;  // 4:3 area centred
@@ -265,6 +280,10 @@ struct WorldSnapshot {
     UiLayout ui;
     uint32_t sceneCount = 0;
     SceneSnapshot scenes[kMaxScenes];
+    // Appended in version 13 (the older fields keep their offsets):
+    int32_t gameTick = -1;  // the game's clock at this snapshot (estimated, see GameClock), -1 unknown
+    uint32_t effectCount = 0;
+    EffectSnapshot effects[kMaxEffects];
 };
 
 static_assert(std::is_trivially_copyable_v<WorldSnapshot>, "snapshots must be memcpy-able");
@@ -274,6 +293,7 @@ static_assert(std::is_trivially_copyable_v<WorldSnapshot>, "snapshots must be me
 static_assert(sizeof(ActorSnapshot) == 88, "ActorSnapshot layout changed");
 static_assert(sizeof(ItemSnapshot) == 120, "ItemSnapshot layout changed");
 static_assert(sizeof(UiLayout) == 516, "UiLayout layout changed");
+static_assert(sizeof(EffectSnapshot) == 16, "EffectSnapshot layout changed");
 static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 88 + kMaxItems * 120,
               "WorldSnapshot layout changed");
 

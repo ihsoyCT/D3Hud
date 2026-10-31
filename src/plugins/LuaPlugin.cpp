@@ -127,6 +127,7 @@ struct LuaBinding {
         SetNum(L, "world_sno", f.world_sno);
         SetNum(L, "actor_count", f.actor_count);
         SetNum(L, "item_count", f.item_count);
+        SetNum(L, "effect_count", f.effect_count);
         SetNum(L, "hovered_item", f.hovered_item >= 0 ? f.hovered_item + 1 : 0);  // 1-based, 0 = none
         SetNum(L, "screen_w", f.screen_w);
         SetNum(L, "screen_h", f.screen_h);
@@ -215,6 +216,38 @@ struct LuaBinding {
             a.size = sizeof(a);
             if (!h.get_actor(i, &a)) break;
             PushActor(L, a, f);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
+        }
+        return 1;
+    }
+
+    // d3hud.effects() -> array of the player's running buffs and cooldowns:
+    //   { sno, name, code, kind = "buff" | "cooldown", stacks, duration, remaining, elapsed, fraction, timed }
+    // seconds of game time; fraction = remaining / duration (1 just started, 0 about to end); `timed` is false
+    // while the host does not know the game clock yet (remaining / elapsed / fraction are then 0).
+    static int Effects(lua_State* L) {
+        const d3h_host& h = Self(L)->host_;
+        d3h_frame f{};
+        f.size = sizeof(f);
+        h.get_frame(&f);
+        lua_createtable(L, static_cast<int>(f.effect_count), 0);
+        for (uint32_t i = 0; i < f.effect_count; ++i) {
+            d3h_effect e{};
+            e.size = sizeof(e);
+            if (!h.get_effect(i, &e)) break;
+            lua_createtable(L, 0, 10);
+            lua_pushinteger(L, e.sno);  // integers print as such ("266258", not "266258.0")
+            lua_setfield(L, -2, "sno");
+            SetStr(L, "name", e.name);
+            SetStr(L, "code", e.code);
+            SetStr(L, "kind", e.kind == D3H_EFFECT_COOLDOWN ? "cooldown" : "buff");
+            lua_pushinteger(L, e.stacks);
+            lua_setfield(L, -2, "stacks");
+            SetNum(L, "duration", e.duration);
+            SetNum(L, "remaining", e.remaining);
+            SetNum(L, "elapsed", e.elapsed);
+            SetNum(L, "fraction", e.duration > 0.f ? e.remaining / e.duration : 0.0);
+            SetBool(L, "timed", e.timed != 0);
             lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
         }
         return 1;
@@ -787,6 +820,8 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         LuaBinding::Register(L, p.get(), "actors", LuaBinding::Actors);
     }
     if (D3H_HOST_HAS(&host, get_item)) LuaBinding::Register(L, p.get(), "item", LuaBinding::Item);
+    if (D3H_HOST_HAS(&host, get_effect) && host.get_effect != nullptr)
+        LuaBinding::Register(L, p.get(), "effects", LuaBinding::Effects);
     if (D3H_HOST_HAS(&host, world_to_screen) && host.world_to_screen != nullptr)
         LuaBinding::Register(L, p.get(), "world_to_screen", LuaBinding::WorldToScreenFn);
     if (D3H_HOST_HAS(&host, text_size) && host.text_size != nullptr)

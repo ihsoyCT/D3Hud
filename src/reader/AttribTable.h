@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "Effects.h"
 #include "Process.h"
 #include "SharedScan.h"
 #include "Snapshot.h"
@@ -25,6 +26,7 @@
 namespace d3hud {
 
 constexpr uint32_t kAttribGroupStride = 0x12E8;
+constexpr uint32_t kAttribMapOffset = 0x18;
 constexpr uint32_t kAttribBucketsOffset = 0x34;  // group + 0x18 (map) + 0x1C (buckets)
 constexpr uint32_t kAttrItemQualityLevel = 383;  // 0..2 normal, 3..5 magic, 6..8 rare, 9 legendary
 constexpr uint32_t kAttrAncientRank = 413;       // 1 ancient, 2 primal
@@ -71,6 +73,10 @@ public:
     // when no known block holds the group.
     enum class Result { Found, NotFound, Unresolved };
     Result Get(const Process& proc, uint32_t groupId, uint32_t index, uint32_t* value) const;
+
+    // Every entry of a group (research: buffs and cooldowns carry the power SNO as modifier).
+    // Same Found/Unresolved meaning as Get; NotFound when the group header is unreadable.
+    Result Enumerate(const Process& proc, uint32_t groupId, std::vector<AttribEntry>* out) const;
 
     size_t baseCount() const;
     void SetBases(const std::vector<uint64_t>& bases);
