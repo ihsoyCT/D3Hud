@@ -24,7 +24,8 @@
 extern "C" {
 #endif
 
-#define D3H_API_VERSION 3 /* 2: effects (get_effect), d3h_frame.effect_count; 3: movable boxes (register_box) */
+#define D3H_API_VERSION 4 /* 2: effects (get_effect), d3h_frame.effect_count; 3: movable boxes (register_box);
+                             4: images (load_image, draw_image) */
 #define D3H_NAME_LEN 48
 
 typedef int32_t d3h_bool; /* 0 / 1 */
@@ -168,6 +169,15 @@ typedef void (*d3h_event_fn)(const d3h_event* ev, void* user);
 
 /* Layers are drawn back to front; the HUD's own markers sit on D3H_LAYER_MARKERS. */
 typedef enum d3h_layer { D3H_LAYER_BACKGROUND = 0, D3H_LAYER_MARKERS, D3H_LAYER_OVERLAY, D3H_LAYER_TOP } d3h_layer;
+
+/* ---- Images -------------------------------------------------------------------------------- */
+
+/* A picture the host has loaded for a plugin. `id` is what draw_image takes; 0 never is one. */
+typedef struct d3h_image {
+    uint32_t size;
+    int32_t id;
+    int32_t width, height; /* pixels */
+} d3h_image;
 
 /* ---- Settings --------------------------------------------------------------------------- */
 
@@ -329,6 +339,13 @@ typedef struct d3h_host {
 
     /* a box the user can move around on the screen; the plugin draws into it. API 3. */
     d3h_bool (*register_box)(const d3h_box_desc* desc);
+
+    /* Images. load_image reads `name` (a plain "name.png": letters, digits, _ and -; no directories) from the PLUGIN'S OWN folder
+     * and keeps it as a texture; the same name loads once. False when the name is not plain, the file is missing, not a PNG or
+     * too large (2 MB, 1024 px a side), or the plugin has loaded too many (64). draw_image draws it into the rectangle
+     * (screen pixels) with `tint` (0xAARRGGBB, white = as is), from the same places as the other draw_* functions. API 4. */
+    d3h_bool (*load_image)(const char* name, d3h_image* out);
+    void (*draw_image)(int32_t layer, int32_t image, d3h_rect rect, d3h_color tint);
 } d3h_host;
 
 /* True when the host's table is large enough to contain `field` (a newer plugin on an older host). */

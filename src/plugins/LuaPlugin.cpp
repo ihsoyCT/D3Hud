@@ -570,6 +570,41 @@ struct LuaBinding {
         return 0;
     }
 
+    // d3hud.image("fire.png") -> { id =, w =, h = } or nil, message. The file is read by the host from this plugin's own
+    // folder (a plain name, no directories); call it once at load, not every frame.
+    static int Image(lua_State* L) {
+        const char* name = luaL_checkstring(L, 1);
+        d3h_image img{};
+        img.size = sizeof(img);
+        if (!Self(L)->host_.load_image(name, &img) || img.id <= 0) {
+            lua_pushnil(L);
+            lua_pushfstring(L, "image '%s' could not be loaded (a plain name.png in the plugin's folder, at most 2 MB and 1024 px)", name);
+            return 2;
+        }
+        lua_createtable(L, 0, 3);
+        lua_pushinteger(L, img.id);
+        lua_setfield(L, -2, "id");
+        lua_pushinteger(L, img.width);
+        lua_setfield(L, -2, "w");
+        lua_pushinteger(L, img.height);
+        lua_setfield(L, -2, "h");
+        return 1;
+    }
+
+    // d3hud.draw_image(img, x, y [, w, h [, argb tint]]): the image at x, y (screen pixels); w, h default to its own size
+    static int DrawImage(lua_State* L) {
+        luaL_checktype(L, 1, LUA_TTABLE);
+        lua_getfield(L, 1, "id");
+        const auto id = static_cast<int32_t>(luaL_checkinteger(L, -1));
+        lua_pop(L, 1);
+        const double natW = NumField(L, 1, "w", 0), natH = NumField(L, 1, "h", 0);
+        const auto x = static_cast<float>(luaL_checknumber(L, 2)), y = static_cast<float>(luaL_checknumber(L, 3));
+        const auto w = static_cast<float>(luaL_optnumber(L, 4, natW)), h = static_cast<float>(luaL_optnumber(L, 5, natH));
+        const auto tint = static_cast<d3h_color>(luaL_optinteger(L, 6, static_cast<lua_Integer>(0xFFFFFFFFu)));
+        Self(L)->host_.draw_image(D3H_LAYER_OVERLAY, id, d3h_rect{x, y, x + w, y + h}, tint);
+        return 0;
+    }
+
     static d3h_color ColorArg(lua_State* L, int i) { return static_cast<d3h_color>(luaL_checkinteger(L, i)); }
 
     // d3hud.draw_rect(x0, y0, x1, y1, argb [, filled = true [, thickness]])
@@ -915,6 +950,10 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         LuaBinding::Register(L, p.get(), "draw_rect", LuaBinding::DrawRect);
     if (D3H_HOST_HAS(&host, draw_line) && host.draw_line != nullptr)
         LuaBinding::Register(L, p.get(), "draw_line", LuaBinding::DrawLine);
+    if (D3H_HOST_HAS(&host, draw_image) && host.load_image != nullptr && host.draw_image != nullptr) {
+        LuaBinding::Register(L, p.get(), "image", LuaBinding::Image);
+        LuaBinding::Register(L, p.get(), "draw_image", LuaBinding::DrawImage);
+    }
     if (D3H_HOST_HAS(&host, register_box) && host.register_box != nullptr)
         LuaBinding::Register(L, p.get(), "box", LuaBinding::Box);
     if (D3H_HOST_HAS(&host, register_panel) && host.register_panel != nullptr)

@@ -37,6 +37,12 @@ local ELEMENTS = {
     [4] = { "Holy", 0xFFF5D76E }, [5] = { "Lightning", 0xFF6F8CFF }, [6] = { "Physical", 0xFFD8D8D8 },
     [7] = { "Poison", 0xFF86DC4E },
 }
+-- the element icons (plugins/convention/<element>.png, made by tools/gen_element_icons.py); without them the box is text only
+local icons = {}
+if d3hud.image then
+    for slot, e in pairs(ELEMENTS) do icons[slot] = d3hud.image(string.lower(e[1]) .. ".png") end
+end
+
 local function element_name(slot) return ELEMENTS[slot] and ELEMENTS[slot][1] or ("Element " .. slot) end
 local function element_color(slot) return ELEMENTS[slot] and ELEMENTS[slot][2] or WHITE end
 
@@ -155,8 +161,15 @@ d3hud.box{
         if not text then return end
         local scale = d3hud.get("hud_scale")
         local w, h = d3hud.text_size(text, scale)
-        draw.shadowed(x, y, color, text, scale)
-        return w, h
+        local icon = icons[wanted()]
+        if not icon then
+            draw.shadowed(x, y, color, text, scale)
+            return w, h
+        end
+        local side = h * 1.5  -- the icon of the element you want, left of the countdown
+        d3hud.draw_image(icon, x, y, side, side)
+        draw.shadowed(x + side + 6, y + (side - h) / 2, color, text, scale)
+        return side + 6 + w, side
     end,
 }
 

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Effects.h"
+#include "ImageStore.h"
 #include "LuaPlugin.h"
 #include "PluginSettings.h"
 #include "Snapshot.h"
@@ -36,6 +37,8 @@ public:
     // snapshot advanced), WORLD_CHANGE / INVENTORY_* / ITEM_HOVER on changes, then FRAME.
     void OnFrame(const WorldSnapshot& snap, float screenW, float screenH);
     void Shutdown();  // saves the settings
+    // The graphics device the plugins' images become textures on; call before LoadAll.
+    void SetDevice(ID3D11Device* device) { images_.SetDevice(device); }
 
     struct Entry {
         std::string folder, name, version, error;
@@ -71,6 +74,10 @@ private:
         const std::string* plugin;
     };
     std::vector<Sub> subs_;
+    ImageStore images_;                                   // the plugins' pictures (d3hud.image)
+    std::filesystem::path loadingDir_;                    // the folder of the plugin whose main.lua is running right now
+    std::map<std::string, std::filesystem::path> pluginDirs_;  // plugin -> its folder
+    std::map<std::string, std::set<std::string>> imagesOf_;    // plugin -> the images it has loaded
     std::set<std::string> switchedOff_;  // plugins the user switched off (plugins.disabled in plugins.ini)
     std::set<std::string> pluginsWithPage_;               // plugins that registered a page of their own
     std::map<std::string, std::vector<std::string>> panelsOf_;  // plugin -> its dock panel ids

@@ -9,7 +9,7 @@ plugins/myplugin/
 ```
 
 `name` is letters, digits, `-` and `_`. `api` is the host API version the plugin was written for (the
-current one is 3; a plugin that uses `effects()` needs `api = 2`, one that uses `box{}` `api = 3`). The overlay loads every folder at start; **restart the overlay to reload**.
+current one is 4; a plugin that uses `effects()` needs `api = 2`, one that uses `box{}` `api = 3`, one that shows pictures `api = 4`). The overlay loads every folder at start; **restart the overlay to reload**.
 `timetracker/` (time per area: page, options, dock panel), `healthbars/` (draws on the screen from
 `actors()`), `effects/` (a dock panel and bars from `effects()`) and `convention/` (learns a cycle from the `slot` of an effect) are
 complete examples.
@@ -29,7 +29,7 @@ the basic functions. There is **no** `io`, `os`, `debug`, `require`, `load`, `pr
 of memory and a budget of 2 million Lua instructions per call (an endless loop is stopped). An error is
 logged with the plugin's name; after 5 errors the plugin is switched off until the next start.
 
-Plugins can read what the HUD sees, draw text, add settings and Settings pages. They cannot read game
+Plugins can read what the HUD sees, draw text and pictures from their own folder, add settings and Settings pages. They cannot read game
 memory, press keys or click, touch files or the network. (See `PLUGIN_PLAN.md` for why.)
 
 ## The `d3hud` table
@@ -51,6 +51,8 @@ memory, press keys or click, touch files or the network. (See `PLUGIN_PLAN.md` f
 | `d3hud.setting{...}`, `d3hud.get(key)`, `d3hud.set(key, value)` | persisted settings (below) |
 | `d3hud.page{id, title, group, order, draw}` | a page in the Settings window; `draw(ui)` runs while it is shown. The first page of a plugin also shows its options and dock panel controls |
 | `d3hud.box{id, title, x, y, fill, fill_alpha, border, border_alpha, padding, draw}` | a **movable box** on the screen (below). `draw(x, y)` returns the width and height it used. Needs `api = 3` |
+| `d3hud.image(name)` | a picture from the plugin's own folder: `{id, w, h}`, or `nil, message` (below). Needs `api = 4` |
+| `d3hud.draw_image(img, x, y [, w, h [, argb tint]])` | draws it; `w`, `h` default to its own size; `tint` 0xAARRGGBB (white = as is) |
 | `d3hud.panel{id, title, width, height, draw}` | a dock panel: a tab in the dock, hover to peek, F8 + click to pin, drag to move; `draw(ui)` like a page. `width`/`height` > 0 make it resizable |
 | `d3hud.affixes` | all 30 monster affixes of the game: `{ {key = "molten", name = "Molten"}, ... }` |
 | `d3hud.kind` | names for the actor kind numbers: `d3hud.kind.rare`, `.champion`, `.boss`, `.pylon`, ... |
@@ -137,6 +139,22 @@ and 160; no `fill`/`border`: the program's standard dark translucent look), `pad
 draws nothing, but is still framed while the user moves boxes, so it can be placed even if it is empty at the moment. The
 position is remembered per box. Use `draw_*` and the `draw` library in `draw`; the drawing calls land in the box's place
 only if you draw relative to `x`, `y`.
+
+## Images
+
+```lua
+local flame = d3hud.image("flame.png")      -- once, when the plugin loads; nil, message if it cannot be loaded
+d3hud.box{ id = "x", title = "X", draw = function(x, y)
+    d3hud.draw_image(flame, x, y, 32, 32)    -- or (flame, x, y) for its own size; a fifth argument tints it
+    return 32, 32
+end }
+```
+
+Put a PNG next to `main.lua` and ask for it by name. The file is read and decoded by the **host**, so a plugin never sees a
+path and cannot read or write anything else: the name must be plain (`name.png`: letters, digits, `_` and `-`, no
+directories, no other extension), the file at most 2 MB and 1024 x 1024 pixels, and one plugin can have 64 pictures.
+Transparency works. Pictures can be drawn wherever the other `draw_*` functions can, so also inside a box. (`tools/gen_element_icons.py`
+made the icons of the `convention/` plugin; there is no way to show pictures inside a panel or a settings page yet.)
 
 ## Shared libraries and how things are drawn
 

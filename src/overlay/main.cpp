@@ -416,6 +416,7 @@ int main(int argc, char** argv) {
         // map prediction shapes, next to the exe like d3hud.ini (copied by the build)
         if (!renderer.LoadSceneCells(ExeDir() / "scene_cells.bin")) std::print(stderr, "no scene_cells.bin - map prediction off\n");
     }
+    plugins.SetDevice(g_device);  // the plugins' images become textures on it
     plugins.LoadAll(ExeDir() / "plugins", ExeDir() / "plugins.ini");
     if (settingsPage != nullptr && !renderer.OpenSettingsPage(settingsPage)) std::print(stderr, "no settings page '{}'\n", settingsPage);
     HudOptions opts;

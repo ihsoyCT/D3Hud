@@ -7,6 +7,7 @@
 
 #include "HudRenderer.h"
 #include "Paths.h"
+#include "PluginAssets.h"
 #include "Win32.h"
 #include "imgui.h"
 
@@ -200,6 +201,38 @@ struct PluginHost::HostFns {
         return 1;
     }
 
+    // d3hud.image: a plain "name.png" from the plugin's own folder, read and decoded here, never by the plugin
+    static d3h_bool LoadImage(const char* name, d3h_image* out) {
+        const std::string* plugin = CurrentPluginName();
+        if (plugin == nullptr || name == nullptr || out == nullptr) return 0;
+        PluginHost* host = g_host;
+        const auto refuse = [&](const std::string& why) {
+            Log(D3H_LOG_WARN, std::format("image '{}': {}", name, why).c_str());
+            return 0;
+        };
+        if (!IsPlainImageName(name)) return refuse("not a plain name.png (letters, digits, _ and -; no directories)");
+        const auto dir = host->pluginDirs_.find(*plugin);
+        const std::filesystem::path folder = dir != host->pluginDirs_.end() ? dir->second : host->loadingDir_;
+        if (folder.empty()) return refuse("the plugin's folder is not known");
+        std::set<std::string>& mine = host->imagesOf_[*plugin];
+        if (!mine.contains(name) && mine.size() >= static_cast<size_t>(kMaxImagesPerPlugin)) return refuse("too many images");
+        ImageStore::Loaded loaded;
+        std::string why;
+        if (!host->images_.Load(folder / std::string(name), &loaded, &why)) return refuse(why);
+        mine.insert(name);
+        out->id = loaded.id;
+        out->width = loaded.width;
+        out->height = loaded.height;
+        return 1;
+    }
+
+    static void DrawImage(int32_t layer, int32_t image, d3h_rect r, d3h_color tint) {
+        const ImTextureID texture = g_host->images_.Texture(image);
+        if (texture == 0) return;
+        ListFor(layer)->AddImage(texture, ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), ImVec2(0.f, 0.f), ImVec2(1.f, 1.f),
+                                 ArgbToImColor(tint));
+    }
+
     static d3h_bool RegisterBox(const d3h_box_desc* d) {
         const std::string* plugin = CurrentPluginName();
         if (plugin == nullptr || d->id == nullptr || d->title == nullptr || d->draw == nullptr) return 0;
@@ -355,6 +388,8 @@ PluginHost::PluginHost(HudRenderer& renderer) : renderer_(renderer) {
     host_.register_page = HostFns::RegisterPage;
     host_.register_panel = HostFns::RegisterPanel;
     host_.register_box = HostFns::RegisterBox;
+    host_.load_image = HostFns::LoadImage;
+    host_.draw_image = HostFns::DrawImage;
     host_.draw_line = HostFns::DrawLine;
     host_.draw_rect = HostFns::DrawRect;
     host_.text_size = HostFns::TextSize;
@@ -427,8 +462,11 @@ void PluginHost::LoadAll(const std::filesystem::path& pluginsDir, const std::fil
         Entry entry;
         entry.folder = Utf8(dir.filename());
         std::string error;
+        loadingDir_ = dir;  // images asked for while main.lua runs come from here
         entry.plugin = LuaPlugin::Load(dir, host_, error);
+        loadingDir_.clear();
         if (entry.plugin != nullptr) {
+            pluginDirs_[entry.plugin->manifest().name] = dir;
             entry.name = entry.plugin->manifest().name;
             entry.version = entry.plugin->manifest().version;
             AddSettingsPageFor(entry.name);

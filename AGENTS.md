@@ -95,6 +95,8 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 13. **Plugin sandbox.** Lua gets only base (whitelisted), string, table, math, utf8, coroutine; text chunks only; a
    memory cap and an instruction budget per call. Do not add io/os/debug/package, `load`, or any function that
    reaches game memory, injects input, or touches files or the network; plugins stay unable to play the game.
+   The one file access is `d3hud.image`: the HOST reads a PNG from the plugin's own folder by a plain `name.png`
+   (`IsPlainImageName`, size caps in `PluginAssets.h`); the plugin never sees a path. Keep it that narrow.
 
 ## Safety boundaries (do not weaken without asking)
 

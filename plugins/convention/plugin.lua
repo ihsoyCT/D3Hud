@@ -2,5 +2,5 @@
 return {
     name = "convention",
     version = "1.0",
-    api = 3,
+    api = 4,
 }

@@ -8,6 +8,7 @@
 #include "AcdTable.h"
 #include "AttribTable.h"
 #include "Boxes.h"
+#include "PluginAssets.h"
 #include "Effects.h"
 #include "ActorList.h"
 #include "AobScanner.h"
@@ -564,6 +565,9 @@ struct State {
     std::vector<d3h_effect> effects;
     struct Box { std::string id, title; d3h_box_fn draw; void* user; d3h_box_desc desc; d3h_vec2 size{}; };
     std::vector<Box> boxes;
+    std::vector<std::string> imageNames;  // load_image: id = index + 1 (a name loads once)
+    struct ImageDraw { int32_t layer, image; d3h_rect rect; d3h_color tint; };
+    std::vector<ImageDraw> imagesDrawn;
     std::vector<d3h_rect> rects;
     std::vector<Page> panels;
     size_t checkboxes = 0, swatches = 0;  // widgets a page drew
@@ -604,6 +608,17 @@ d3h_bool RegisterPanel(const d3h_panel_desc* d) {
 }
 void Subscribe(int32_t type, d3h_event_fn fn, void* user) { g.subs.push_back({type, {fn, user}}); }
 void DrawText(int32_t, d3h_vec2, d3h_color, const char* t, float) { g.drawn.emplace_back(t); }
+// like the real host: a plain name.png only, one id per name; "missing.png" is a file that does not exist
+d3h_bool LoadImage(const char* name, d3h_image* out) {
+    if (!IsPlainImageName(name) || std::string(name) == "missing.png") return 0;
+    auto it = std::find(g.imageNames.begin(), g.imageNames.end(), name);
+    if (it == g.imageNames.end()) it = g.imageNames.insert(g.imageNames.end(), name);
+    out->id = static_cast<int32_t>(it - g.imageNames.begin()) + 1;
+    out->width = 48;
+    out->height = 32;
+    return 1;
+}
+void DrawImage(int32_t layer, int32_t image, d3h_rect r, d3h_color tint) { g.imagesDrawn.push_back({layer, image, r, tint}); }
 d3h_bool RegisterBox(const d3h_box_desc* d) {
     g.boxes.push_back({d->id, d->title, d->draw, d->user, *d, {}});
     return 1;
@@ -640,7 +655,7 @@ d3h_host MakeHost() {
     h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.get_effect = GetEffect; h.subscribe = Subscribe; h.draw_text = DrawText;
     h.world_to_screen = WorldToScreen; h.draw_rect = DrawRect; h.register_panel = RegisterPanel;
     h.text_size = TextSize;
-    h.register_box = RegisterBox; h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
+    h.register_box = RegisterBox; h.load_image = LoadImage; h.draw_image = DrawImage; h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
     h.get_float = GetFloat; h.get_color = GetColor; h.get_string = GetString; h.set_value = SetValue; h.set_string = SetString;
     return h;
 }
@@ -869,7 +884,7 @@ static void TestLuaSandbox() {
 
     CHECK(load("ok", "assert(os == nil and io == nil and require == nil and dofile == nil and loadfile == nil and load == nil "
                      "and debug == nil and package == nil and collectgarbage == nil and print == nil)\n"
-                     "assert(string.dump == nil and d3hud.api == 3)\n"
+                     "assert(string.dump == nil and d3hud.api == 4)\n"
                      "assert(string.format('%d', 3) == '3' and math.floor(2.5) == 2 and #table.concat({'a','b'}) == 2)") != nullptr);
     CHECK(err.empty());
 
@@ -1073,6 +1088,60 @@ static void TestBoxes() {
     CHECK(o.x == 1280.f && o.y == 360.f);
     const Vec2 bad = BoxFraction({10.f, 10.f}, 0.f, 0.f);
     CHECK(bad.x < 0.f && bad.y < 0.f);
+}
+
+// ---- images: what a plugin may load, and the Lua binding ---------------------------------------------
+
+static void TestPluginAssets() {
+    CHECK(IsPlainImageName("fire.png") && IsPlainImageName("Fire_2-b.png") && IsPlainImageName("a.png"));
+    CHECK(!IsPlainImageName(".png") && !IsPlainImageName("") && !IsPlainImageName("fire"));
+    CHECK(!IsPlainImageName("fire.jpg") && !IsPlainImageName("fire.PNG") && !IsPlainImageName("fire.png.exe"));
+    CHECK(!IsPlainImageName("../fire.png") && !IsPlainImageName("sub/fire.png") && !IsPlainImageName("sub\\fire.png"));
+    CHECK(!IsPlainImageName("C:fire.png") && !IsPlainImageName("fi.re.png") && !IsPlainImageName("fire .png"));
+    CHECK(!IsPlainImageName(std::string(70, 'a') + ".png"));
+    CHECK(!IsPlainImageName(std::string_view("fi\0re.png", 9)));
+}
+
+static void TestLuaImage() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / L"d3hud_plugins_image";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(WritePlugin(root, "pics",
+        "local a = d3hud.image('fire.png')\n"
+        "assert(a and a.id == 1 and a.w == 48 and a.h == 32)\n"
+        "assert(d3hud.image('fire.png').id == 1)  -- the same name is the same picture\n"
+        "local m, why = d3hud.image('missing.png')\n"
+        "assert(m == nil and why:find('missing.png'))\n"
+        "assert(d3hud.image('../secret.png') == nil and d3hud.image('dir/x.png') == nil and d3hud.image('x.jpg') == nil)\n"
+        "d3hud.draw_image(a, 10, 20)                       -- its own size\n"
+        "d3hud.draw_image(a, 100, 200, 24, 16, 0x80FF0000)  -- scaled and tinted\n"
+        "assert(not pcall(d3hud.draw_image, 5, 0, 0))       -- needs the table that image() returned\n",
+        "return { name = 'pics', version = '1', api = 4 }"), host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "pics: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.imageNames.size() == 1 && fake::g.imageNames[0] == "fire.png");  // only the one real, plain name got through
+    CHECK(fake::g.imagesDrawn.size() == 2);
+    if (fake::g.imagesDrawn.size() == 2) {
+        const auto& a = fake::g.imagesDrawn[0];
+        CHECK(a.layer == D3H_LAYER_OVERLAY && a.image == 1 && a.tint == 0xFFFFFFFFu);
+        CHECK(a.rect.x0 == 10.f && a.rect.y0 == 20.f && a.rect.x1 == 58.f && a.rect.y1 == 52.f);
+        const auto& b = fake::g.imagesDrawn[1];
+        CHECK(b.rect.x0 == 100.f && b.rect.x1 == 124.f && b.rect.y1 == 216.f && b.tint == 0x80FF0000u);
+    }
+
+    // a host without images: the binding is absent, so a plugin can check for it
+    d3h_host old = fake::MakeHost();
+    old.size = static_cast<uint32_t>(offsetof(d3h_host, load_image));
+    err.clear();
+    CHECK(LuaPlugin::Load(WritePlugin(root, "noimg", "assert(d3hud.image == nil and d3hud.draw_image == nil)"), old, err) != nullptr);
+    fs::remove_all(root, ec);
 }
 
 static void TestLuaBox() {
@@ -1468,8 +1537,16 @@ static void TestConventionPlugin() {
 
     // choose Cold (slot 2): it is 3.5 s (rest of Fire) + 4 (Lightning) + 4 (Physical) away
     text = panel("mine##2");
+    fake::g.imagesDrawn.clear();
     frame(16.5, dh);
     CHECK(hud("Cold in 11.5"));
+    // the icon of Cold (slot 2) is drawn left of the text: the box is a square icon + gap + text wide
+    CHECK(fake::g.imagesDrawn.size() == 1 && fake::g.imageNames.size() == 7);
+    if (fake::g.imagesDrawn.size() == 1) {
+        const auto cold = std::find(fake::g.imageNames.begin(), fake::g.imageNames.end(), "cold.png") - fake::g.imageNames.begin() + 1;
+        CHECK(fake::g.imagesDrawn[0].image == cold && fake::g.imagesDrawn[0].tint == 0xFFFFFFFFu);
+        CHECK(fake::g.boxes[0].size.x > fake::g.boxes[0].size.y * 2.f);
+    }
     CHECK(panel().find("Cold    <- yours") != std::string::npos);
     for (double t = 17.0; t <= 20.5; t += 0.5) frame(t, dh);  // Lightning active, 3.5 s left: Physical follows, then Cold
     CHECK(hud("Cold in 7.5"));
@@ -2072,6 +2149,7 @@ int main() {
     TestMonsterAffixes();
     TestAffixMask();
     TestBoxes();
+    TestPluginAssets();
     TestEffects();
     TestGameClock();
     TestPowerNames();
@@ -2080,6 +2158,7 @@ int main() {
     TestLuaEffects();
     TestPluginSwitch();
     TestLuaBox();
+    TestLuaImage();
     TestTimeTracker();
     TestLuaLibraries();
     TestHealthBars();

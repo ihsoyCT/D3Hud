@@ -159,8 +159,8 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
 - **Convention** (`plugins/convention`) counts down to the element you want from the Ring of Convention of Elements. The
   ring moves on every 4 seconds and the order of the elements differs between hero classes, so the plugin learns the
   order by watching the ring (one lap) and learns it again when you change hero. Press *mine* in the **Convention** tab
-  next to the element you want (Fire, Cold, Lightning, ...), once per hero class. Then "Fire in 6.3" is drawn on the
-  screen in the colour of the element, turning yellow just before, and "FIRE NOW 2.1" while it is active.
+  next to the element you want (Fire, Cold, Lightning, ...), once per hero class. Then the element's icon and "Fire in 6.3"
+  are drawn on the screen in the colour of the element, turning yellow just before, and "FIRE NOW 2.1" while it is active.
 
 **Moving the plugins' boxes.** What the plugins draw on the screen (the Convention countdown, the DPS lines, the list of
 health bars, the time split, the effect bars) sits in boxes you can move. Press **Move on-screen boxes** on Settings >
