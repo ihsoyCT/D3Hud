@@ -1,6 +1,11 @@
 # Engine mining — TurboHUD.exe decompilation (2026-10-30)
 
-## Status: decompilation infrastructure COMPLETE, offsets located, extraction next
+## Status (updated 2026-10-31): the findings below are implemented in the reader
+
+Written as a log, oldest first: an early claim can be retracted further down (one is struck out), and the sections from
+"Old TurboHUD ... de-protected" on are the current knowledge (actor list, ACDs, attributes, UI controls, scenes, gizmos, rift
+progress, and at the end buffs, cooldowns and the ring). The first sections describe how the engine was taken apart and are kept
+for the method.
 
 ## What was beaten
 
@@ -321,8 +326,7 @@ Indices are the 2.6.10 ones from `attributes.tsv` +5 from ~380 (check each one l
   Generic_EnchantressCheatDeathPassive 485530, Generic_EnchantressCheatDeath 484963; follower versions).
   Also `Skill_Charges` (modifier = power) for charge based skills, `Reincarnation_Buff` (523).
 - **Game tick** ("CurrentGameTick", 60 per second of game time): a single int in the game state, not an attribute.
-  Not located by us yet. tools-free probe (scratchpad `tickscan.py`: two snapshots of private memory a few seconds
-  apart, keep int32 that advance 60/s) finds ~200 such counters in a live game, clustered in a few families (one
+  Not located by us yet. a probe that snapshots the game's private memory twice a few seconds apart and keeps the int32 values that advanced by 60 per second finds ~200 such counters in a live game, clustered in a few families (one
   family had >25 identical copies). To pick the real one: read `Power_Cooldown_Start` / `Buff_Icon_Start_Tick` right
   after using a skill or clicking a pylon; that value equals the tick at that moment.
 - **What is needed in the reader**: (1) the player's ACD id -> `attribGroup` (should work like monsters: the player

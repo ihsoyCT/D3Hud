@@ -1,10 +1,11 @@
 # Plugin system plan
 
-Status: in progress. Written 2026-10-30, reviewed the same day.
+Status: in progress. Written 2026-10-30, reviewed the same day; the progress notes were brought up to date on 2026-10-31.
+This is the design and the reasons; **what exists today is described in `PLUGIN.md`** (the interface) and `plugins/README.md`.
 
 Decisions after review: plugins are written by the owner only (light sandbox), Lua only (the DLL track
-stays parked), Lua 5.4 vendored as plain C in `third_party/lua`, and `input.click` is left out of the
-first API version. A Lua `salvage_verdict` can only make decisions more conservative: "junk" is honoured
+stays parked), Lua 5.4 vendored in `third_party/lua` (compiled as C++, so that an error unwinds through our bindings and
+runs their destructors; as plain C it uses longjmp), and `input.click` is left out of the first API version. A Lua `salvage_verdict` can only make decisions more conservative: "junk" is honoured
 only for items `IsSalvageCandidate`/`CanSalvageAllOfQuality` already allow, enforced in C++.
 
 Progress: step 0b part 1 done: `src/core/Settings.h` (`SettingsTable`) replaces the hand-written
@@ -15,6 +16,9 @@ from the plan: the manifest is `plugin.lua` (a table, run with no globals) inste
 JSON parser; plugin settings live in `plugins.ini` (separate from `d3hud.ini`); hot rects, plugin hotkeys,
 circles/quads, the `drop` event and the salvage policy hook are in the header but not provided yet. Plugin dock
 panels, rect/line drawing and shared Lua libraries (`plugins/lib`, `d3hud.require`) are provided; `plugins/healthbars` is the second plugin.
+Since then: `plugins/damagemeter`, the player's buffs and cooldowns (`d3hud.effects()`, API 2) with `plugins/effects` and
+`plugins/convention`, movable boxes with a host-drawn look (`d3hud.box`, API 3), pictures from the plugin's own folder
+(`d3hud.image`, API 4), and an *enabled* checkbox per plugin on the Plugins page.
 
 Step 0b part 2 done: the Settings window lists `SettingsPage` entries (`AddSettingsPage`); the built-in pages are
 registered the same way, grouped Interface / Panels / Features.
@@ -39,6 +43,8 @@ sandbox and crash isolation decide it: Lua is the default; DLLs are for heavy
 or trusted native work.
 
 ## Step 0: refactor first
+
+(Not done: `HudRenderer.cpp` is still one file, ~2400 lines, and the plugin host sits next to it instead.)
 
 `HudRenderer.cpp` does everything (~2200 lines). Before any scripting, split it
 into built-in "features" behind one interface: Minimap, Drops, Items, Actors,
@@ -122,10 +128,11 @@ and DLLs both get it.
   against runaway loops.
 - Disable a plugin after repeated errors; show the error in a Plugins section
   of Settings.
-- Layout: `plugins/<name>/plugin.json` (name, version, `api` version,
-  capabilities) and `main.lua`. File watcher for hot reload.
+- Layout: `plugins/<name>/plugin.lua` (a table: name, version, `api` version) and `main.lua`. (Planned as `plugin.json` with
+  capabilities and a file watcher; in practice there is no JSON parser, no capabilities and no hot reload: restart the overlay.)
 - Hot paths such as minimap markers stay in C++ and are configured
-  declaratively from Lua; Lua does not draw per actor.
+  declaratively from Lua. (In practice `plugins/healthbars` does draw per actor in Lua, a few
+  elites at a time, and costs little; the Plugins page shows the cost of each plugin.)
 
 ## Step 3: DLL track (later)
 
@@ -144,7 +151,7 @@ and DLLs both get it.
 3. Lua runtime, loader, sandbox, manifest (done).
 4. A first plugin as the proof (done: time tracker). Later: port Drops and the marker styles to Lua.
 5. Move salvage rules to a Lua policy hook.
-6. Plugin manager UI and hot reload.
+6. Plugin manager UI and hot reload (the manager page with an enabled checkbox and the cost per plugin is done; hot reload is not).
 7. DLL loader.
 
 ## Open decisions

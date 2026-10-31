@@ -121,13 +121,13 @@ can be resized by dragging its bottom-right corner, and the size is remembered.
 | Ground labels | Which items get labels, text size, colours |
 | Auto salvage | Safe area, rules, speed options, run safety, preview colour |
 | Reader / diagnostics | Autostart the reader, publish rate, on-screen diagnostics, open the settings folder, reset everything |
-| Plugins | Every loaded plugin with its status, the time it costs per frame, and its log; plugins add their own pages and options here |
+| Plugins | Every loaded plugin with an *enabled* checkbox, its status, the time it costs per frame and its log; the **Move on-screen boxes** button; plugins add their own pages and options here |
 
 Most changes are saved immediately; on the Minimap page press **Save**.
 
 ## Plugins
 
-Small Lua scripts in the `plugins` folder add features without rebuilding the program. One is included:
+Small Lua scripts in the `plugins` folder add features without rebuilding the program. These are included:
 
 - **Time tracker** (`plugins/timetracker`) records where your play time goes and shows it as percentages
   per area, for this session and all time. Rifts and greater rifts are detected automatically. For
@@ -169,8 +169,9 @@ to show right now, and you drag it where you want it; **Done** ends it, **Reset 
 fill and a border drawn by the program; pick their colours and opacity, the border width and the padding on the plugin's
 page (a fully transparent fill and border make the box invisible). Positions are remembered as a share of the screen.
 
-Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
-read game memory, press keys, or touch files. To write one see `plugins/README.md`. Restart the overlay
+Plugins run in a sandbox: they can read what the HUD sees and draw text, pictures from their own folder and settings pages,
+but cannot read game memory, press keys, or read or write any other file. To write one see `plugins/README.md` (quick
+start) and `PLUGIN.md` (the whole interface). Restart the overlay
 after adding or changing a plugin. Settings > Plugins lists every plugin with what it costs and an **enabled**
 checkbox: switching a plugin off stops it at once (and takes its dock tabs away); the choice is remembered.
 
@@ -197,6 +198,7 @@ D3Hud.Overlay.exe [options]        no options = cover "Diablo III", manage the r
   --target <title substring>   cover this window instead of "Diablo III"
   --no-reader                  do not start the reader (run D3Hud.Reader.exe --publish yourself)
   --demo                       synthetic demo scene instead of the game (no game needed)
+  --live / --start-reader      explicit live mode (this is the default)
   --replay <file>              play a recorded .bin instead
   --record <file> [--seconds N]  record the synthetic scene
   --colorkey                   fallback if DirectComposition is not available
@@ -216,6 +218,8 @@ D3Hud.Reader.exe --attach "Diablo III64" --publish     # live snapshots for the 
 D3Hud.Reader.exe --attach "Diablo III64" --actors      # one-shot dump of drawable actors
 D3Hud.Reader.exe --attach "Diablo III64" --items       # equipped and backpack items
 D3Hud.Reader.exe --attach "Diablo III64" --affixes     # research: where do elites keep their affixes (see analysis/MONSTER_AFFIXES.md)
+D3Hud.Reader.exe --attach "Diablo III64" --player-attrs [--seconds N]
+                                                       # research: the player's attributes (buffs, cooldowns), then what changes
 D3Hud.Reader.exe --attach "Diablo III64" --ui <text>   # list UI controls whose path contains <text>
 D3Hud.Reader.exe --attach "Diablo III64" --ui-watch <text> [--seconds N]
                                                        # watch what changes in those controls
@@ -237,7 +241,7 @@ Next to the exes (the folder is relocatable, nothing is written elsewhere):
 | `plugins/`, `plugins.ini` | Lua plugins (shipped) and the settings and data they keep |
 | `reader.log` | Output of the background reader |
 | `d3hud_drops.csv` | Created by *Export session to CSV* in the Drops settings |
-| `dumps\` | Created by the reader's F10 actor dump |
+| `dumps\` | Created by the reader's F10 actor dump and by `--player-attrs` |
 
 Keep the folder somewhere your user can write to (not `Program Files`).
 
@@ -261,8 +265,8 @@ cmake --install build --config Release                # -> .\dist
 cmake --install build --config Release --prefix D:\D3Hud
 ```
 
-The folder contains `D3Hud.Overlay.exe`, `D3Hud.Reader.exe`, the three data files,
-this README and `licenses\`. It runs on a machine without the Visual C++
+The folder contains `D3Hud.Overlay.exe`, `D3Hud.Reader.exe`, the data files (`sno_actors.tsv`, `items_gbid.tsv`,
+`sno_powers.tsv`, `scene_cells.bin`), the `plugins` folder, this README and `licenses\`. It runs on a machine without the Visual C++
 redistributable, because the C runtime is linked statically (the default; turn it off
 with `-DD3HUD_STATIC_RUNTIME=OFF`). To get a zip of the same layout:
 
@@ -307,10 +311,11 @@ running exe.
 ## Project layout and further reading
 
 ```
-src/core      snapshot model (frozen ABI), replay I/O, shared-memory ring, rules (salvage, search), host API (HostApi.h)
+src/core      snapshot model (frozen ABI), replay I/O, shared-memory ring, rules (salvage, search), effects (buffs and
+              cooldowns, game clock estimate), box placement, host API (HostApi.h)
 src/plugins   Lua plugin runtime (sandbox, host API binding) and the plugin settings store
 src/reader    the memory reader (process attach, actor / item / UI / scene discovery)
-src/overlay   Win32 + DirectX 11 + DirectComposition window, ImGui renderer, salvage runner
+src/overlay   Win32 + DirectX 11 + DirectComposition window, ImGui renderer, plugin host, picture loader, salvage runner
 src/tests     unit tests (ctest)
 analysis      data tables the program loads, plus notes on the game's memory layout
 tools         Python scripts used to mine those tables (not needed at runtime)
@@ -318,5 +323,6 @@ tools         Python scripts used to mine those tables (not needed at runtime)
 
 - `TESTING.md` — manual test matrix and the replay-first workflow
 - `FEATURE_IDEAS.md` — ideas and investigations
-- `plugins/README.md` — writing a Lua plugin; `PLUGIN_PLAN.md` — the design and what is still planned
+- `plugins/README.md` — writing a Lua plugin (quick start); `PLUGIN.md` — the whole plugin interface; `PLUGIN_PLAN.md` — the
+  design and what is still planned
 - `analysis/ENGINE_MINING.md` — how the game's data structures were found

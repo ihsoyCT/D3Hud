@@ -1,10 +1,10 @@
 # Feature ideas
 
-Parked ideas, with what we already know, so they can be picked up later.
+Parked ideas, with what we already know, so they can be picked up later. Sections marked **Done** are kept as a record.
 
-## Faster reader startup
+## Faster reader startup (Done: shared sweep in `SharedScan.h`, publish first, bases cached in `BasesCache.h`)
 
-Live: ~18 s from attach to the first published frame. Every block discovery
+(Measured before the changes below.) Live: ~18 s from attach to the first published frame. Every block discovery
 is its own full pass over the game's private memory: actor array ~3.7 s,
 ACD blocks ~5.4 s, attribute groups ~6 s, UI controls ~3 s (scenes ~5 s
 more, in the background).
@@ -26,9 +26,8 @@ Used pylons/shrines are hidden via Gizmo_State (464) / Gizmo_Has_Been_Operated
 
 ## Smaller follow-ups
 
-- Elite affixes (Mortar, Frozen, ...) next to champion/rare dots and under the health bars. The 30 affixes
-  are catalogued in `analysis/MONSTER_AFFIXES.md` / `src/core/MonsterAffixes.h`; where a monster's own list
-  lives is still to be measured with `D3Hud.Reader.exe --attach "Diablo III64.exe" --affixes` next to elites.
+- Elite affixes next to champion/rare dots. (Done under the health bars: the affix list is in the ACD record, see
+  `analysis/MONSTER_AFFIXES.md`; `ActorSnapshot::affixMask` and `d3hud.actors()` carry it. The minimap dots do not show them.)
 - Validate the player heading arrow in-game (quaternion at +0xA0).
 - Dead monsters are detected by the cleared acd link (+0x88 == -1); if a
   live monster ever goes missing, F10-dump it - +0x2E0 / +0x16C are backups.
@@ -71,11 +70,10 @@ labels is covered by the label mode; item "slot" rules are the never-salvage ite
 - Fps/timings overlay; on-screen reader error log.
 - "Open ini folder"; "reset everything" with confirmation.
 
-## Rift progress (investigation)
+## Rift progress (Done: `UiLayout::riftProgress` and `riftTimerFraction`, see `analysis/ENGINE_MINING.md`)
 
-The reader finds the rift UI controls (`...rift_wrapper.greater_rift_container.rift_progress_text`,
-`.rift_progress_bar`, `.rift_progress_marker`, `.rift_timer_value`) but only reads their visibility and
-rects. The progress value itself is not located yet. To find it, start a rift and run:
+The progress comes from the geometry of the rift UI controls (`...rift_wrapper.greater_rift_container.rift_progress_bar`,
+`.rift_progress_marker`, ...); the bar control also holds it as a float. The way it was found, which works for any UI value:
 
     D3Hud.Reader.exe --attach "Diablo III64.exe" --ui-watch rift_progress --seconds 120 > rift_watch.txt
 
@@ -90,7 +88,8 @@ against our API. What decides a port is the data the reader publishes: actors (p
 and affixes of elites, ground item rarity), backpack/equipment items with grid cells, UI state (inventory, stash,
 rift progress and timer), the player position and an area id.
 
-**Port next (the data exists)**
+**Done so far:** the time tracker, health bars, damage meter, effects (cheat death, pylon, potion timers) and Convention of Elements
+plugins. **Port next (the data exists)**
 
 | TurboHUD plugin | Our plugin | What it needs |
 |---|---|---|
@@ -106,7 +105,7 @@ rift progress and timer), the player position and an area id.
 - InventoryMaterialCount, BloodShard, KanaiCubedItems: stack sizes are not in `ItemSnapshot`.
 - MonsterRiftProgressionColoring: needs a table monster -> rift progress value (game data, not in memory).
 - TopExperienceStatistics (XP per hour, paragon): experience counters are not read.
-- AttributeLabelList and EliteMonsterSkill: arbitrary attributes; a monster's group is readable, the player's is not found yet.
+- AttributeLabelList and EliteMonsterSkill: arbitrary attributes; a monster's group is readable, and so is the player's (buffs and cooldowns, `AttribTable::Enumerate`); a general attribute browser would need names for the indices (`analysis/attributes.tsv` is the 2.6.10 list, +5 from about index 357).
 
 **Big projects (research needed, high value)**
 

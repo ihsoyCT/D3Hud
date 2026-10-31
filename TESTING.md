@@ -12,10 +12,15 @@ synthetic scenes. In-game sessions are short, scripted, and rare.
 ## Build & automated checks
 
 ```
-cd C:\Users\arne\Projects\D3Hud
+cd <the repository>
 cmake --build build --config Release
-cd build && ctest -C Release
+ctest --test-dir build -C Release --output-on-failure
+build\Release\D3Hud.Overlay.exe --selftest 40     # renders 40 frames of the synthetic scene, all plugins loaded
+build\Release\D3Hud.Reader.exe --selftest         # finds a marker in a child process (no game needed)
 ```
+
+The unit tests include every bundled plugin against a fake host (what it draws, what its panel says), so a plugin change is
+checked without the game. Close a running overlay before building (`LNK1104` otherwise).
 
 ## M0 manual test cases (run on your desktop, no game involved)
 
@@ -23,16 +28,20 @@ Open a Notepad window first (most tests use it as the target).
 
 | # | Command | What you should see | Pass criteria |
 |---|---------|---------------------|---------------|
-| T1 | `D3Hud.Overlay.exe --demo --target Notepad` | Overlay appears over the Notepad window: circular minimap bottom-right, salvage panel right side, info box top-left of the overlay area | All three visible, positioned over Notepad, not on the whole desktop |
+| T1 | `D3Hud.Overlay.exe --demo --target Notepad` | Overlay appears over the Notepad window: a minimap with dots near its top-right corner, a row of small panel tabs (Info, Drops, Items, Actors, the plugins' tabs, a cogwheel) at its bottom-right, and the plugins' boxes (health bar list, time split) at its left | All visible, positioned over Notepad, not on the whole desktop |
 | T2 | (same, look closely) | Background around dots/panels is fully transparent | You can read Notepad's text THROUGH the overlay; no black box, no colored fringe around text |
 | T3 | (default state) click on Notepad where the overlay covers it | Clicks pass through to Notepad | Caret moves / title bar reacts — Notepad gets every click |
-| T4 | Press **F8**, then click the salvage panel rows / scroll the table | Overlay becomes interactive | Rows highlight on hover, scrollbar draggable; Notepad no longer gets those clicks. F8 again reverts to pass-through |
-| T5 | Press **F9** | Panels (info + salvage) hide, minimap stays | Toggle works both ways |
+| T4 | Press **F8**, then click the *Items* tab to pin its panel and scroll its table | Overlay becomes interactive | Rows highlight on hover, scrollbar draggable; Notepad no longer gets those clicks. F8 again reverts to pass-through |
+| T5 | Press **F9** | The dock tabs and panels hide, the minimap stays | Toggle works both ways |
 | T6 | Watch ~30 s | Scene animates: player arrow travels a circle; white dots wander; blue dots move in 2 packs of 4; one yellow dot with 3 smaller yellow satellites; a purple dot sits still; 2 cyan diamonds + 1 green diamond are static. Dots leaving the circle become small rim ticks | Motion is smooth, no flicker, no ghosting |
-| T7 | Look at info box | `~60 fps` (or your monitor refresh) | FPS ≥ 30 sustained |
+| T7 | Hover the *Info* tab | `~60 fps` (or your monitor refresh) in the Info panel | FPS ≥ 30 sustained |
 | T8 | Move/resize the Notepad window | Overlay follows | New position/size matched within ~1 s, no stretching artifacts |
 | T9 | `.\D3Hud.Overlay.exe --record demo.bin --seconds 5`, watch ~5 s, END; then `.\D3Hud.Overlay.exe --replay demo.bin` | During recording you see the live synthetic scene. On replay you see the **identical** 5 seconds repeating in a loop — watch the player arrow: it moves for ~5 s, then snaps back to where it started, forever. Console printed `recorded ~75 frames` | Info box shows `source: demo.bin`; loop point visible as the scene restarting |
 | T10 | Press **END** | Clean exit | Console prints `exited cleanly`, process gone, F8/F9 no longer grabbed system-wide |
+
+| T11 | In the demo: Settings (cogwheel, F8 + click) > Plugins > **Move on-screen boxes** | Every plugin box gets a blue frame with its plugin and title, also boxes that are empty right now; a toolbar says *Done* / *Reset positions* | Drag a box and it follows the mouse; **Done** ends it; after a restart it is where you left it; **Reset positions** puts all back |
+| T12 | Settings > Plugins: untick *enabled* of a plugin, then tick it again | Its dock tab and box vanish at once; on again they return | Nothing of it draws while off; the choice survives a restart |
+| T13 | Hover the *Effects* tab (demo) | Cooldowns: Health Potion and Cheat Death with counting-down times; the Channeling Pylon appears under Buffs for 60 of every 90 s; the selector at the bottom switches the filter | Times fall smoothly, no "Power 123" names for these three |
 
 Note: `--colorkey` is a legacy fallback for machines where DirectComposition is
 unavailable. It is known to render as an opaque black sheet on some systems —
