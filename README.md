@@ -135,7 +135,7 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
   to (for example *Town* or *Bounties*); the answer is remembered. The page also holds the options (rename
   or add areas, show the split on screen). A **Time** tab in the dock shows the same split when you hover it.
 - **Health bars** (`plugins/healthbars`) draws a life bar over every champion (blue), rare and boss on the
-  screen, and lists the same bars one under the other on the left or right edge of the screen with the
+  screen, and lists the same bars one under the other in a box (move it where you like, see below) with the
   monster's name inside each bar. Under a bar it shows the monster's affixes as boxes (border and
   translucent fill in the affix colour, black or white text): the plugin's page has a row for each of the 30
   affixes with a checkbox and a colour, and the options set the text size and the fill opacity. Size, order and what to show are on
@@ -144,7 +144,7 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
 
 - **Damage meter** (`plugins/damagemeter`) measures the damage you deal to champions, rares and bosses from how their
   life falls: current DPS, the peak, the total and duration of each fight, a prediction of how long the elites on
-  the screen will live, and your records. It shows in a **DPS** tab of the dock and optionally as a line on the
+  the screen will live, and your records. It shows in a **DPS** tab of the dock and optionally as a box on the
   screen. Trash is not counted (its life is not read).
 
 - **Effects** (`plugins/effects`) lists what is running on your character with the time left, in an **Effects** tab of
@@ -155,6 +155,19 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
   number of the power, and add the numbers of powers you care about to the options to make them important too. The same
   list can also be drawn as bars on the screen. The times follow the game's clock, which the program estimates; they are
   right to about a tenth of a second.
+
+- **Convention** (`plugins/convention`) counts down to the element you want from the Ring of Convention of Elements. The
+  ring moves on every 4 seconds and the order of the elements differs between hero classes, so the plugin learns the
+  order by watching the ring (one lap) and learns it again when you change hero. Press *mine* in the **Convention** tab
+  next to the element you want (Fire, Cold, Lightning, ...), once per hero class. Then "Fire in 6.3" is drawn on the
+  screen in the colour of the element, turning yellow just before, and "FIRE NOW 2.1" while it is active.
+
+**Moving the plugins' boxes.** What the plugins draw on the screen (the Convention countdown, the DPS lines, the list of
+health bars, the time split, the effect bars) sits in boxes you can move. Press **Move on-screen boxes** on Settings >
+Plugins (or *Move on the screen* on a plugin's own page): every box gets a blue frame and its name, even when it has nothing
+to show right now, and you drag it where you want it; **Done** ends it, **Reset positions** puts them back. Each box has a
+fill and a border drawn by the program; pick their colours and opacity, the border width and the padding on the plugin's
+page (a fully transparent fill and border make the box invisible). Positions are remembered as a share of the screen.
 
 Plugins run in a sandbox: they can read what the HUD sees and draw text and settings pages, but cannot
 read game memory, press keys, or touch files. To write one see `plugins/README.md`. Restart the overlay

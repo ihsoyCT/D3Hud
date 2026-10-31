@@ -108,6 +108,7 @@ struct PluginHost::HostFns {
         r.sno = e.sno;
         r.kind = e.kind == EffectKind::Cooldown ? D3H_EFFECT_COOLDOWN : D3H_EFFECT_BUFF;
         r.stacks = e.count;
+        r.slot = e.slot;
         const EffectTimes t = TimesOf(e, g_host->tickNow_);
         r.duration = t.duration;
         if (g_host->tickNow_ >= 0) {
@@ -196,6 +197,31 @@ struct PluginHost::HostFns {
         host->renderer_.AddPluginPanel(id, d->title, [host, draw, user] { draw(&host->ui_, user); },
                                        ImVec2(d->default_w, d->default_h));
         host->panelsOf_[*plugin].push_back(id);
+        return 1;
+    }
+
+    static d3h_bool RegisterBox(const d3h_box_desc* d) {
+        const std::string* plugin = CurrentPluginName();
+        if (plugin == nullptr || d->id == nullptr || d->title == nullptr || d->draw == nullptr) return 0;
+        PluginHost* host = g_host;
+        const d3h_box_fn draw = d->draw;
+        void* const user = d->user;
+        const std::string id = *plugin + "." + d->id;
+        HudRenderer::BoxLook look;
+        look.hasFill = (d->flags & D3H_BOX_FILL_SET) != 0;
+        look.hasBorder = (d->flags & D3H_BOX_BORDER_SET) != 0;
+        look.fillArgb = d->fill;
+        look.borderArgb = d->border;
+        look.padding = d->padding;
+        host->renderer_.AddPluginBox(
+            id, d->title,
+            [draw, user](ImVec2 origin, ImVec2* size) {
+                d3h_vec2 used{0.f, 0.f};
+                draw({origin.x, origin.y}, &used, user);
+                *size = ImVec2(used.x, used.y);
+            },
+            ImVec2(std::clamp(d->default_x, 0.f, 1.f), std::clamp(d->default_y, 0.f, 1.f)), look);
+        host->boxesOf_[*plugin].push_back(id);
         return 1;
     }
 
@@ -328,6 +354,7 @@ PluginHost::PluginHost(HudRenderer& renderer) : renderer_(renderer) {
     host_.draw_text = HostFns::DrawText;
     host_.register_page = HostFns::RegisterPage;
     host_.register_panel = HostFns::RegisterPanel;
+    host_.register_box = HostFns::RegisterBox;
     host_.draw_line = HostFns::DrawLine;
     host_.draw_rect = HostFns::DrawRect;
     host_.text_size = HostFns::TextSize;
@@ -421,6 +448,8 @@ void PluginHost::ApplyEnabled(const Entry& e) {
     e.plugin->SetEnabled(!off);
     if (const auto it = panelsOf_.find(e.name); it != panelsOf_.end())
         for (const std::string& id : it->second) renderer_.SetPluginPanelOff(id, off);
+    if (const auto it = boxesOf_.find(e.name); it != boxesOf_.end())
+        for (const std::string& id : it->second) renderer_.SetPluginBoxOff(id, off);
 }
 
 void PluginHost::SetPluginEnabled(Entry& e, bool on) {
@@ -434,7 +463,7 @@ void PluginHost::SetPluginEnabled(Entry& e, bool on) {
 
 bool PluginHost::HasExtras(const std::string& plugin) const {
     return std::ranges::any_of(settings_.Of(plugin), [](const PluginSettingDef* d) { return !d->hidden; }) ||
-           panelsOf_.contains(plugin);
+           panelsOf_.contains(plugin) || boxesOf_.contains(plugin);
 }
 
 // A plugin without a page of its own still gets one for its options and dock panels.
@@ -452,6 +481,10 @@ void PluginHost::DrawExtrasOf(const std::string& plugin) {
     if (const auto it = panelsOf_.find(plugin); it != panelsOf_.end()) {
         ImGui::SeparatorText("Dock panel");
         for (const std::string& id : it->second) renderer_.DrawPluginPanelSettings(id);
+    }
+    if (const auto it = boxesOf_.find(plugin); it != boxesOf_.end()) {
+        ImGui::SeparatorText("On the screen");
+        for (const std::string& id : it->second) renderer_.DrawPluginBoxSettings(id);
     }
 }
 
@@ -511,6 +544,12 @@ void PluginHost::DrawSettingsOf(const std::string& plugin) {
 void PluginHost::DrawPluginsPage() {
     ImGui::TextDisabled("Lua plugins from the plugins folder next to the exe. See PLUGIN_PLAN.md and plugins/ for examples.");
     if (plugins_.empty()) ImGui::TextUnformatted("No plugins found.");
+    if (renderer_.PluginBoxCount() > 0) {
+        if (ImGui::Button(renderer_.EditingBoxes() ? "Done moving" : "Move on-screen boxes"))
+            renderer_.SetEditBoxes(!renderer_.EditingBoxes());
+        ImGui::SameLine();
+        ImGui::TextDisabled("Shows a frame around every box the plugins draw on the screen; drag them where you want them.");
+    }
     double totalUs = 0;
     for (const Entry& e : plugins_)
         if (e.plugin != nullptr) totalUs += e.plugin->timing().avgUs;

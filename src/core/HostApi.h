@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-#define D3H_API_VERSION 2 /* 2: effects (get_effect), d3h_frame.effect_count */
+#define D3H_API_VERSION 3 /* 2: effects (get_effect), d3h_frame.effect_count; 3: movable boxes (register_box) */
 #define D3H_NAME_LEN 48
 
 typedef int32_t d3h_bool; /* 0 / 1 */
@@ -135,6 +135,9 @@ typedef struct d3h_effect {
     d3h_bool timed;    /* 0 while the game clock is not known: remaining / elapsed are not meaningful */
     char name[D3H_NAME_LEN]; /* readable: "Enchantress Cheat Death Passive"; "Power <sno>" when the power is unknown */
     char code[D3H_NAME_LEN]; /* the internal name: "Generic_EnchantressCheatDeathPassive"; empty when unknown */
+    /* appended in API 2 before release */
+    int32_t slot;      /* buff icon slot (0..31): one power can use several, and some (Convention of Elements) use the slot as
+                          the element that is active; 0 for cooldowns */
 } d3h_effect;
 
 /* ---- Events ----------------------------------------------------------------------------- */
@@ -202,6 +205,31 @@ typedef struct d3h_panel_desc {
     void* user;
     float default_w, default_h; /* > 0 makes the panel resizable */
 } d3h_panel_desc;
+
+/* A movable box: a place on the screen the user can drag around (Settings > Plugins > Move on-screen boxes). The host
+ * calls `draw` once per drawn frame with the box's current top left corner in screen pixels; the plugin draws with the
+ * draw_* functions relative to it and reports in `*size` how much room it used (0, 0 = nothing to show right now). The
+ * host remembers the position (as a fraction of the screen) and, while the user is moving boxes, draws a frame with the
+ * title around each one, even an empty one, so it can be found and placed.
+ *
+ * The host also draws the box's look: a fill and a border around what the plugin drew, with some padding. `origin` is
+ * the corner of the CONTENT (inside the padding). The plugin may suggest a look; the user can change it with colour
+ * pickers on the plugin's Settings page, and a fully transparent fill and border make the box invisible again. */
+typedef void (*d3h_box_fn)(d3h_vec2 origin, d3h_vec2* size, void* user);
+
+typedef struct d3h_box_desc {
+    uint32_t size;
+    const char* id; /* unique inside the plugin */
+    const char* title;
+    d3h_box_fn draw;
+    void* user;
+    float default_x, default_y; /* top left corner as a fraction of the screen (0..1) until the user moves it */
+    uint32_t flags;             /* D3H_BOX_FILL_SET / D3H_BOX_BORDER_SET: the colours below are meant (else the host's look) */
+    d3h_color fill, border;     /* suggested look, 0xAARRGGBB */
+    float padding;              /* pixels between the content and the border; <= 0: the host's */
+} d3h_box_desc;
+
+enum { D3H_BOX_FILL_SET = 1, D3H_BOX_BORDER_SET = 2 };
 
 /* A page in the Settings window, for anything the setting schema cannot express. */
 typedef struct d3h_page_desc {
@@ -298,6 +326,9 @@ typedef struct d3h_host {
 
     /* the effects (buffs and cooldowns) running on the player, 0 <= index < d3h_frame.effect_count. API 2. */
     d3h_bool (*get_effect)(uint32_t index, d3h_effect* out);
+
+    /* a box the user can move around on the screen; the plugin draws into it. API 3. */
+    d3h_bool (*register_box)(const d3h_box_desc* desc);
 } d3h_host;
 
 /* True when the host's table is large enough to contain `field` (a newer plugin on an older host). */

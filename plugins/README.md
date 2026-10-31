@@ -9,9 +9,10 @@ plugins/myplugin/
 ```
 
 `name` is letters, digits, `-` and `_`. `api` is the host API version the plugin was written for (the
-current one is 2; a plugin that uses `effects()` needs `api = 2`). The overlay loads every folder at start; **restart the overlay to reload**.
+current one is 3; a plugin that uses `effects()` needs `api = 2`, one that uses `box{}` `api = 3`). The overlay loads every folder at start; **restart the overlay to reload**.
 `timetracker/` (time per area: page, options, dock panel), `healthbars/` (draws on the screen from
-`actors()`) and `effects/` (a dock panel and bars from `effects()`) are complete examples.
+`actors()`), `effects/` (a dock panel and bars from `effects()`) and `convention/` (learns a cycle from the `slot` of an effect) are
+complete examples.
 
 The Plugins page in Settings lists every plugin with an **enabled** checkbox (off: its code stops at once and its dock
 tabs go away; remembered in `plugins.ini` as `plugins.disabled`; switching it on again also gives a plugin that stopped
@@ -49,6 +50,7 @@ memory, press keys or click, touch files or the network. (See `PLUGIN_PLAN.md` f
 | `d3hud.draw_line(x0, y0, x1, y1, argb [, thickness])` | a line, from a `frame` handler |
 | `d3hud.setting{...}`, `d3hud.get(key)`, `d3hud.set(key, value)` | persisted settings (below) |
 | `d3hud.page{id, title, group, order, draw}` | a page in the Settings window; `draw(ui)` runs while it is shown. The first page of a plugin also shows its options and dock panel controls |
+| `d3hud.box{id, title, x, y, fill, fill_alpha, border, border_alpha, padding, draw}` | a **movable box** on the screen (below). `draw(x, y)` returns the width and height it used. Needs `api = 3` |
 | `d3hud.panel{id, title, width, height, draw}` | a dock panel: a tab in the dock, hover to peek, F8 + click to pin, drag to move; `draw(ui)` like a page. `width`/`height` > 0 make it resizable |
 | `d3hud.affixes` | all 30 monster affixes of the game: `{ {key = "molten", name = "Molten"}, ... }` |
 | `d3hud.kind` | names for the actor kind numbers: `d3hud.kind.rare`, `.champion`, `.boss`, `.pylon`, ... |
@@ -71,6 +73,8 @@ buffs (pylons, passives, item powers, and the status a monster's affix puts on y
 (health potion, skills, and the cooldown of cheat death, which the game keeps as a buff). Each entry has `sno`
 (the power's SNO: stable, match on this), `name` (readable, e.g. `"Pages Buff Infinite Casting"`; `"Power 123"` for an unknown power),
 `code` (the internal name, `"Generic_PagesBuffInfiniteCasting"`; empty when unknown), `kind` (`"buff"` or `"cooldown"`), `stacks`,
+`slot` (the buff's icon slot, 0..31: a power can use several, and Convention of Elements uses the slot as its active element,
+1 to 7 = Arcane, Cold, Fire, Holy, Lightning, Physical, Poison),
 `duration`, `remaining`, `elapsed` (seconds of game time), `fraction` (`remaining / duration`: 1 just started, 0 about to end) and
 `timed` (false while the game clock is not known yet; `remaining`, `elapsed` and `fraction` are then 0). The list
 is noisy on purpose: item passives refresh themselves every second or so and some entries are not meant to be
@@ -107,6 +111,32 @@ host. `choice` values are 1-based. Colours are `0xRRGGBB` numbers. Everything is
 local changed, v = ui.checkbox("enabled", enabled)
 if changed then enabled = v end
 ```
+
+## Boxes: what you draw on the screen
+
+Anything a plugin shows at a fixed place on the screen should be a **box**, not drawn at coordinates the plugin chose: the
+user can then move it (Settings > Plugins > *Move on-screen boxes*) and change its look, and the plugin needs no position
+settings of its own. (Things that belong to the world, such as a bar over a monster, are drawn at its screen position as
+before.)
+
+```lua
+d3hud.box{
+    id = "countdown", title = "My countdown",   -- title: what the frame shows while the user moves boxes
+    x = 0.45, y = 0.24,                          -- where the top left corner is until moved, as a share of the screen
+    fill = 0x101820, fill_alpha = 150,           -- optional suggested look; the user can change it
+    draw = function(x, y)                        -- once per drawn frame; x, y = top left corner of the content
+        d3hud.draw_text(x, y, 0xFFFFFFFF, "hello")
+        return d3hud.text_size("hello", 1)       -- the room used: width, height. Nothing returned: nothing to show now
+    end,
+}
+```
+
+The host draws the **fill and border** behind what `draw` drew (so plugins look alike), with some padding, in colours the user
+picks on the plugin's Settings page. `fill` / `border` are `0xRRGGBB` with `fill_alpha` / `border_alpha` 0..255 (defaults 130
+and 160; no `fill`/`border`: the program's standard dark translucent look), `padding` in pixels. A box that returns nothing
+draws nothing, but is still framed while the user moves boxes, so it can be placed even if it is empty at the moment. The
+position is remembered per box. Use `draw_*` and the `draw` library in `draw`; the drawing calls land in the box's place
+only if you draw relative to `x`, `y`.
 
 ## Shared libraries and how things are drawn
 

@@ -243,6 +243,8 @@ struct LuaBinding {
             SetStr(L, "kind", e.kind == D3H_EFFECT_COOLDOWN ? "cooldown" : "buff");
             lua_pushinteger(L, e.stacks);
             lua_setfield(L, -2, "stacks");
+            lua_pushinteger(L, e.slot);
+            lua_setfield(L, -2, "slot");
             SetNum(L, "duration", e.duration);
             SetNum(L, "remaining", e.remaining);
             SetNum(L, "elapsed", e.elapsed);
@@ -520,6 +522,54 @@ struct LuaBinding {
         return 0;
     }
 
+    // d3hud.box{ id=, title=, x=, y=, [fill=, fill_alpha=, border=, border_alpha=, padding=,] draw=function(x, y) ... return w, h end }:
+    // a place on the screen the user can move around, with a fill and border the host draws (colours the user can change).
+    // draw gets the top left corner of the content in pixels, draws relative to it with draw_text / draw_rect / ... and
+    // returns the room it used (nothing: nothing to show right now). x, y = the default corner, 0..1 of the screen.
+    static int Box(lua_State* L) {
+        LuaPlugin* p = Self(L);
+        luaL_checktype(L, 1, LUA_TTABLE);
+        const char* id = StrField(L, 1, "id");
+        const char* title = StrField(L, 1, "title");
+        if (id == nullptr || title == nullptr) return luaL_error(L, "box needs id and title");
+        lua_getfield(L, 1, "draw");
+        if (!lua_isfunction(L, -1)) return luaL_error(L, "box '%s' needs a draw function", id);
+        auto ctx = std::make_unique<LuaPlugin::PageCtx>();
+        ctx->plugin = p;
+        ctx->ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        d3h_box_desc d{};
+        d.size = sizeof(d);
+        d.id = id;
+        d.title = title;
+        d.draw = &LuaPlugin::BoxTrampoline;
+        d.user = ctx.get();
+        d.default_x = static_cast<float>(std::clamp(NumField(L, 1, "x", 0.4), 0.0, 1.0));
+        d.default_y = static_cast<float>(std::clamp(NumField(L, 1, "y", 0.3), 0.0, 1.0));
+        // the suggested look: fill / border are 0xRRGGBB with an opacity 0..255 (like the colour settings and the draw library)
+        lua_getfield(L, 1, "fill");
+        const bool hasFill = lua_isnumber(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "border");
+        const bool hasBorder = lua_isnumber(L, -1);
+        lua_pop(L, 1);
+        const auto argb = [&](const char* color, const char* alpha, double defaultAlpha) {
+            const auto a = static_cast<uint32_t>(std::clamp(NumField(L, 1, alpha, defaultAlpha), 0.0, 255.0));
+            return (a << 24) | (static_cast<uint32_t>(NumField(L, 1, color, 0)) & 0xFFFFFFu);
+        };
+        if (hasFill) {
+            d.flags |= D3H_BOX_FILL_SET;
+            d.fill = argb("fill", "fill_alpha", 130);
+        }
+        if (hasBorder) {
+            d.flags |= D3H_BOX_BORDER_SET;
+            d.border = argb("border", "border_alpha", 160);
+        }
+        d.padding = static_cast<float>(NumField(L, 1, "padding", 0));
+        if (!p->host_.register_box(&d)) return luaL_error(L, "box '%s' was rejected by the host", id);
+        p->pages_.push_back(std::move(ctx));
+        return 0;
+    }
+
     static d3h_color ColorArg(lua_State* L, int i) { return static_cast<d3h_color>(luaL_checkinteger(L, i)); }
 
     // d3hud.draw_rect(x0, y0, x1, y1, argb [, filled = true [, thickness]])
@@ -714,6 +764,23 @@ void LuaPlugin::DrawPage(PageCtx& page, const d3h_ui& ui) {
 
 void LuaPlugin::EventTrampoline(const d3h_event* ev, void* user) { static_cast<LuaPlugin*>(user)->OnEvent(*ev); }
 
+void LuaPlugin::DrawBox(PageCtx& box, d3h_vec2 origin, d3h_vec2* size) {
+    *size = {0.f, 0.f};
+    if (L_ == nullptr || !enabled_ || disabled()) return;
+    lua_rawgeti(L_, LUA_REGISTRYINDEX, box.ref);
+    lua_pushnumber(L_, origin.x);
+    lua_pushnumber(L_, origin.y);
+    if (!Run(2, 2)) return;
+    if (lua_isnumber(L_, -2) && lua_isnumber(L_, -1))
+        *size = {std::max(0.f, static_cast<float>(lua_tonumber(L_, -2))), std::max(0.f, static_cast<float>(lua_tonumber(L_, -1)))};
+    lua_pop(L_, 2);
+}
+
+void LuaPlugin::BoxTrampoline(d3h_vec2 origin, d3h_vec2* size, void* user) {
+    auto* box = static_cast<PageCtx*>(user);
+    box->plugin->DrawBox(*box, origin, size);
+}
+
 void LuaPlugin::PageTrampoline(const d3h_ui* ui, void* user) {
     auto* page = static_cast<PageCtx*>(user);
     page->plugin->DrawPage(*page, *ui);
@@ -848,6 +915,8 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         LuaBinding::Register(L, p.get(), "draw_rect", LuaBinding::DrawRect);
     if (D3H_HOST_HAS(&host, draw_line) && host.draw_line != nullptr)
         LuaBinding::Register(L, p.get(), "draw_line", LuaBinding::DrawLine);
+    if (D3H_HOST_HAS(&host, register_box) && host.register_box != nullptr)
+        LuaBinding::Register(L, p.get(), "box", LuaBinding::Box);
     if (D3H_HOST_HAS(&host, register_panel) && host.register_panel != nullptr)
         LuaBinding::Register(L, p.get(), "panel", LuaBinding::Panel);
     // names for the numbers in actor / item tables

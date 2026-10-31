@@ -82,8 +82,10 @@ private:
     void Fail(const std::string& msg);
     void OnEvent(const d3h_event& ev);
     void DrawPage(PageCtx& page, const d3h_ui& ui);
+    void DrawBox(PageCtx& box, d3h_vec2 origin, d3h_vec2* size);
     static void EventTrampoline(const d3h_event* ev, void* user);
     static void PageTrampoline(const d3h_ui* ui, void* user);
+    static void BoxTrampoline(d3h_vec2 origin, d3h_vec2* size, void* user);
 
     const d3h_host& host_;
     lua_State* L_ = nullptr;

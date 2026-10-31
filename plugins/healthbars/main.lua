@@ -40,10 +40,9 @@ d3hud.setting{ key = "lift", type = "float", default = 8, min = 0, max = 25, lab
 d3hud.setting{ key = "percent", type = "bool", default = true, label = "Show the percentage next to the bar" }
 
 -- the list on the side of the screen
-d3hud.setting{ key = "list", type = "bool", default = true, label = "List of bars on the side of the screen" }
+d3hud.setting{ key = "list", type = "bool", default = true, label = "List of bars on the screen",
+    tooltip = "Move it and change its colours with the buttons below (the box on the screen)." }
 d3hud.setting{ key = "list_scale", type = "float", default = 1.0, min = 0.5, max = 3.0, label = "Size (scales bars, text and affixes)" }
-d3hud.setting{ key = "list_side", type = "choice", default = 1, choices = { "Left", "Right" }, label = "Side" }
-d3hud.setting{ key = "list_y", type = "int", default = 25, min = 0, max = 90, label = "Distance from the top (% of the screen)" }
 d3hud.setting{ key = "list_width", type = "int", default = 230, min = 100, max = 500, label = "Bar width (px)" }
 d3hud.setting{ key = "list_row", type = "int", default = 20, min = 12, max = 40, label = "Bar height (px)" }
 d3hud.setting{ key = "list_rows", type = "int", default = 8, min = 1, max = 20, label = "Most bars shown" }
@@ -52,7 +51,6 @@ d3hud.setting{ key = "list_sort", type = "choice", default = 1, choices = { "Nea
 d3hud.setting{ key = "list_all", type = "bool", default = false, label = "Include monsters that are off the screen" }
 d3hud.setting{ key = "list_names", type = "bool", default = true, label = "Name inside the bar" }
 d3hud.setting{ key = "list_percent", type = "bool", default = true, label = "Percentage inside the bar" }
-d3hud.setting{ key = "list_box", type = "bool", default = true, label = "Dark box behind the list" }
 
 local KIND = d3hud.kind
 
@@ -106,23 +104,19 @@ local SORTS = {
     end,
 }
 
-local function draw_list(f, elites, tag_opts)
+-- Draws the list with its top left corner at x0, y0 (the box: the host adds the fill and border) and returns its size.
+local function draw_list(x0, y0, elites, tag_opts)
     local rows = d3hud.get("list_rows")
     local ls = d3hud.get("list_scale")
     local w, h = d3hud.get("list_width") * ls, d3hud.get("list_row") * ls
     table.sort(elites, SORTS[d3hud.get("list_sort")])
     local shown = math.min(#elites, rows)
     if shown == 0 then return end
-    local gap, pad = 4 * ls, 6 * ls
+    local gap = 4 * ls
     local ascale = d3hud.get("affix_scale") * ls
     local _, tagh = draw.tag_size("Ag", ascale, tag_opts)  -- one line of affix tags under a bar
     local total = -gap
     for i = 1, shown do total = total + h + gap + (elites[i].tags and tagh + 2 or 0) end
-    local x0 = d3hud.get("list_side") == 1 and 12 + pad or f.screen_w - 12 - pad - w
-    local y0 = f.screen_h * d3hud.get("list_y") / 100 + pad
-    if d3hud.get("list_box") then
-        d3hud.draw_rect(x0 - pad, y0 - pad, x0 + w + pad, y0 + total + pad, draw.PANEL)
-    end
     local _, line = d3hud.text_size("Ag", 1)
     local scale = math.max(0.5, (h - 6) / line)  -- text that fits the bar height
     local names, pct = d3hud.get("list_names"), d3hud.get("list_percent")
@@ -147,9 +141,13 @@ local function draw_list(f, elites, tag_opts)
             y = y + tagh + 2
         end
     end
+    return w, total
 end
 
+local list_data  -- what this frame's handler found for the list: { elites = ..., tag_opts = ... }, nil = nothing to list
+
 d3hud.on("frame", function()
+    list_data = nil
     local f = d3hud.frame()
     if f.actor_count == 0 or (f.ui.big_map and d3hud.get("hide_on_map")) then return end
 
@@ -196,8 +194,17 @@ d3hud.on("frame", function()
             end
         end
     end
-    if list then draw_list(f, listed, tag_opts) end
+    if list then list_data = { elites = listed, tag_opts = tag_opts } end
 end)
+
+-- the list of bars on the screen: a box the user can move (Settings > Plugins) and give another look
+d3hud.box{
+    id = "list", title = "Health bars", x = 0.01, y = 0.25,
+    draw = function(x, y)
+        if not list_data then return end
+        return draw_list(x, y, list_data.elites, list_data.tag_opts)
+    end,
+}
 
 -- the page: one row per affix of the game: show it under the bars? and in which colour
 d3hud.page{

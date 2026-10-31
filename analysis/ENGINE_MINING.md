@@ -383,3 +383,13 @@ Indices are the 2.6.10 ones from `attributes.tsv` +5 from ~380 (check each one l
 `ExtractEffects` (src/core/Effects.cpp) turns it into `WorldSnapshot::effects` and `GameClock` estimates `gameTick` from the
 start ticks that just changed. Plugins get it as `d3hud.effects()`. Names: analysis/sno_powers.tsv (2788 powers TurboHUD
 names; the rest show as "Power <sno>"). Live check: 14 effects, tick advancing 300 per 5 s, no change in publish rate.
+
+**Convention of Elements (ring), seen live on a Demon Hunter (2026-10-31)**: power 430674 (`IBuff ConventionOfElements` in
+TurboHUD). The active element is a buff of 240 ticks (4 s) in the icon slot of that element, and the next one starts on the
+tick the last ends: slots 3 -> 5 -> 6 -> 2 -> 3 ... for 70 s. A second slot (8) holds a 960 tick (16 s) span that restarts
+with every lap. The order differs between hero classes (the slot is the element, the order is not fixed), so the plugin
+learns it from the transitions. Slot = element, the seven in alphabetical order: 1 Arcane, 2 Cold, 3 Fire, 4 Holy,
+5 Lightning, 6 Physical, 7 Poison (the plugin's slot is TurboHUD's IconIndex 1..7). Evidence: TurboHUD's ConventionOfElements
+plugin lists the slots each hero class uses, and they are the classes' elements: Wizard 1 2 3 5 (Arcane, Cold, Fire,
+Lightning), Witch Doctor 2 3 6 7 (Cold, Fire, Physical, Poison), Crusader 2 3 4 5 6, Monk 3 4 5 6, Necromancer 2 6 7,
+Barbarian and Demon Hunter 2 3 5 6; the Demon Hunter lap seen live was Fire, Lightning, Physical, Cold.

@@ -16,9 +16,8 @@ d3hud.setting{ key = "window", type = "float", default = 5, min = 1, max = 15, l
     tooltip = "The current DPS is the damage of this many seconds, divided by them." }
 d3hud.setting{ key = "idle", type = "float", default = 4, min = 1, max = 15, label = "A fight ends after no damage for (s)" }
 d3hud.setting{ key = "ttk", type = "bool", default = true, label = "Predict the time to kill the elites on the screen" }
-d3hud.setting{ key = "hud", type = "bool", default = true, label = "Show the DPS on the screen" }
-d3hud.setting{ key = "hud_x", type = "int", default = 50, min = 0, max = 100, label = "Screen position: from the left (%)" }
-d3hud.setting{ key = "hud_y", type = "int", default = 13, min = 0, max = 100, label = "Screen position: from the top (%)" }
+d3hud.setting{ key = "hud", type = "bool", default = true, label = "Show the DPS on the screen",
+    tooltip = "Move it and change its colours with the buttons below (the box on the screen)." }
 d3hud.setting{ key = "hud_scale", type = "float", default = 1.0, min = 0.5, max = 3.0, label = "Size" }
 d3hud.setting{ key = "best_dps", type = "float", default = 0, hidden = true }
 d3hud.setting{ key = "best_total", type = "float", default = 0, hidden = true }
@@ -138,19 +137,24 @@ local function lines()
     return out
 end
 
-d3hud.on("frame", function()
-    if not d3hud.get("hud") then return end
-    local out = lines()
-    if #out == 0 then return end
-    local f = d3hud.frame()
-    local scale = d3hud.get("hud_scale")
-    local x, y = f.screen_w * d3hud.get("hud_x") / 100, f.screen_h * d3hud.get("hud_y") / 100
-    for _, text in ipairs(out) do
-        local w, h = d3hud.text_size(text, scale)
-        draw.shadowed(x - w / 2, y, draw.WHITE, text, scale)
-        y = y + h + 2
-    end
-end)
+-- the DPS lines on the screen: a box the user can move (Settings > Plugins) and give another look
+d3hud.box{
+    id = "dps", title = "DPS", x = 0.40, y = 0.12,
+    draw = function(x, y)
+        if not d3hud.get("hud") then return end
+        local out = lines()
+        if #out == 0 then return end
+        local scale = d3hud.get("hud_scale")
+        local top, width = y, 0
+        for _, text in ipairs(out) do
+            local w, h = d3hud.text_size(text, scale)
+            draw.shadowed(x, y, draw.WHITE, text, scale)
+            width = math.max(width, w)
+            y = y + h + 2
+        end
+        return width, y - top - 2
+    end,
+}
 
 -- the dock panel: "DPS"
 d3hud.panel{

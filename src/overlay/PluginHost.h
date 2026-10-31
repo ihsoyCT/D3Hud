@@ -74,6 +74,7 @@ private:
     std::set<std::string> switchedOff_;  // plugins the user switched off (plugins.disabled in plugins.ini)
     std::set<std::string> pluginsWithPage_;               // plugins that registered a page of their own
     std::map<std::string, std::vector<std::string>> panelsOf_;  // plugin -> its dock panel ids
+    std::map<std::string, std::vector<std::string>> boxesOf_;   // plugin -> its movable box ids
     const WorldSnapshot* snap_ = nullptr;  // valid during OnFrame
     double tickNow_ = -1;  // the game tick of this frame (extrapolated from the snapshot), -1 unknown
     PowerNames powers_;    // names for the effects

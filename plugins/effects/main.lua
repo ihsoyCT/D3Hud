@@ -31,9 +31,8 @@ d3hud.setting{ key = "max_min", type = "int", default = 30, min = 1, max = 600, 
 d3hud.setting{ key = "hidden", type = "string", default = "monsteraffix,calloutcooldown,bantercooldown,generic_cooldown,loading,usehealthglyph,actorinvul",
     label = "Without noise: hide powers whose internal name contains (comma separated)",
     tooltip = "Part of the internal name, e.g. Generic_MonsterAffixMolten. Hover an entry in the panel to see its name." }
-d3hud.setting{ key = "hud", type = "bool", default = false, label = "Also draw the effects as bars on the screen" }
-d3hud.setting{ key = "hud_x", type = "int", default = 2, min = 0, max = 100, label = "Screen position: from the left (%)" }
-d3hud.setting{ key = "hud_y", type = "int", default = 35, min = 0, max = 100, label = "Screen position: from the top (%)" }
+d3hud.setting{ key = "hud", type = "bool", default = false, label = "Also draw the effects as bars on the screen",
+    tooltip = "Move it and change its colours with the buttons below (the box on the screen)." }
 d3hud.setting{ key = "hud_scale", type = "float", default = 1.0, min = 0.5, max = 3.0, label = "Size" }
 d3hud.setting{ key = "hud_rows", type = "int", default = 8, min = 1, max = 30, label = "Most entries on the screen" }
 
@@ -140,18 +139,19 @@ local function row_color(row)
     return row.cd and COOLDOWN_COLOR or BUFF_COLOR
 end
 
-d3hud.on("frame", function()
-    frame_no = frame_no + 1
+d3hud.on("frame", function() frame_no = frame_no + 1 end)
+
+-- the bars on the screen: a box the user can move (Settings > Plugins) and give another look
+local function draw_bars(x, y)
     if not d3hud.get("hud") then return end
     local v = visible()
-    local f = d3hud.frame()
     local scale = d3hud.get("hud_scale")
-    local x, y = f.screen_w * d3hud.get("hud_x") / 100, f.screen_h * d3hud.get("hud_y") / 100
     local w, h = 220 * scale, 16 * scale
     local left = d3hud.get("hud_rows")
+    local top = y
     for _, group in ipairs({ v.cooldowns, v.buffs }) do
         for _, row in ipairs(group) do
-            if left <= 0 then return end
+            if left <= 0 then return w, y - top - 4 * scale end
             left = left - 1
             local e = row.e
             local fraction = (e.timed and e.duration > 0) and (e.remaining / e.duration) or 1
@@ -164,7 +164,11 @@ d3hud.on("frame", function()
             y = y + h + 4 * scale
         end
     end
-end)
+    if y == top then return end
+    return w, y - top - 4 * scale
+end
+
+d3hud.box{ id = "bars", title = "Effects", x = 0.02, y = 0.33, draw = draw_bars }
 
 local function show_row(ui, row)
     ui.text_colored(row_color(row), row_text(row))

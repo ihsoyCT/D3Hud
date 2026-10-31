@@ -97,17 +97,23 @@ local function rows()
     return list
 end
 
-d3hud.on("frame", function()
-    if not d3hud.get("show_hud") then return end
-    local all = sum(session)
-    if all <= 0 then return end
-    local parts = {}
-    for _, a in ipairs(rows()) do
-        local v = session[a]
-        if v and v > 0 then parts[#parts + 1] = string.format("%s %d%%", a, math.floor(v * 100 / all + 0.5)) end
-    end
-    d3hud.draw_text(12, 60, 0xFFFFFFFF, table.concat(parts, "  |  "))
-end)
+-- the session split on the screen: a box the user can move (Settings > Plugins) and give another look
+d3hud.box{
+    id = "split", title = "Time per area", x = 0.006, y = 0.055,
+    draw = function(x, y)
+        if not d3hud.get("show_hud") then return end
+        local all = sum(session)
+        if all <= 0 then return end
+        local parts = {}
+        for _, a in ipairs(rows()) do
+            local v = session[a]
+            if v and v > 0 then parts[#parts + 1] = string.format("%s %d%%", a, math.floor(v * 100 / all + 0.5)) end
+        end
+        local text = table.concat(parts, "  |  ")
+        d3hud.draw_text(x, y, 0xFFFFFFFF, text)
+        return d3hud.text_size(text, 1)
+    end,
+}
 
 local function section(ui, title, data)
     ui.separator_text(title)

@@ -2,5 +2,5 @@
 return {
     name = "effects",
     version = "1.0",
-    api = 2,
+    api = 3,
 }
