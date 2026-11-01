@@ -29,7 +29,8 @@ add_library(d3hud_core STATIC
     src/core/SharedRing.cpp
     src/core/SnapshotInterp.cpp
     src/core/SceneCells.cpp
-    src/core/Effects.cpp)
+    src/core/Effects.cpp
+    src/core/Wallet.cpp)
 target_include_directories(d3hud_core PUBLIC src/core)
 target_compile_definitions(d3hud_core PUBLIC _CRT_SECURE_NO_WARNINGS)
 

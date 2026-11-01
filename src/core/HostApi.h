@@ -24,8 +24,9 @@
 extern "C" {
 #endif
 
-#define D3H_API_VERSION 4 /* 2: effects (get_effect), d3h_frame.effect_count; 3: movable boxes (register_box);
-                             4: images (load_image, draw_image) */
+#define D3H_API_VERSION 6 /* 2: effects (get_effect), d3h_frame.effect_count; 3: movable boxes (register_box);
+                             4: images (load_image, draw_image); 5: actor kind ground_effect;
+                             6: gold, blood shards and crafting materials (get_wallet) */
 #define D3H_NAME_LEN 48
 
 typedef int32_t d3h_bool; /* 0 / 1 */
@@ -48,7 +49,7 @@ typedef enum d3h_actor_kind {
     D3H_ACTOR_PLAYER = 0, D3H_ACTOR_TRASH, D3H_ACTOR_CHAMPION, D3H_ACTOR_RARE, D3H_ACTOR_MINION,
     D3H_ACTOR_BOSS, D3H_ACTOR_PYLON, D3H_ACTOR_SHRINE, D3H_ACTOR_CHEST, D3H_ACTOR_GLOBE,
     D3H_ACTOR_GROUND_ITEM, D3H_ACTOR_PORTAL, D3H_ACTOR_PYLON_SPAWN, D3H_ACTOR_RIFT_ORB,
-    D3H_ACTOR_RIFT_ORB_TIERED
+    D3H_ACTOR_RIFT_ORB_TIERED, D3H_ACTOR_GROUND_EFFECT /* API 5: a circle on the ground; the name says which */
 } d3h_actor_kind;
 
 /* Same numbering as ItemRarity. */
@@ -140,6 +141,20 @@ typedef struct d3h_effect {
     int32_t slot;      /* buff icon slot (0..31): one power can use several, and some (Convention of Elements) use the slot as
                           the element that is active; 0 for cooldowns */
 } d3h_effect;
+
+/* The account's counters: gold, blood shards and the crafting materials (what the game's material panel shows). API 6.
+ * `materials` is in the order of the Lua keys (d3hud.wallet): reusable_parts, arcane_dust, veiled_crystal, deaths_breath,
+ * forgotten_soul, khanduran_rune, caldeum_nightshade, arreat_war_tapestry, corrupted_angel_flesh, westmarch_holy_water,
+ * primordial_ashes, greater_rift_keystone, vial_of_putridness, idol_of_terror, heart_of_fright, leorics_regret. */
+#define D3H_MATERIAL_SLOTS 16
+typedef struct d3h_wallet {
+    uint32_t size;
+    d3h_bool valid;        /* 0: the reader has not found the counters (yet); everything else is then 0 */
+    double gold;
+    uint32_t blood_shards;
+    uint32_t material_count; /* how many entries of `materials` are set */
+    uint32_t materials[D3H_MATERIAL_SLOTS];
+} d3h_wallet;
 
 /* ---- Events ----------------------------------------------------------------------------- */
 
@@ -346,6 +361,9 @@ typedef struct d3h_host {
      * (screen pixels) with `tint` (0xAARRGGBB, white = as is), from the same places as the other draw_* functions. API 4. */
     d3h_bool (*load_image)(const char* name, d3h_image* out);
     void (*draw_image)(int32_t layer, int32_t image, d3h_rect rect, d3h_color tint);
+
+    /* gold, blood shards and crafting materials. API 6. */
+    d3h_bool (*get_wallet)(d3h_wallet* out);
 } d3h_host;
 
 /* True when the host's table is large enough to contain `field` (a newer plugin on an older host). */

@@ -73,8 +73,30 @@ bool IsBonusDrop(const std::string& type, const std::string& name) {
     return type == "CraftingReagent" && name.rfind("Key of ", 0) == 0;  // realm keys (Key of War, ...)
 }
 
+// The actors elite affixes and a few monsters leave on the ground. The names and the radii the plugin draws come from
+// TurboHUD's EliteMonsterSkillPlugin; all of them are rejected by the other rules (helpers, effects, props).
+static bool IsMonsterGroundEffect(const std::string& name) {
+    static const char* const kNames[] = {
+        "monsteraffix_frozen_iceclusters",           "monsteraffix_molten_deathstart_proxy",
+        "monsteraffix_molten_deathexplosion_proxy",  "monsteraffix_molten_firering",
+        "monsteraffix_desecrator_damage_aoe",        "x1_monsteraffix_thunderstorm_impact",
+        "monsteraffix_plagued_endcloud",             "creepmobarm",
+        "gluttony_gascloud_proxy",                   "monsteraffix_arcaneenchanted_petsweep",
+        "monsteraffix_arcaneenchanted_petsweep_reverse", "arcaneenchanteddummy_spawn",
+        "x1_monsteraffix_frozenpulse_monster",
+    };
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return std::find(std::begin(kNames), std::end(kNames), lower) != std::end(kNames);
+}
+
 bool ClassifyActor(const std::string& snoKind, const std::string& name, bool hasAcd, bool dead,
                    ActorKind* out) {
+    if (IsMonsterGroundEffect(name)) {
+        if (snoKind == "Monster" && dead) return false;  // the pulse / sweep helpers are monsters: no corpses
+        *out = ActorKind::GroundEffect;
+        return true;
+    }
     // invisible server prop marking where a greater rift pylon may spawn
     if (name == "MarkerLocation_TieredRiftPylon") {
         *out = ActorKind::PylonSpawn;
@@ -112,6 +134,12 @@ bool ClassifyActor(const std::string& snoKind, const std::string& name, bool has
             return true;
         }
         return false;
+    }
+    // The Oculus Ring's circle and the Altar of Rites circles share this effect (colour variants: _blue, _teal, ...).
+    // Found with Reader --nearby; effects are not kept otherwise, so each kind we want is named here.
+    if (snoKind == "ClientEffect" && Contains(name, "itemPassive_unique_ring_017_dome")) {
+        *out = ActorKind::GroundEffect;
+        return true;
     }
     if (snoKind == "Item" && Contains(name, "rifts_orb")) {
         // the orbs that fill the rift progress bar: shown even without an ACD (they are not items)

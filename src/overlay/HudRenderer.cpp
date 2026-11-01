@@ -40,6 +40,7 @@ ImU32 KindColor(ActorKind k) {
         case ActorKind::PylonSpawn:return IM_COL32(0, 230, 230, 150);    // faint cyan
         case ActorKind::RiftOrb:   return IM_COL32(80, 170, 255, 255);   // blue
         case ActorKind::RiftOrbTiered: return IM_COL32(255, 225, 80, 255);  // yellow
+        case ActorKind::GroundEffect:  return IM_COL32(120, 200, 255, 255);  // light blue
     }
     return IM_COL32(255, 255, 255, 255);
 }
@@ -119,6 +120,8 @@ void MinimapLayout::ResetMarkers() {
     set(ActorKind::PylonSpawn, 0x00F0FF, 6.0f, MarkerShape::Diamond, 0.6f, true);
     set(ActorKind::RiftOrb,       0x50AAFF, 4.5f, MarkerShape::Dot, 1.0f, false, true);  // blue, pulsing: fills the rift bar
     set(ActorKind::RiftOrbTiered, 0xFFE150, 4.5f, MarkerShape::Dot, 1.0f, false, true);  // yellow (greater rifts)
+    set(ActorKind::GroundEffect,  0x78C8FF, 5.0f, MarkerShape::Ring, 0.8f);  // the plugin draws the circle itself
+    kinds[static_cast<int>(ActorKind::GroundEffect)].show = false;           // a dot on the minimap adds little
 }
 
 static const char* const kPanelNames[MinimapLayout::kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
@@ -676,7 +679,7 @@ void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& op
     PanelScope panel(*this, PanelId::Actors, opt, "Actors (minimap source)");
     if (!panel) return;
 
-    int perKind[static_cast<int>(ActorKind::RiftOrbTiered) + 1] = {};
+    int perKind[MinimapLayout::kKindCount] = {};
     std::vector<std::pair<float, uint16_t>> order;
     order.reserve(snap.actorCount);
     for (uint16_t i = 0; i < snap.actorCount; ++i) {
@@ -684,13 +687,13 @@ void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& op
         const float dx = a.world.x - snap.playerPos.x, dy = a.world.y - snap.playerPos.y;
         order.push_back({std::sqrt(dx * dx + dy * dy), i});
         const int k = static_cast<int>(a.kind);
-        if (k >= 0 && k <= static_cast<int>(ActorKind::RiftOrbTiered)) perKind[k]++;
+        if (k >= 0 && k < MinimapLayout::kKindCount) perKind[k]++;
     }
     std::sort(order.begin(), order.end());
 
     // per-kind counts in their map colours
     ImGui::Text("%u actors:", snap.actorCount);
-    for (int k = 0; k <= static_cast<int>(ActorKind::RiftOrbTiered); ++k) {
+    for (int k = 0; k < MinimapLayout::kKindCount; ++k) {
         if (perKind[k] == 0) continue;
         const ActorKind kind = static_cast<ActorKind>(k);
         ImGui::SameLine();

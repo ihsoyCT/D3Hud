@@ -267,7 +267,12 @@ static void TestClassifyActor() {
     CHECK(!ClassifyActor("Monster", "Generic_Proxy", true, kAlive, &k));
     CHECK(!ClassifyActor("Monster", "Hireling_Enchantress", true, kAlive, &k));
     CHECK(!ClassifyActor("Monster", "p75_cos_pet_AngelicDragon", true, kAlive, &k));
-    CHECK(!ClassifyActor("Monster", "x1_MonsterAffix_frozenPulse_monster", false, kAlive, &k));
+    // the area effects of elite affixes (TurboHUD's list) are ground effects, whatever their SNO kind and spelling
+    CHECK(ClassifyActor("Monster", "x1_MonsterAffix_frozenPulse_monster", false, kAlive, &k) && k == ActorKind::GroundEffect);
+    CHECK(!ClassifyActor("Monster", "x1_MonsterAffix_frozenPulse_monster", false, kDead, &k));
+    CHECK(ClassifyActor("ServerProp", "monsterAffix_Desecrator_damage_AOE", false, kAlive, &k) && k == ActorKind::GroundEffect);
+    CHECK(ClassifyActor("CustomBrain", "creepMobArm", false, kAlive, &k) && k == ActorKind::GroundEffect);
+    CHECK(!ClassifyActor("ServerProp", "monsterAffix_Desecrator_telegraph", false, kAlive, &k));  // not one of them
     CHECK(!ClassifyActor("Monster", "Voiceover_FreedPrisoner", false, kAlive, &k));
     CHECK(!ClassifyActor("Monster", "P76_PortalSpawner_Graveyard_Act1", false, kAlive, &k));
     CHECK(ClassifyActor("Monster", "Unique_CaptainDaltyn_AdventureMode", false, kAlive, &k) && k == ActorKind::Boss);
@@ -282,6 +287,12 @@ static void TestClassifyActor() {
           k == ActorKind::PylonSpawn);
     CHECK(ClassifyActor("Item", "Helm_DHF_norm_set_01", true, kAlive, &k) && k == ActorKind::GroundItem);
     CHECK(!ClassifyActor("ClientEffect", "anything", true, kAlive, &k));
+    // the Oculus Ring / Altar of Rites circles, every colour variant (found with Reader --nearby)
+    for (const char* dome : {"p2_itemPassive_unique_ring_017_dome", "p2_itemPassive_unique_ring_017_dome_blue",
+                             "p2_itemPassive_unique_ring_017_dome_teal", "p2_itemPassive_unique_ring_017_dome_purple",
+                             "p75_itemPassive_unique_ring_017_dome_purple_red"})
+        CHECK(ClassifyActor("ClientEffect", dome, false, kAlive, &k) && k == ActorKind::GroundEffect);
+    CHECK(!ClassifyActor("ClientEffect", "p2_itemPassive_unique_blizzconRing_fire_orbit", false, kAlive, &k));
 }
 
 static void TestAcdItemDecode() {
@@ -489,6 +500,7 @@ static void TestHostApi() {
     static_assert(D3H_ACTOR_PLAYER == static_cast<int>(ActorKind::Player));
     static_assert(D3H_ACTOR_PORTAL == static_cast<int>(ActorKind::Portal));
     static_assert(D3H_ACTOR_RIFT_ORB_TIERED == static_cast<int>(ActorKind::RiftOrbTiered));
+    static_assert(D3H_ACTOR_GROUND_EFFECT == static_cast<int>(ActorKind::GroundEffect));
     static_assert(D3H_RARITY_LEGENDARY == static_cast<int>(ItemRarity::Legendary));
     static_assert(D3H_RARITY_SET == static_cast<int>(ItemRarity::Set));
     static_assert(D3H_VERDICT_JUNK == static_cast<int>(SalvageVerdict::Junk));
@@ -563,12 +575,15 @@ struct State {
     std::string press;  // the fake ui answers a button whose label contains this with a click
     std::vector<d3h_actor> actors;
     std::vector<d3h_effect> effects;
+    d3h_wallet wallet{};
     struct Box { std::string id, title; d3h_box_fn draw; void* user; d3h_box_desc desc; d3h_vec2 size{}; };
     std::vector<Box> boxes;
     std::vector<std::string> imageNames;  // load_image: id = index + 1 (a name loads once)
     struct ImageDraw { int32_t layer, image; d3h_rect rect; d3h_color tint; };
     std::vector<ImageDraw> imagesDrawn;
     std::vector<d3h_rect> rects;
+    struct Segment { d3h_vec2 a, b; d3h_color color; float thickness; };
+    std::vector<Segment> segments;  // draw_line
     std::vector<Page> panels;
     size_t checkboxes = 0, swatches = 0;  // widgets a page drew
     d3h_frame frame{};
@@ -590,6 +605,11 @@ d3h_bool GetEffect(uint32_t i, d3h_effect* out) {
     *out = g.effects[i];
     return 1;
 }
+d3h_bool GetWallet(d3h_wallet* out) {
+    *out = g.wallet;
+    out->size = sizeof(*out);
+    return 1;
+}
 d3h_bool GetActor(uint32_t i, d3h_actor* out) {
     if (i >= g.actors.size()) return 0;
     *out = g.actors[i];
@@ -601,6 +621,7 @@ d3h_bool WorldToScreen(d3h_vec2 w, float, d3h_vec2* out) {
     return 1;
 }
 void DrawRect(int32_t, d3h_rect r, d3h_color, d3h_bool, float) { g.rects.push_back(r); }
+void DrawLine(int32_t, d3h_vec2 a, d3h_vec2 b, d3h_color c, float t) { g.segments.push_back({a, b, c, t}); }
 d3h_vec2 TextSize(const char* t, float scale) { return {7.f * scale * static_cast<float>(strlen(t)), 13.f * scale}; }
 d3h_bool RegisterPanel(const d3h_panel_desc* d) {
     g.panels.push_back({d->id, d->title, "", d->draw, d->user});
@@ -652,8 +673,8 @@ d3h_host MakeHost() {
     d3h_host h{};
     h.size = sizeof(h);
     h.api_version = D3H_API_VERSION;
-    h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.get_effect = GetEffect; h.subscribe = Subscribe; h.draw_text = DrawText;
-    h.world_to_screen = WorldToScreen; h.draw_rect = DrawRect; h.register_panel = RegisterPanel;
+    h.log = Log; h.get_frame = GetFrame; h.get_actor = GetActor; h.get_effect = GetEffect; h.get_wallet = GetWallet; h.subscribe = Subscribe; h.draw_text = DrawText;
+    h.world_to_screen = WorldToScreen; h.draw_rect = DrawRect; h.draw_line = DrawLine; h.register_panel = RegisterPanel;
     h.text_size = TextSize;
     h.register_box = RegisterBox; h.load_image = LoadImage; h.draw_image = DrawImage; h.register_page = RegisterPage; h.define_setting = Define; h.get_bool = GetBool; h.get_int = GetInt;
     h.get_float = GetFloat; h.get_color = GetColor; h.get_string = GetString; h.set_value = SetValue; h.set_string = SetString;
@@ -813,6 +834,50 @@ static void TestGameClock() {
     d.Update(0, g2.data(), g2.size());
     d.Update(60000, g2.data(), g2.size());  // 60 s later the estimate is 5600, the buff claims to end at 2400
     CHECK(d.Tick(60000) <= 2430);
+    // a finished buff the game has not cleared yet must not freeze the clock while other effects run
+    GameClock s;
+    std::vector<EffectSnapshot> g3 = {buff(1, 100, 400), buff(2, 3000, 12000)};
+    s.Update(0, g3.data(), g3.size());  // anchors at the newest start, 3000
+    s.Update(1000, g3.data(), g3.size());
+    CHECK(s.Tick(1000) == 3060);
+    s.Update(2000, g3.data(), g3.size());
+    CHECK(s.Tick(2000) == 3120);  // the stale buff ended 2700 ticks ago: ignored
+}
+
+static void TestWallet() {
+    // a table as measured live: gold (more than 32 bits), blood shards, an unused id, then materials; ids count up
+    std::vector<uint8_t> t(kWalletBytes + 64, 0xAB);
+    auto put64 = [&](size_t record, uint64_t v) { memcpy(t.data() + record * kWalletRecord, &v, 8); };
+    for (size_t k = 0; k < kWalletRecords; ++k) {
+        memset(t.data() + k * kWalletRecord, 0, kWalletRecord);
+        const uint32_t id = static_cast<uint32_t>(k + 1);
+        memcpy(t.data() + k * kWalletRecord + 0x10, &id, 4);
+    }
+    put64(0, 5000000000ull);
+    put64(1, 1032);
+    put64(3, 7338);   // reusable parts
+    put64(12, 1411);  // Westmarch holy water, the tenth
+    put64(20, 54);    // greater rift keystones
+    put64(13, 1);     // vial of putridness (id 14)
+    put64(21, 195);   // primordial ashes: the last record
+    CHECK(LooksLikeWallet(t.data()));
+    WalletSnapshot w;
+    DecodeWallet(t.data(), &w);
+    CHECK(w.valid == 1 && w.gold == 5000000000ull && w.bloodShards == 1032);
+    CHECK(w.materials[static_cast<int>(Material::ReusableParts)] == 7338);
+    CHECK(w.materials[static_cast<int>(Material::WestmarchHolyWater)] == 1411);
+    CHECK(w.materials[static_cast<int>(Material::PrimordialAshes)] == 195);
+    CHECK(w.materials[static_cast<int>(Material::GreaterRiftKeystone)] == 54);
+    CHECK(w.materials[static_cast<int>(Material::VialOfPutridness)] == 1 && w.materials[static_cast<int>(Material::LeoricsRegret)] == 0);
+    CHECK(std::string(MaterialKey(static_cast<int>(Material::DeathsBreath))) == "deaths_breath" && std::string(MaterialKey(99)).empty());
+    // not a table: a wrong id, a filler word that is not zero
+    t[5 * kWalletRecord + 0x10] = 9;
+    CHECK(!LooksLikeWallet(t.data()));
+    t[5 * kWalletRecord + 0x10] = 6;
+    t[2 * kWalletRecord + 0x08] = 1;
+    CHECK(!LooksLikeWallet(t.data()));
+    std::vector<uint8_t> zeros(kWalletBytes, 0);
+    CHECK(!LooksLikeWallet(zeros.data()));
 }
 
 static void TestPowerNames() {
@@ -884,7 +949,7 @@ static void TestLuaSandbox() {
 
     CHECK(load("ok", "assert(os == nil and io == nil and require == nil and dofile == nil and loadfile == nil and load == nil "
                      "and debug == nil and package == nil and collectgarbage == nil and print == nil)\n"
-                     "assert(string.dump == nil and d3hud.api == 4)\n"
+                     "assert(string.dump == nil and d3hud.api == 6)\n"
                      "assert(string.format('%d', 3) == '3' and math.floor(2.5) == 2 and #table.concat({'a','b'}) == 2)") != nullptr);
     CHECK(err.empty());
 
@@ -1010,6 +1075,27 @@ static void TestLuaEffects() {
     const fs::path dir2 = WritePlugin(root, "nofx", "assert(d3hud.effects == nil)");
     err.clear();
     CHECK(LuaPlugin::Load(dir2, old, err) != nullptr);
+
+    // the wallet: nil while the reader has not found the counters, then the numbers by key
+    fake::g.wallet = d3h_wallet{};
+    CHECK(LuaPlugin::Load(WritePlugin(root, "nowallet", "assert(d3hud.wallet() == nil)"), host, err) != nullptr);
+    fake::g.wallet.valid = 1;
+    fake::g.wallet.gold = 3219835433.0;
+    fake::g.wallet.blood_shards = 1032;
+    fake::g.wallet.material_count = 15;
+    fake::g.wallet.materials[0] = 7338;
+    fake::g.wallet.materials[3] = 11404;
+    fake::g.wallet.materials[10] = 195;
+    fake::g.wallet.materials[11] = 54;
+    CHECK(LuaPlugin::Load(WritePlugin(root, "wallet",
+        "local w = d3hud.wallet()\n"
+        "assert(w.gold == 3219835433 and w.blood_shards == 1032 and w.reusable_parts == 7338)\n"
+        "assert(w.deaths_breath == 11404 and w.primordial_ashes == 195 and w.greater_rift_keystone == 54 and w.arcane_dust == 0)\n"
+        "assert(math.type(w.gold) == 'integer')\n"), host, err) != nullptr);
+    CHECK(err.empty());
+    d3h_host older = fake::MakeHost();
+    older.size = static_cast<uint32_t>(offsetof(d3h_host, get_wallet));
+    CHECK(LuaPlugin::Load(WritePlugin(root, "nowalletapi", "assert(d3hud.wallet == nil)"), older, err) != nullptr);
     fs::remove_all(root, ec);
 }
 
@@ -1364,6 +1450,205 @@ static d3h_effect FxEntry(uint32_t sno, int32_t kind, float duration, float rema
     strncpy_s(e.name, sizeof(e.name), name, _TRUNCATE);
     strncpy_s(e.code, sizeof(e.code), code, _TRUNCATE);
     return e;
+}
+
+static void TestGroundEffectsPlugin() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"groundeffects", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "groundeffects: %s\n", err.c_str());
+        return;
+    }
+    const char* kOculus = "p2_itemPassive_unique_ring_017_dome";
+    const char* kTeal = "p2_itemPassive_unique_ring_017_dome_teal";
+    fake::g.frame.player_pos = {100.f, 100.f};
+    auto circle = [&](uint64_t id, const char* name, float x) {
+        d3h_actor a = fake::Actor(D3H_ACTOR_GROUND_EFFECT, x, -1.f, name);
+        a.id = id;
+        a.pos = {x, 100.f};
+        return a;
+    };
+    auto snap = [&](double seconds, std::vector<d3h_actor> actors) {
+        fake::g.frame.time_ms = seconds * 1000.0;
+        fake::g.actors = std::move(actors);
+        fake::Fire(D3H_EVENT_SNAPSHOT);
+    };
+    auto frame = [&] {
+        fake::g.segments.clear();
+        fake::g.drawn.clear();
+        fake::Fire(D3H_EVENT_FRAME);
+    };
+    auto said = [&](const char* text) {
+        for (const std::string& d : fake::g.drawn)
+            if (d == text) return true;
+        return false;
+    };
+
+    CHECK(fake::g.settings.SetNumber("groundeffects.clock", 0));  // the plain rings first, the clock at the end
+
+    // nothing on the ground: nothing drawn
+    snap(1.0, {fake::Actor(D3H_ACTOR_RARE, 130.f, 1.f, "Rare")});
+    frame();
+    CHECK(fake::g.segments.empty());
+
+    // an Oculus circle 30 units away, first seen at 1.0 s; at 3.4 s it has 5.0 s of its 7.4 left
+    snap(1.0, {circle(7, kOculus, 130.f)});
+    snap(3.4, {circle(7, kOculus, 130.f)});
+    frame();
+    CHECK(fake::g.segments.size() == 56);  // one ring, joined end to end
+    CHECK(!fake::g.segments.empty() && fake::g.segments[0].color == 0xD27FDFFFu);  // the Oculus colour, not "inside"
+    CHECK(said("Oculus 5.0"));
+
+    // standing in it: the ring turns to the "inside" colour and gets thicker
+    fake::g.frame.player_pos = {131.f, 100.f};
+    snap(3.5, {circle(7, kOculus, 130.f)});
+    frame();
+    CHECK(!fake::g.segments.empty() && fake::g.segments[0].color == 0xFF70FF70u);
+    CHECK(!fake::g.segments.empty() && fake::g.segments[0].thickness > 2.5f);
+    fake::g.frame.player_pos = {100.f, 100.f};
+
+    // a coloured variant is the altar's; each kind can be switched off on its own
+    snap(4.0, {circle(7, kOculus, 130.f), circle(8, kTeal, 160.f)});
+    frame();
+    CHECK(fake::g.segments.size() == 112);
+    CHECK(said("Resource cost -50% 7.4"));
+    CHECK(fake::g.segments.size() > 56 && fake::g.segments[56].color == 0xD25CE07Cu);  // the green circle in its own colour
+    snap(4.0, {circle(9, "p2_itemPassive_unique_ring_017_dome_purple", 160.f)});
+    frame();
+    CHECK(said("Damage +50% 7.4"));
+    snap(4.0, {circle(9, "p2_itemPassive_unique_ring_017_dome_blue", 160.f)});
+    frame();
+    CHECK(said("Cooldowns faster 7.4"));
+    snap(4.0, {circle(9, "p2_itemPassive_unique_ring_017_dome_red", 160.f)});
+    frame();
+    CHECK(said("Altar red 7.4"));  // a variant not known yet keeps its colour name
+    snap(4.0, {circle(7, kOculus, 130.f), circle(8, kTeal, 160.f)});
+    frame();
+    CHECK(fake::g.settings.SetNumber("groundeffects.altar", 0));
+    frame();
+    CHECK(fake::g.segments.size() == 56);
+    CHECK(fake::g.settings.SetNumber("groundeffects.altar", 1));
+
+    // the radius is the option's, in world units: the ring's points lie that far from the centre
+    CHECK(fake::g.settings.SetNumber("groundeffects.radius_oculus", 20));
+    snap(4.1, {circle(7, kOculus, 130.f)});
+    frame();
+    float widest = 0.f;
+    for (const auto& s : fake::g.segments) widest = std::max(widest, std::abs(s.a.x - 130.f));
+    CHECK(std::abs(widest - 20.f) < 0.01f);
+
+    // the areas monsters leave: their own radius and colour; a countdown only where their life is known; unknown names ignored
+    snap(5.0, {circle(11, "monsterAffix_Desecrator_damage_AOE", 160.f), circle(12, "monsterAffix_Molten_deathStart_Proxy", 160.f),
+               circle(13, "monsterAffix_Desecrator_telegraph", 160.f)});
+    frame();
+    CHECK(fake::g.segments.size() == 112);
+    CHECK(!fake::g.segments.empty() && fake::g.segments[0].color == 0xD2FF5050u);
+    CHECK(said("Molten blast 3.0") && !said("Desecrator 3.0"));
+    float reach = 0.f;
+    for (const auto& seg : fake::g.segments) reach = std::max(reach, std::abs(seg.a.x - 160.f));
+    CHECK(std::abs(reach - 13.f) < 0.01f);  // the larger of the two (13 and 8)
+    CHECK(fake::g.settings.SetNumber("groundeffects.hostile", 0));
+    frame();
+    CHECK(fake::g.segments.empty());
+    CHECK(fake::g.settings.SetNumber("groundeffects.hostile", 1));
+
+    // a circle that went and a new one with its id start the countdown again
+    snap(9.0, {});
+    snap(9.5, {circle(7, kOculus, 130.f)});
+    frame();
+    CHECK(said("Oculus 7.4"));
+
+    // the clock: half of the life gone = half of the ring faint, plus the hand from the middle; the hostile area without a
+    // known life stays a plain ring
+    CHECK(fake::g.settings.SetNumber("groundeffects.clock", 1));
+    snap(20.0, {circle(21, kOculus, 130.f)});
+    snap(23.7, {circle(21, kOculus, 130.f)});  // 3.7 of 7.4 s left
+    frame();
+    int solid = 0, faint = 0;
+    for (const auto& s : fake::g.segments) {
+        if (s.color == 0xD27FDFFFu) ++solid;
+        if (s.color == 0x3C7FDFFFu) ++faint;
+    }
+    CHECK(solid == 29 && faint == 28);  // 28 ring segments still to come plus the hand; 28 gone
+    CHECK(fake::g.segments.size() == 57);
+    float topmost = 1e9f;  // the clock starts at 12 o'clock: the first segment begins at the highest point of the ring
+    for (const auto& s : fake::g.segments) topmost = std::min(topmost, s.a.y);
+    CHECK(!fake::g.segments.empty() && std::abs(fake::g.segments[0].a.y - topmost) < 0.01f);
+    snap(24.0, {circle(22, "monsterAffix_Desecrator_damage_AOE", 160.f)});
+    frame();
+    CHECK(fake::g.segments.size() == 56);
+    snap(24.1, {circle(7, kOculus, 130.f)});
+
+    // the big map hides the rings
+    fake::g.frame.ui_flags = D3H_UI_BIG_MAP;
+    frame();
+    CHECK(fake::g.segments.empty());
+
+    if (p->disabled()) fprintf(stderr, "groundeffects: %s", p->lastError().c_str());
+    CHECK(!p->disabled());
+}
+
+static void TestMaterialsPlugin() {
+    namespace fs = std::filesystem;
+    fake::g.Reset();
+    const d3h_host host = fake::MakeHost();
+    std::string err;
+    auto p = LuaPlugin::Load(fs::path(D3HUD_SOURCE_DIR) / L"plugins" / L"materials", host, err);
+    CHECK(p != nullptr);
+    if (p == nullptr) {
+        fprintf(stderr, "materials: %s\n", err.c_str());
+        return;
+    }
+    CHECK(fake::g.panels.size() == 1);
+    auto panel = [&] {
+        fake::g.lines.clear();
+        fake::DrawPanels();
+        std::string text;
+        for (const std::string& l : fake::g.lines) text += l + "\n";
+        return text;
+    };
+    CHECK(panel().find("not found the counters") != std::string::npos);
+
+    fake::g.wallet.valid = 1;
+    fake::g.wallet.gold = 3219835433.0;
+    fake::g.wallet.blood_shards = 1032;
+    fake::g.wallet.material_count = 15;
+    fake::g.wallet.materials[0] = 7338;    // reusable parts
+    fake::g.wallet.materials[3] = 11404;   // death's breath
+    fake::g.wallet.materials[11] = 54;     // greater rift keystones
+    std::string text = panel();
+    CHECK(text.find("3,219,835,433") != std::string::npos);
+    CHECK(text.find("Blood Shards") != std::string::npos && text.find("1,032") != std::string::npos);
+    CHECK(text.find("Reusable Parts") != std::string::npos && text.find("7,338") != std::string::npos);
+    CHECK(text.find("11,404") != std::string::npos);
+    CHECK(text.find("+") == std::string::npos);  // nothing gained yet
+
+    fake::g.wallet.blood_shards = 1100;
+    text = panel();
+    CHECK(text.find("1,100   +68") != std::string::npos);  // the gain since the first reading
+    // the table that shows with the inventory open: nothing with it closed, then four rows of small label over number
+    CHECK(fake::g.boxes.size() == 1);
+    auto drawn = [&] {
+        fake::g.drawn.clear();
+        fake::DrawBoxes();
+        std::string all;
+        for (const std::string& d : fake::g.drawn) all += d + "\n";
+        return all;
+    };
+    CHECK(drawn().find("7,338") == std::string::npos);  // inventory closed
+    fake::g.frame.ui_flags = D3H_UI_INVENTORY;
+    const std::string shown = drawn();
+    for (const char* needle : {"Other", "Bounty", "Crafting", "Hellfire", "Blood Shards", "1,100", "Keystones", "54", "Parts",
+                               "7,338", "Breath", "11,404", "Dust", "3.22B", "Leoric's"})
+        CHECK(shown.find(needle) != std::string::npos);
+    CHECK(fake::g.settings.SetNumber("materials.inv_box", 0));
+    CHECK(drawn().find("7,338") == std::string::npos);
+    if (p->disabled()) fprintf(stderr, "materials: %s", p->lastError().c_str());
+    CHECK(!p->disabled());
 }
 
 static void TestEffectsPlugin() {
@@ -2152,6 +2437,7 @@ int main() {
     TestPluginAssets();
     TestEffects();
     TestGameClock();
+    TestWallet();
     TestPowerNames();
     TestPluginSettings();
     TestLuaSandbox();
@@ -2164,6 +2450,8 @@ int main() {
     TestHealthBars();
     TestDamageMeter();
     TestEffectsPlugin();
+    TestGroundEffectsPlugin();
+    TestMaterialsPlugin();
     TestConventionPlugin();
     TestRaii();
     TestSnapshotInterp();

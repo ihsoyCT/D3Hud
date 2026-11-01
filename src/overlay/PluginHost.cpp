@@ -125,6 +125,22 @@ struct PluginHost::HostFns {
         return 1;
     }
 
+    static d3h_bool GetWallet(d3h_wallet* out) {
+        const WorldSnapshot* s = g_host->snap_;
+        if (s == nullptr) return 0;
+        d3h_wallet r{};
+        r.size = out->size;  // the caller's struct size: a prefix is copied
+        r.valid = s->wallet.valid != 0;
+        if (r.valid) {
+            r.gold = static_cast<double>(s->wallet.gold);
+            r.blood_shards = s->wallet.bloodShards;
+            r.material_count = static_cast<uint32_t>(kMaterialCount);
+            for (int i = 0; i < kMaterialCount; ++i) r.materials[i] = s->wallet.materials[i];
+        }
+        memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
+        return 1;
+    }
+
     static d3h_bool GetItem(uint32_t i, d3h_item* out) {
         const WorldSnapshot* s = g_host->snap_;
         if (s == nullptr || i >= s->itemCount) return 0;
@@ -381,6 +397,7 @@ PluginHost::PluginHost(HudRenderer& renderer) : renderer_(renderer) {
     host_.get_actor = HostFns::GetActor;
     host_.get_item = HostFns::GetItem;
     host_.get_effect = HostFns::GetEffect;
+    host_.get_wallet = HostFns::GetWallet;
     if (!powers_.Load(ExeDir() / "sno_powers.tsv")) std::print(stderr, "no sno_powers.tsv - effects get generic names\n");
     host_.world_to_screen = HostFns::WorldToScreenFn;
     host_.subscribe = HostFns::Subscribe;

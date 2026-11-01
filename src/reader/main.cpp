@@ -20,6 +20,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <format>
+#include <set>
 #include <print>
 #include <map>
 #include <string>
@@ -42,6 +44,7 @@
 #include "SharedScan.h"
 #include "SnoTable.h"
 #include "UiControls.h"
+#include "WalletTable.h"
 
 using namespace d3hud;
 
@@ -595,6 +598,75 @@ static int WatchPlayerAttribs(const Process& proc, const std::filesystem::path& 
     return 0;
 }
 
+// Research probe (--nearby [--radius R] [--seconds N]): ground effects (the Oculus ring's circle, the Altar of Rites,
+// pools monsters leave) are actors the minimap does not keep. This prints every actor within R world units of the
+// player that ClassifyActor rejects, when it appears and when it goes, with its SNO kind, name and distance, and
+// writes the same lines to dumps/nearby.txt. Stand in a circle, step out, drink a potion at the altar.
+static int WatchNearby(const Process& proc, const std::filesystem::path& snoPath, double seconds, double radius) {
+    SnoTable sno;
+    if (!LoadSno(snoPath, &sno)) return 1;
+    uint64_t base = 0;
+    int votes = 0;
+    if (!ActorList::FindBase(proc, &base, &votes, true)) {
+        std::print(stderr, "actor array not found (in menus? try again in-world)\n");
+        return 1;
+    }
+    ActorList list;
+    list.setBase(base);
+    const std::filesystem::path out = ExeDir() / "dumps" / "nearby.txt";
+    std::filesystem::create_directories(out.parent_path());
+    File file = OpenFile(out, L"wb");
+    std::print("actors within {:.0f} units of the player, rejected by the minimap rules; watching for {:.0f} s ({})\n",
+               radius, seconds, Utf8(out));
+
+    std::set<std::pair<uint32_t, uint32_t>> seen;  // slot, sno
+    std::vector<RawActor> raw;
+    const ULONGLONG t0 = GetTickCount64();
+    while (GetTickCount64() - t0 < static_cast<ULONGLONG>(seconds * 1000.0)) {
+        raw.clear();
+        if (list.Read(proc, &raw)) {
+            const RawActor* player = nullptr;
+            for (const RawActor& a : raw) {
+                const SnoInfo* info = sno.Find(a.sno);
+                if (info != nullptr && info->kind == "Player" && a.hasAcd()) {
+                    player = &a;
+                    break;
+                }
+            }
+            if (player != nullptr) {
+                const double t = static_cast<double>(GetTickCount64() - t0) / 1000.0;
+                std::set<std::pair<uint32_t, uint32_t>> now;
+                for (const RawActor& a : raw) {
+                    const SnoInfo* info = sno.Find(a.sno);
+                    ActorKind kind;
+                    if (info != nullptr && ClassifyActor(info->kind, info->name, a.hasAcd(), a.dead, &kind)) continue;
+                    const double d = std::hypot(a.x - player->x, a.z - player->z);
+                    if (d > radius) continue;
+                    const auto key = std::make_pair(a.slot, a.sno);
+                    now.insert(key);
+                    if (seen.count(key)) continue;
+                    const std::string line = std::format("t={:6.2f} new  [{:4}] {:<12} {:<50} sno={:<7} d={:6.1f} pos=({:.1f}, {:.1f}, {:.1f})" "\n",
+                                                         t, a.slot, info != nullptr ? info->kind : "?",
+                                                         info != nullptr ? info->name : "?", a.sno, d, a.x, a.z, a.y);
+                    std::print("{}", line);
+                    if (file) fputs(line.c_str(), file);
+                }
+                for (const auto& key : seen)
+                    if (!now.count(key)) {
+                        const SnoInfo* info = sno.Find(key.second);
+                        const std::string line = std::format("t={:6.2f} gone [{:4}] {}" "\n", t, key.first,
+                                                             info != nullptr ? info->name : "?");
+                        std::print("{}", line);
+                        if (file) fputs(line.c_str(), file);
+                    }
+                seen = std::move(now);
+            }
+        }
+        Sleep(250);
+    }
+    return 0;
+}
+
 // Why an actor is not on the minimap (mirrors ClassifyActor's rules).
 static const char* HiddenReason(const SnoInfo* info, const RawActor& a) {
     if (info == nullptr) return "unknown-sno";
@@ -882,6 +954,21 @@ static DWORD WINAPI AcdScanThread(LPVOID param) {
     return 0;
 }
 
+// Looks for the wallet table (a full memory pass, ~3 s) off the publish loop.
+struct WalletScanJob {
+    const Process* proc;
+    WalletTable* table;
+    std::atomic<bool> busy;
+};
+
+static DWORD WINAPI WalletScanThread(LPVOID param) {
+    auto* job = static_cast<WalletScanJob*>(param);
+    const int found = job->table->Discover(*job->proc);
+    std::print("wallet table: {} found\n", found);
+    job->busy = false;
+    return 0;
+}
+
 // First-startup discovery, off the publish loop: dots appear after the actor
 // sweep while ACD blocks, attribute blocks and scenes are still being found.
 // Finishes by saving the base cache for instant restarts against this process.
@@ -1116,6 +1203,12 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         startupThread.h = CreateThread(nullptr, 0, StartupScanThread, &startupJob, 0, nullptr);
         if (startupThread.h == nullptr) startupJob.busy = false;
     }
+    // gold, blood shards, materials: read ~2 Hz from a table found by shape (found again when a read fails)
+    WalletTable wallets;
+    WalletScanJob walletJob{&proc, &wallets, false};
+    JoinOnExit walletThread;
+    WalletSnapshot wallet;
+    ULONGLONG walletAt = 0, walletScanAt = 0;
     ULONGLONG unresolvedSince = 0;
     ULONGLONG itemScanAt = 0;
     // starts a background scan: ACD blocks (if actorsToo), attribute blocks, and
@@ -1311,6 +1404,28 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                 std::copy(effects.begin(), effects.end(), snap.effects);
                 snap.gameTick = gameClock.Tick(qpcMs());
             }
+            {
+                const ULONGLONG t = GetTickCount64();
+                if (t - walletAt >= 500) {
+                    walletAt = t;
+                    if (!wallets.Read(proc, &wallet)) {
+                        wallet = WalletSnapshot{};
+                        // never found, or the table moved: look again (not more often than every 8 s)
+                        if (!walletJob.busy && (walletScanAt == 0 || t - walletScanAt > 8000)) {
+                            walletScanAt = t;
+                            if (walletThread.h != nullptr) {
+                                WaitForSingleObject(walletThread.h, INFINITE);  // finished (!busy)
+                                CloseHandle(walletThread.h);
+                                walletThread.h = nullptr;
+                            }
+                            walletJob.busy = true;
+                            walletThread.h = CreateThread(nullptr, 0, WalletScanThread, &walletJob, 0, nullptr);
+                            if (walletThread.h == nullptr) walletJob.busy = false;
+                        }
+                    }
+                }
+                snap.wallet = wallet;
+            }
             // items lying on the ground (actors linked to an item ACD): legendary/set
             // and bonus drops - the overlay's drop log and world labels. Described
             // once per item, then cached.
@@ -1448,6 +1563,156 @@ static int DumpItems(const Process& proc, const std::filesystem::path& snoPath) 
     return 0;
 }
 
+// --wallet: find the table of gold, blood shards and materials and print it (compare with the game's panel)
+static int DumpWallet(const Process& proc) {
+    WalletTable table;
+    std::print("{} table(s) found\n", table.Discover(proc));
+    WalletSnapshot w;
+    if (!table.Read(proc, &w)) {
+        std::print(stderr, "no table: is a character in the world?\n");
+        return 1;
+    }
+    for (uint64_t b : table.Bases()) {
+        uint8_t buf[kWalletBytes];
+        WalletSnapshot c;
+        if (proc.Read(b, buf, sizeof(buf)) && LooksLikeWallet(buf)) {
+            DecodeWallet(buf, &c);
+            std::print("  copy at 0x{:X}: gold {} shards {} parts {} ashes {}\n", b, c.gold, c.bloodShards, c.materials[0], c.materials[10]);
+        }
+    }
+    std::print("gold {}\nblood shards {}\n", w.gold, w.bloodShards);
+    for (int i = 0; i < kMaterialCount; ++i) std::print("{:<24} {}\n", MaterialKey(i), w.materials[i]);
+    return 0;
+}
+
+// --stacks: every item the game keeps in a placed ACD record, wherever it is (backpack, stash, the hidden places
+// crafting materials and blood shards may live in), with its stack quantity attribute. Found by comparing the
+// output with the numbers in the game's crafting material panel.
+static int DumpStacks(const Process& proc, const std::filesystem::path& snoPath) {
+    SnoTable sno;
+    if (!LoadSno(snoPath, &sno)) return 1;
+    uint64_t base = 0;
+    int votes = 0;
+    if (!ActorList::FindBase(proc, &base, &votes, false)) {
+        std::print(stderr, "actor array not found (in menus? try again in-world)\n");
+        return 1;
+    }
+    ActorList list;
+    list.setBase(base);
+    std::vector<RawActor> raw;
+    if (!list.Read(proc, &raw)) std::print(stderr, "warning: the actor list is not readable\n");
+    const std::unordered_set<uint32_t> snoIds = sno.Ids();
+    AcdTable acds;
+    acds.Discover(proc, raw, &snoIds, true);
+    ItemNameTable itemNames;
+    LoadItemNames(snoPath, &itemNames);
+    std::vector<AcdItemRecord> placed;
+    acds.ReadPlaced(proc, &placed);
+    std::vector<uint32_t> groups;
+    for (const AcdItemRecord& r : placed) groups.push_back(r.attribGroup);
+    AttribTable attribs;
+    attribs.Discover(proc, groups, true);
+    std::vector<std::string> lines;
+    for (const AcdItemRecord& r : placed) {
+        const SnoInfo* info = sno.Find(r.sno);
+        if (info == nullptr || info->kind != "Item") continue;
+        uint32_t lo = 0, hi = 0;
+        const bool resolved =
+            attribs.Get(proc, r.attribGroup, kAttrItemStackQuantityLo, &lo) != AttribTable::Result::Unresolved;
+        (void)attribs.Get(proc, r.attribGroup, kAttrItemStackQuantityHi, &hi);  // absent = 0
+        const ItemNameInfo* n = itemNames.Find(r.gbid);
+        lines.push_back(std::format("loc {:3} x{:3} y{:3}  {:<10}  {:<34} {}", r.location, r.x, r.y,
+                                    resolved ? std::to_string((static_cast<uint64_t>(hi) << 32) | lo) : "?",
+                                    n != nullptr ? n->name : info->name, info->name));
+    }
+    std::sort(lines.begin(), lines.end());
+    std::print("{} placed items:\n", lines.size());
+    std::filesystem::create_directories(ExeDir() / "dumps");
+    File out = OpenFile(ExeDir() / "dumps" / "stacks.txt", L"w");
+    for (const std::string& l : lines) {
+        std::print("  {}\n", l);
+        if (out) fprintf(out, "%s\n", l.c_str());
+    }
+    return 0;
+}
+
+// --find-values a,b,c,...: where do all these 32-bit numbers sit close together (+-128 bytes of the first)? A research
+// probe for counters the game shows but we do not know the place of (crafting materials, blood shards).
+class ValueClusterScan : public ChunkMatcher {
+public:
+    explicit ValueClusterScan(std::vector<uint32_t> values) : values_(std::move(values)) {}
+    size_t tail() const override { return 0x200; }
+    void Match(const uint8_t* data, size_t n, uint64_t addr, size_t chunkSize) override {
+        constexpr size_t kReach = 128;
+        const size_t limit = std::min(n, chunkSize);
+        for (size_t o = kReach; o + 4 <= limit && o + kReach + 4 <= n; o += 4) {
+            uint32_t v;
+            memcpy(&v, data + o, 4);
+            if (v != values_[0]) continue;
+            int found = 0;
+            for (size_t k = 1; k < values_.size(); ++k)
+                for (size_t d = o - kReach; d + 4 <= o + kReach; d += 4) {
+                    uint32_t w;
+                    memcpy(&w, data + d, 4);
+                    if (w == values_[k]) {
+                        ++found;
+                        break;
+                    }
+                }
+            if (found + 1 >= static_cast<int>(values_.size()) - 1) hits_.push_back({addr + o, found + 1});
+        }
+    }
+    struct Hit {
+        uint64_t addr;
+        int matched;
+    };
+    const std::vector<Hit>& hits() const { return hits_; }
+
+private:
+    std::vector<uint32_t> values_;
+    std::vector<Hit> hits_;
+};
+
+static int FindValues(const Process& proc, const std::string& list) {
+    std::vector<uint32_t> values;
+    std::stringstream ss(list);
+    for (std::string piece; std::getline(ss, piece, ',');) values.push_back(static_cast<uint32_t>(strtoul(piece.c_str(), nullptr, 10)));
+    if (values.size() < 2) {
+        std::print(stderr, "--find-values needs at least two numbers, comma separated\n");
+        return 1;
+    }
+    ValueClusterScan scan(values);
+    SharedSweep(proc, {&scan});
+    std::print("{} place(s) with at least {} of the {} numbers within 128 bytes of the first:\n", scan.hits().size(),
+               values.size() - 1, values.size());
+    for (const auto& h : scan.hits()) {
+        std::print("  0x{:X}  {} of {}:", h.addr, h.matched, values.size());
+        std::vector<uint8_t> buf(0x100);
+        if (proc.Read(h.addr - 0x80, buf.data(), buf.size())) {
+            for (size_t o = 0; o + 4 <= buf.size(); o += 4) {
+                uint32_t w;
+                memcpy(&w, buf.data() + o, 4);
+                if (std::find(values.begin(), values.end(), w) != values.end()) std::print(" [{:+}]={}", static_cast<int>(o) - 0x80, w);
+            }
+        }
+        std::print("\n");
+        // the memory around it as rows of 6 words (24 bytes), the first number's row marked
+        std::vector<uint8_t> around(0x480);
+        if (proc.Read(h.addr - 0xF0, around.data(), around.size())) {
+            for (size_t row = 0; row + 24 <= around.size(); row += 24) {
+                std::print("    {:+4}:", static_cast<int>(row) - 0xF0);
+                for (size_t k = 0; k < 24; k += 4) {
+                    uint32_t w;
+                    memcpy(&w, around.data() + row + k, 4);
+                    std::print(" {:08X}", w);
+                }
+                std::print("\n");
+            }
+        }
+    }
+    return 0;
+}
+
 // --scenes: every self-consistent scene record in memory, grouped by world,
 // with the block base each implies (diagnostics for the map prediction).
 static int DumpScenes(const Process& proc, const std::filesystem::path& snoPath) {
@@ -1482,9 +1747,14 @@ int main(int argc, char** argv) {
     bool publish = false;
     bool dumpActors = false;
     bool dumpItems = false;
+    bool dumpStacks = false;
+    bool dumpWallet = false;
+    std::string findValues;
     bool dumpScenes = false;
     bool probeAffixes = false;
     bool playerAttribs = false;
+    bool nearby = false;
+    double nearbyRadius = 60.0;
     const char* uiFilter = nullptr;
     const char* uiWatch = nullptr;  // --ui-watch <substring>
     double publishSeconds = 0;  // 0 = forever
@@ -1498,9 +1768,14 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--publish")) publish = true;
         else if (!strcmp(argv[i], "--actors")) dumpActors = true;
         else if (!strcmp(argv[i], "--items")) dumpItems = true;
+        else if (!strcmp(argv[i], "--stacks")) dumpStacks = true;
+        else if (!strcmp(argv[i], "--wallet")) dumpWallet = true;
+        else if (!strcmp(argv[i], "--find-values") && i + 1 < argc) findValues = argv[++i];
         else if (!strcmp(argv[i], "--scenes")) dumpScenes = true;
         else if (!strcmp(argv[i], "--affixes")) probeAffixes = true;
         else if (!strcmp(argv[i], "--player-attrs")) playerAttribs = true;
+        else if (!strcmp(argv[i], "--nearby")) nearby = true;
+        else if (!strcmp(argv[i], "--radius") && i + 1 < argc) nearbyRadius = std::clamp(atof(argv[++i]), 5.0, 500.0);
         else if (!strcmp(argv[i], "--ui") && i + 1 < argc) uiFilter = argv[++i];
         else if (!strcmp(argv[i], "--ui-watch") && i + 1 < argc) uiWatch = argv[++i];
         else if (!strcmp(argv[i], "--sno") && i + 1 < argc) snoPath = argv[++i];
@@ -1561,8 +1836,12 @@ int main(int argc, char** argv) {
         const std::filesystem::path sno = snoPath != nullptr ? std::filesystem::path(snoPath) : DefaultSnoPath();
         if (dumpActors) return DumpActors(*proc, sno);
         if (dumpItems) return DumpItems(*proc, sno);
+        if (dumpStacks) return DumpStacks(*proc, sno);
+        if (dumpWallet) return DumpWallet(*proc);
+        if (!findValues.empty()) return FindValues(*proc, findValues);
         if (dumpScenes) return DumpScenes(*proc, sno);
         if (probeAffixes) return ProbeAffixes(*proc, sno);
+        if (nearby) return WatchNearby(*proc, sno, publishSeconds > 0 ? publishSeconds : 120.0, nearbyRadius);
         if (playerAttribs) return WatchPlayerAttribs(*proc, sno, publishSeconds > 0 ? publishSeconds : 120.0);
         if (uiWatch != nullptr) {
             // --ui-watch <substring> [--seconds N]: poll the memory of the matching UI controls

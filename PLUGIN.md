@@ -92,7 +92,7 @@ A table with the current facts.
 
 ### Actors: `d3hud.actors()`, `d3hud.actor(i)`
 
-`actors()` returns **all** actors of the snapshot (monsters, pylons, shrines, chests, globes, portals, ground items, rift orbs)
+`actors()` returns **all** actors of the snapshot (monsters, pylons, shrines, chests, globes, portals, ground items, rift orbs, ground effects)
 as an array; `actor(i)` returns one or `nil`. Each has:
 
 | Field | |
@@ -127,6 +127,14 @@ and legendary, set and bonus items lying on the ground.
 | `augment_rank` | Caldesann's Despair gem rank (0 = none) |
 | `flags` | as for actors |
 
+### Wallet: `d3hud.wallet()` (API 6)
+
+Gold, blood shards and the crafting materials: the numbers of the game's material panel, as whole numbers in a table, or `nil`
+while the reader has not found them (no character in the world yet). Keys: `gold`, `blood_shards`, `reusable_parts`,
+`arcane_dust`, `veiled_crystal`, `deaths_breath`, `forgotten_soul`, `khanduran_rune`, `caldeum_nightshade`,
+`arreat_war_tapestry`, `corrupted_angel_flesh`, `westmarch_holy_water`, `primordial_ashes`, `greater_rift_keystone` and the Hellfire materials `vial_of_putridness`, `idol_of_terror`, `heart_of_fright`, `leorics_regret` (which of the first three is which is a guess: all three read 1). The numbers are read about twice a
+second. Gem stacks in the backpack are not part of it (they are item stacks).
+
 ### Effects: `d3hud.effects()` (API 2)
 
 Everything running on the player right now, as the game keeps it: **buffs** (pylons and shrines, passives, item powers, and what
@@ -154,7 +162,7 @@ cooldown; the same power also renews a short one). The game clock is estimated f
 | | |
 |---|---|
 | `d3hud.world_to_screen(x, y [, height])` | screen pixels `sx, sy` of a world position (`height` above the ground), or `nil` when it is off the screen |
-| `d3hud.kind` | the actor kind numbers by name: `player`, `trash`, `champion`, `rare`, `minion`, `boss`, `pylon`, `shrine`, `chest`, `globe`, `ground_item`, `portal`, `pylon_spawn`, `rift_orb`, `rift_orb_tiered` |
+| `d3hud.kind` | the actor kind numbers by name: `player`, `trash`, `champion`, `rare`, `minion`, `boss`, `pylon`, `shrine`, `chest`, `globe`, `ground_item`, `portal`, `pylon_spawn`, `rift_orb`, `rift_orb_tiered`, `ground_effect` (API 5) |
 | `d3hud.affixes` | the game's 30 monster affixes: `{ {key = "molten", name = "Molten"}, ... }` |
 | `d3hud.api` | the host's API version |
 | `d3hud.log(message [, "info"\|"warn"\|"error"])` | a line in the plugin's log on the Plugins page and on the console |
@@ -357,6 +365,8 @@ friendlier names.
 | 2 | `d3hud.effects()`, `frame().effect_count` |
 | 3 | `d3hud.box{}`: movable boxes with a host-drawn fill and border |
 | 4 | `d3hud.image()`, `d3hud.draw_image()` |
+| 5 | actor kind `ground_effect` (`d3hud.kind.ground_effect`): the circles the Oculus Ring and the Altar of Rites leave on the ground, and the areas elite affixes leave (the `name` says which) |
+| 6 | `d3hud.wallet()`: gold, blood shards and crafting materials |
 
 Changing the interface means: the new entry in `HostApi.h` (at the end, a new version number), its implementation in
 `src/overlay/PluginHost.cpp`, the Lua binding in `src/plugins/LuaPlugin.cpp` (registered only when the host has the function), a

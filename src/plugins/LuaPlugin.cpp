@@ -17,6 +17,7 @@
 
 #include "MonsterAffixes.h"
 #include "Paths.h"
+#include "Wallet.h"
 
 namespace d3hud {
 
@@ -149,7 +150,7 @@ struct LuaBinding {
     static const char* KindName(int32_t k) {
         static const char* const names[] = {"player", "trash", "champion", "rare", "minion", "boss", "pylon", "shrine",
                                             "chest", "globe", "ground_item", "portal", "pylon_spawn", "rift_orb",
-                                            "rift_orb_tiered"};
+                                            "rift_orb_tiered", "ground_effect"};
         return k >= 0 && k < static_cast<int32_t>(std::size(names)) ? names[k] : "unknown";
     }
 
@@ -251,6 +252,25 @@ struct LuaBinding {
             SetNum(L, "fraction", e.duration > 0.f ? e.remaining / e.duration : 0.0);
             SetBool(L, "timed", e.timed != 0);
             lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
+        }
+        return 1;
+    }
+
+    // d3hud.wallet() -> { gold, blood_shards, reusable_parts, arcane_dust, veiled_crystal, deaths_breath, forgotten_soul,
+    // khanduran_rune, caldeum_nightshade, arreat_war_tapestry, corrupted_angel_flesh, westmarch_holy_water,
+    // primordial_ashes, greater_rift_keystone, vial_of_putridness, idol_of_terror, heart_of_fright, leorics_regret } (whole numbers), or nil while the reader has not found the counters.
+    static int Wallet(lua_State* L) {
+        d3h_wallet w{};
+        w.size = sizeof(w);
+        if (!Self(L)->host_.get_wallet(&w) || !w.valid) return 0;
+        lua_createtable(L, 0, 2 + static_cast<int>(w.material_count));
+        lua_pushinteger(L, static_cast<lua_Integer>(w.gold));
+        lua_setfield(L, -2, "gold");
+        lua_pushinteger(L, w.blood_shards);
+        lua_setfield(L, -2, "blood_shards");
+        for (uint32_t i = 0; i < w.material_count && i < D3H_MATERIAL_SLOTS; ++i) {
+            lua_pushinteger(L, w.materials[i]);
+            lua_setfield(L, -2, MaterialKey(static_cast<int>(i)));
         }
         return 1;
     }
@@ -936,6 +956,8 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
     if (D3H_HOST_HAS(&host, get_item)) LuaBinding::Register(L, p.get(), "item", LuaBinding::Item);
     if (D3H_HOST_HAS(&host, get_effect) && host.get_effect != nullptr)
         LuaBinding::Register(L, p.get(), "effects", LuaBinding::Effects);
+    if (D3H_HOST_HAS(&host, get_wallet) && host.get_wallet != nullptr)
+        LuaBinding::Register(L, p.get(), "wallet", LuaBinding::Wallet);
     if (D3H_HOST_HAS(&host, world_to_screen) && host.world_to_screen != nullptr)
         LuaBinding::Register(L, p.get(), "world_to_screen", LuaBinding::WorldToScreenFn);
     if (D3H_HOST_HAS(&host, text_size) && host.text_size != nullptr)
@@ -965,7 +987,7 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
                           {"pylon", D3H_ACTOR_PYLON}, {"shrine", D3H_ACTOR_SHRINE}, {"chest", D3H_ACTOR_CHEST},
                           {"globe", D3H_ACTOR_GLOBE}, {"ground_item", D3H_ACTOR_GROUND_ITEM}, {"portal", D3H_ACTOR_PORTAL},
                           {"pylon_spawn", D3H_ACTOR_PYLON_SPAWN}, {"rift_orb", D3H_ACTOR_RIFT_ORB},
-                          {"rift_orb_tiered", D3H_ACTOR_RIFT_ORB_TIERED}};
+                          {"rift_orb_tiered", D3H_ACTOR_RIFT_ORB_TIERED}, {"ground_effect", D3H_ACTOR_GROUND_EFFECT}};
     for (const auto& k : kinds) {
         lua_pushinteger(L, k.second);
         lua_setfield(L, -2, k.first);

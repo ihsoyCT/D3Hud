@@ -9,9 +9,11 @@
 #include <cstring>
 #include <type_traits>
 
+#include "Wallet.h"
+
 namespace d3hud {
 
-constexpr uint32_t kSnapshotVersion = 13;  // 13: effects (buffs and cooldowns of the player) + gameTick; 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect; 12: ActorSnapshot::affixMask
+constexpr uint32_t kSnapshotVersion = 14;  // 14: wallet (gold, blood shards, materials); 13: effects (buffs and cooldowns of the player) + gameTick; 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect; 12: ActorSnapshot::affixMask
 constexpr int kMaxScenes = 512;  // scenes of the current world (a rift has ~100-250)
 constexpr int kMaxActors = 256;
 constexpr int kMaxItems = 256;  // inventory + equipped + the visible stash tab (70)
@@ -34,6 +36,8 @@ enum class ActorKind : uint8_t {
     PylonSpawn,  // greater rift: possible pylon location (MarkerLocation_TieredRiftPylon)
     RiftOrb,         // progress orb dropped in normal/challenge rifts (p1_normal_rifts_Orb, Challenge_Rifts_Orb)
     RiftOrbTiered,   // progress orb of greater rifts (p1_tiered_rifts_Orb)
+    GroundEffect,    // an area on the ground: the circles of the Oculus Ring and the Altar of Rites, and the pools and blasts
+                     // of elite affixes (molten, desecrator, plagued, ...). The actor's name says which.
 };
 
 inline const char* ActorKindName(ActorKind k) {
@@ -53,6 +57,7 @@ inline const char* ActorKindName(ActorKind k) {
         case ActorKind::PylonSpawn: return "PylonSpawn";
         case ActorKind::RiftOrb:    return "RiftOrb";
         case ActorKind::RiftOrbTiered: return "RiftOrbGR";
+        case ActorKind::GroundEffect:  return "Ground";
     }
     return "?";
 }
@@ -284,6 +289,8 @@ struct WorldSnapshot {
     int32_t gameTick = -1;  // the game's clock at this snapshot (estimated, see GameClock), -1 unknown
     uint32_t effectCount = 0;
     EffectSnapshot effects[kMaxEffects];
+    // Appended in version 14: gold, blood shards and crafting materials
+    WalletSnapshot wallet;
 };
 
 static_assert(std::is_trivially_copyable_v<WorldSnapshot>, "snapshots must be memcpy-able");
@@ -294,6 +301,7 @@ static_assert(sizeof(ActorSnapshot) == 88, "ActorSnapshot layout changed");
 static_assert(sizeof(ItemSnapshot) == 120, "ItemSnapshot layout changed");
 static_assert(sizeof(UiLayout) == 516, "UiLayout layout changed");
 static_assert(sizeof(EffectSnapshot) == 16, "EffectSnapshot layout changed");
+static_assert(sizeof(WalletSnapshot) == 80, "WalletSnapshot layout changed");
 static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 88 + kMaxItems * 120,
               "WorldSnapshot layout changed");
 

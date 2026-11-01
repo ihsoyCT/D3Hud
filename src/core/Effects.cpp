@@ -20,6 +20,9 @@ struct CooldownPair {
     uint32_t finish = kCooldownIdleFinish, start = kCooldownIdleStart;
 };
 
+// an effect that ended longer ago than this (10 s) says nothing about the clock
+constexpr double kStaleEndTicks = 600.0;
+
 // (kind, power, slot) in one integer
 uint64_t EffectKey(const EffectSnapshot& e) {
     return (static_cast<uint64_t>(e.kind) << 40) | (static_cast<uint64_t>(e.sno) << 8) | e.slot;
@@ -100,14 +103,26 @@ void GameClock::Update(double nowMs, const EffectSnapshot* fx, size_t n) {
         valid_ = true;
     }
     if (!valid_) return;
-    // an effect that still runs after its end tick: the estimate is ahead of the game
+    // An effect that is still listed after its end tick: the estimate may be ahead of the game (it was paused). But
+    // the game also leaves finished buffs in the list for a while (many in a fight), and one of those must not drag
+    // the clock back every poll: that froze every time left. So only effects that ended recently count, and the
+    // newest end among them wins (a stale one is older than a genuine one).
     const double cur = anchorTick_ + (nowMs - anchorMs_) * (kTicksPerSecond / 1000.0);
-    for (size_t i = 0; i < n; ++i)
-        if (cur > fx[i].endTick + 30.0) {
-            anchorTick_ = fx[i].endTick + 30.0;
-            anchorMs_ = nowMs;
-            break;
-        }
+    // When nothing is running any more by the estimate, even old ends count: that is what a long pause looks like.
+    double pullTo = -1, pullToAny = -1;
+    bool running = false;
+    for (size_t i = 0; i < n; ++i) {
+        const double behind = cur - fx[i].endTick;
+        if (behind <= 30.0) running = true;
+        if (behind <= 30.0) continue;
+        pullToAny = std::max(pullToAny, fx[i].endTick + 30.0);
+        if (behind <= kStaleEndTicks) pullTo = std::max(pullTo, fx[i].endTick + 30.0);
+    }
+    if (!running) pullTo = pullToAny;
+    if (pullTo >= 0) {
+        anchorTick_ = pullTo;
+        anchorMs_ = nowMs;
+    }
 }
 
 int32_t GameClock::Tick(double nowMs) const {

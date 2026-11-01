@@ -397,3 +397,38 @@ learns it from the transitions. Slot = element, the seven in alphabetical order:
 plugin lists the slots each hero class uses, and they are the classes' elements: Wizard 1 2 3 5 (Arcane, Cold, Fire,
 Lightning), Witch Doctor 2 3 6 7 (Cold, Fire, Physical, Poison), Crusader 2 3 4 5 6, Monk 3 4 5 6, Necromancer 2 6 7,
 Barbarian and Demon Hunter 2 3 5 6; the Demon Hunter lap seen live was Fire, Lightning, Physical, Cold.
+
+**Ground circles (Oculus Ring, Altar of Rites), seen live 2026-10-31 with `Reader --nearby`**: they are not buffs on the
+player but `ClientEffect` actors (the minimap drops that SNO kind), named `p2_itemPassive_unique_ring_017_dome` (the Oculus Ring,
+`Unique_Ring_017`) and the colour variants `..._dome_blue` (483599) and `..._dome_teal` (483618), which the Altar of Rites
+makes when a potion is drunk (potion, kill, Oculus, potion gave blue, plain, teal). SNO table also has `_dome_purple` (483612), which is the altar's damage effect (user), and
+`p75_..._dome_purple_red` (488528), not seen yet. Each circle existed for exactly 7.4 s, was first seen 13 to 27 units from
+the player, and the actor holds a centre only: the radius is not in it (the plugin has it as an option; measure by standing
+at the edge). `ClassifyActor` keeps them as `ActorKind::GroundEffect`; the same probe finds monster ground effects the same way.
+
+**Monster ground effects (2026-10-31)**: a `--nearby` run with no elite fight caught none, so the list comes from TurboHUD's own
+plugins (`plugins/Default/Monsters/EliteMonsterSkillPlugin.cs`): one actor SNO per area with a fixed radius (molten 13,
+desecrator 8, plagued 12, arcane 6, frozen ball 15.8, frozen pulse 14, thunderstorm 16, Ghom's gas 20) and a 2 to 3 s countdown on the
+molten blast, frozen ball and arcane spawn. `SnoTable.cpp` (`IsMonsterGroundEffect`) keeps those 13 names and `plugins/groundeffects`
+holds the radii. TurboHUD finds the Oculus differently: a `Generic_Proxy` monster whose attribute `Power_Buff_1_Visual_Effect_None`
+for the Oculus Ring power is 1, radius 10, counted down from 7 (we measured 7.4 s on the dome effect, and the user measured about 9.5).
+Not checked in game yet: that these 13 actors really show up near the player and that the radii fit.
+
+## Gold, blood shards and crafting materials (the wallet; found live 2026-10-31)
+
+Not attributes of the player and not item records (`--stacks` lists every placed item: gems in the backpack carry their stack in
+attribute `ItemStackQuantityLo`/`Hi`, live indices 401/400 = the tsv's 396/395 + 5, but the materials are not among them). The numbers
+of the game's material panel sit together in one table, found by searching the heap for the panel's numbers with `--find-values`
+(`7338,9174,6797,11404,494,195` found exactly one place):
+
+- 24-byte records, record k = currency id k: `+0x00 u64 amount, +0x08 u64 0, +0x10 u32 id, +0x14 u32 0`.
+- id 1 gold (3,219,835,433 = 0xBFEACA29, above 2^31), id 2 blood shards, id 3 not used here, ids 4..13 Reusable Parts, Arcane Dust,
+  Veiled Crystal, Death's Breath, Forgotten Soul, Khanduran Rune, Caldeum Nightshade, Arreat War Tapestry, Corrupted Angel Flesh,
+  Westmarch Holy Water (the panel's order, all matched the screenshot). Ids 14..16 hold 1 and 17..20 hold 0; the user's Hellfire materials read 0, 1, 1, 1 (Leoric's Regret, Vial, Idol, Heart), so 14..16 are taken as Vial, Idol, Heart (all 1: their order is a guess) and 17 as Leoric's Regret; 18..20 are unknown. Id 21 holds 54 = the Greater Rift Keystones (the user had 54), and
+  Primordial Ashes (195) is the record after it; that last record's id word is not filled (a different allocation follows), so the
+  ashes are read by position. The Hellfire materials were not identified (Leoric's Regret showed 0).
+- The game keeps one such table per player slot, eight evenly spaced (0xE7F0 apart); only ours holds numbers. `WalletTable` keeps all
+  hits and uses the first table that holds anything.
+- Found by shape (the ids of the first twelve records are 1, 2, 3, ... with zero filler words, `LooksLikeWallet`), one heap pass in a
+  background thread, repeated (at most every 8 s) when a read fails the shape check. Published as `WorldSnapshot::wallet`
+  (snapshot version 14) and to plugins as `d3hud.wallet()` (API 6). Probes: `--wallet`, `--stacks`, `--find-values a,b,c`.

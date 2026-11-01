@@ -90,7 +90,7 @@ struct MinimapLayout {
     float autoWorldRadius = 150.0f;
     bool beyondRim = true;       // also draw actors outside the circle (faded)
     // marker look
-    static constexpr int kKindCount = static_cast<int>(ActorKind::RiftOrbTiered) + 1;
+    static constexpr int kKindCount = static_cast<int>(ActorKind::GroundEffect) + 1;
     KindStyle kinds[kKindCount];
     float markerScale = 1.0f;
     bool outline = true;         // dark outline behind dots
