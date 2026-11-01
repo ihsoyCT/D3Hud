@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "Snapshot.h"
 
@@ -61,5 +62,9 @@ bool IsBonusDrop(const std::string& itemType, const std::string& itemName);
 // `dead` hides corpses (RawActor::dead: the monster's acd link was cleared).
 bool ClassifyActor(const std::string& snoKind, const std::string& name, bool hasAcd, bool dead,
                    ActorKind* out);
+
+// The names (any case) of the actors ClassifyActor calls ActorKind::GroundEffect; replaces the list in use (the built-in
+// areas of kDefaultGroundEffects until this is called). Thread-safe.
+void SetGroundEffectNames(const std::vector<std::string>& names);
 
 }  // namespace d3hud

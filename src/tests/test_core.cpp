@@ -29,6 +29,7 @@
 #include "PluginSettings.h"
 #include "Settings.h"
 #include "SnapshotInterp.h"
+#include "GroundEffects.h"
 #include "SnoTable.h"
 
 using namespace d3hud;
@@ -1583,6 +1584,21 @@ static void TestGroundEffectsPlugin() {
     CHECK(fake::g.segments.size() == 56);
     snap(24.1, {circle(7, kOculus, 130.f)});
 
+    // the list is a setting: it starts as the built-in areas, and an entry added by the user is drawn with its own radius,
+    // seconds and label, while one taken out is not drawn any more
+    std::string list;
+    CHECK(fake::g.settings.GetString("groundeffects.list", list) && list == kDefaultGroundEffects);
+    CHECK(fake::g.settings.SetString("groundeffects.list", "My_Area:20:4:Mine, monsteraffix_molten_firering, bare_name"));
+    snap(30.0, {circle(31, "my_area", 160.f), circle(32, "Monsteraffix_Molten_FireRing", 160.f), circle(33, "bare_name", 160.f),
+                circle(34, "monsterAffix_Desecrator_damage_AOE", 160.f)});
+    frame();
+    CHECK(fake::g.segments.size() == 168);  // my_area, the firering (radius from the default: none given, 10) and bare_name; the desecrator is out
+    CHECK(said("Mine 4.0") && !said("Desecrator 3.0"));
+    float reachMax = 0.f;
+    for (const auto& seg : fake::g.segments) reachMax = std::max(reachMax, std::abs(seg.a.x - 160.f));
+    CHECK(std::abs(reachMax - 20.f) < 0.01f);
+    CHECK(fake::g.settings.SetString("groundeffects.list", std::string(kDefaultGroundEffects)));
+
     // the big map hides the rings
     fake::g.frame.ui_flags = D3H_UI_BIG_MAP;
     frame();
@@ -1590,6 +1606,45 @@ static void TestGroundEffectsPlugin() {
 
     if (p->disabled()) fprintf(stderr, "groundeffects: %s", p->lastError().c_str());
     CHECK(!p->disabled());
+}
+
+// The list of the areas monsters leave: its syntax, the settings file it is read from, and what the reader makes of it.
+static void TestGroundEffectList() {
+    const std::vector<GroundEffectSpec> defaults = ParseGroundEffects(kDefaultGroundEffects);
+    CHECK(defaults.size() == 13);
+    CHECK(defaults.size() == 13 && defaults[0].name == "monsteraffix_frozen_iceclusters" && defaults[0].radius == 15.8f &&
+          defaults[0].life == 3.f && defaults[0].label == "Frozen ball");
+    CHECK(defaults.size() == 13 && defaults[2].life == 0.f && defaults[2].label == "Molten");
+
+    // spaces around parts, any case, missing and bad numbers, empty entries
+    const std::vector<GroundEffectSpec> mine = ParseGroundEffects("  My_Area : 12 , baz:x:-3:, ,:5, qux ,Long:1:2:The Label");
+    CHECK(mine.size() == 4);
+    CHECK(mine.size() == 4 && mine[0].name == "my_area" && mine[0].radius == 12.f && mine[0].life == 0.f && mine[0].label.empty());
+    CHECK(mine.size() == 4 && mine[1].name == "baz" && mine[1].radius == 0.f && mine[1].life == 0.f);
+    CHECK(mine.size() == 4 && mine[2].name == "qux");
+    CHECK(mine.size() == 4 && mine[3].radius == 1.f && mine[3].life == 2.f && mine[3].label == "The Label");
+    CHECK(ParseGroundEffects("").empty() && ParseGroundEffects(" , ,").empty());
+
+    // a value in the plugin settings file (plugins.ini): lines of key=value, the value escaped
+    std::string v;
+    const std::string ini = "# comment\r\nconvention.hud=1\r\ngroundeffects.list=a:1, b\\\\c\\nd\r\ngroundeffects.listing=no\r\n";
+    CHECK(IniValue(ini, "groundeffects.list", &v) && v == "a:1, b\\c\nd");
+    CHECK(!IniValue(ini, "groundeffects.lis", &v) && !IniValue(ini, "nothing", &v));
+    CHECK(IniValue("k=\n", "k", &v) && v.empty());
+
+    // the reader: only the names in the list are ground effects, whatever else the actor is
+    ActorKind kind;
+    CHECK(ClassifyActor("ClientEffect", "monsterAffix_Molten_fireRing", false, false, &kind) && kind == ActorKind::GroundEffect);
+    SetGroundEffectNames({"My_Area", "monsteraffix_desecrator_damage_aoe"});
+    CHECK(ClassifyActor("ClientEffect", "my_AREA", false, false, &kind) && kind == ActorKind::GroundEffect);
+    CHECK(!ClassifyActor("ClientEffect", "monsterAffix_Molten_fireRing", false, false, &kind));
+    CHECK(!ClassifyActor("Monster", "x1_monsteraffix_frozenpulse_monster", true, false, &kind) || kind != ActorKind::GroundEffect);
+    SetGroundEffectNames({});
+    CHECK(!ClassifyActor("ClientEffect", "my_area", false, false, &kind));
+    std::vector<std::string> names;
+    for (const GroundEffectSpec& e : defaults) names.push_back(e.name);
+    SetGroundEffectNames(names);  // the default again for the tests after this one
+    CHECK(ClassifyActor("ClientEffect", "creepmobarm", false, false, &kind) && kind == ActorKind::GroundEffect);
 }
 
 static void TestMaterialsPlugin() {
@@ -2500,6 +2555,7 @@ int main() {
     TestDamageMeter();
     TestEffectsPlugin();
     TestGroundEffectsPlugin();
+    TestGroundEffectList();
     TestMaterialsPlugin();
     TestConventionPlugin();
     TestRaii();

@@ -41,6 +41,7 @@
 #include "PlayerTracker.h"
 #include "Process.h"
 #include "SharedRing.h"
+#include "GroundEffects.h"
 #include "SharedScan.h"
 #include "SnoTable.h"
 #include "UiControls.h"
@@ -190,6 +191,33 @@ static int Capture(Process& proc, const char* outDir) {
 static std::filesystem::path DefaultSnoPath() { return ExeDir() / "sno_actors.tsv"; }
 
 static std::filesystem::path ExeSiblingPath(const char* file) { return ExeDir() / file; }
+
+// The areas monsters leave on the ground are the actors named in the groundeffects plugin's "list" setting. The overlay
+// keeps the settings in plugins.ini; this reads them from there (no list saved yet: the built-in one) and again whenever
+// the file changes, so a name added in the overlay is picked up in a few seconds.
+static void RefreshGroundEffectNames(bool force) {
+    static std::filesystem::file_time_type seen{};
+    static ULONGLONG checkedAt = 0;
+    const ULONGLONG now = GetTickCount64();
+    if (!force && now - checkedAt < 3000) return;
+    checkedAt = now;
+    const std::filesystem::path path = ExeSiblingPath("plugins.ini");
+    std::error_code ec;
+    const auto stamp = std::filesystem::last_write_time(path, ec);
+    if (!force && (ec || stamp == seen)) return;
+    seen = ec ? std::filesystem::file_time_type{} : stamp;
+    std::string text;
+    if (File f = OpenFile(path, L"rb")) {
+        char buf[4096];
+        for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0;) text.append(buf, n);
+    }
+    std::string list;
+    if (!IniValue(text, "groundeffects.list", &list)) list = kDefaultGroundEffects;
+    std::vector<std::string> names;
+    for (const GroundEffectSpec& s : ParseGroundEffects(list)) names.push_back(s.name);
+    SetGroundEffectNames(names);
+    std::print("ground effects: {} name(s) from the groundeffects plugin's list\n", names.size());
+}
 
 // Classified, drawable actors -> snapshot. The local player is the Player actor
 // nearest to `hint` (single-player: the only one); *player receives it.
@@ -607,6 +635,7 @@ static int WatchPlayerAttribs(const Process& proc, const std::filesystem::path& 
 // player that ClassifyActor rejects, when it appears and when it goes, with its SNO kind, name and distance, and
 // writes the same lines to dumps/nearby.txt. Stand in a circle, step out, drink a potion at the altar.
 static int WatchNearby(const Process& proc, const std::filesystem::path& snoPath, double seconds, double radius) {
+    RefreshGroundEffectNames(true);
     SnoTable sno;
     if (!LoadSno(snoPath, &sno)) return 1;
     uint64_t base = 0;
@@ -1102,6 +1131,7 @@ static uint32_t AreaKey(const std::vector<SceneSnapshot>& scenes) {
 static double g_publishHz = 60.0;  // --hz
 
 static int RunPublish(const Process& proc, double seconds, const std::filesystem::path& snoPath) {
+    RefreshGroundEffectNames(true);
     SnoTable sno;
     const bool haveSno = LoadSno(snoPath, &sno);
     ActorList actors;
@@ -1373,6 +1403,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
             if (msg.wParam == kDumpHotkey && actors.valid())
                 WriteActorDump(proc, &acds, &attribs, raw, sno, lastPlayer, actors.base());
         }
+        RefreshGroundEffectNames(false);
         // fill in UI controls that did not exist at startup (dialogs open lazily)
         // The game also rebuilds dialogs while it runs (an inventory that stops reacting mid-session): the controls we
         // hold then point at dead objects that still look fine. So look them up again now and then (a background sweep).

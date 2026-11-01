@@ -167,7 +167,11 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
   inside. The game does not publish a circle's size, so *Radius* is an option: stand at the edge of one and adjust it. The
   areas elite monsters leave (molten, desecrator, plagued, arcane, frozen, thunderstorm) get red rings of their known size,
   with a countdown for the ones that explode after a fixed time. Where the time is known the ring is a clock: the part
-  that has gone fades (opacity is an option) and a hand sweeps round from the middle.
+  that has gone fades (opacity is an option) and a hand sweeps round from the middle. Which monster areas are drawn is a list
+  you can edit on the plugin's page (*Monsters' areas*): comma separated entries `name[:radius[:seconds[:label]]]`, starting
+  with the built-in ones. Add the actor name of another area (find it with `D3Hud.Reader.exe --attach "Diablo III64" --nearby`
+  while standing next to it), give its radius in game units, and remove an entry to stop drawing it. The reader picks the
+  change up from `plugins.ini` within a few seconds.
 
 - **Materials** (`plugins/materials`) lists your gold, blood shards, Greater Rift keystones and crafting materials (the numbers of
   the game's material panel) in a dock panel, with what you gained since you started. While the inventory is open a table of four

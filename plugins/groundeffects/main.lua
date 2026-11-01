@@ -20,6 +20,20 @@ d3hud.setting{ key = "color_oculus", type = "color", default = 0x7FDFFF, label =
 d3hud.setting{ key = "color_altar", type = "color", default = 0xFFD060, label = "Altar colour" }
 d3hud.setting{ key = "hostile", type = "bool", default = true, label = "Areas elite monsters leave (molten, desecrator, ...)" }
 d3hud.setting{ key = "color_hostile", type = "color", default = 0xFF5050, label = "Colour of the monsters' areas" }
+-- The areas monsters leave are told apart by the actor's name; this is the list (the reader reads it from plugins.ini too,
+-- to decide which actors are ground effects, so a name added here is picked up within a few seconds). It must stay equal to
+-- kDefaultGroundEffects in src/core/GroundEffects.h (a test compares them). Find the name of an area you want with
+-- `D3Hud.Reader.exe --attach "Diablo III64" --nearby` (stand next to it).
+local DEFAULT_LIST = "monsteraffix_frozen_iceclusters:15.8:3:Frozen ball, monsteraffix_molten_deathstart_proxy:13:3:Molten blast, "
+    .. "monsteraffix_molten_deathexplosion_proxy:13::Molten, monsteraffix_molten_firering:13::Molten, "
+    .. "monsteraffix_desecrator_damage_aoe:8::Desecrator, x1_monsteraffix_thunderstorm_impact:16::Thunderstorm, "
+    .. "monsteraffix_plagued_endcloud:12::Plagued, creepmobarm:12::Plagued, gluttony_gascloud_proxy:20::Gas cloud, "
+    .. "monsteraffix_arcaneenchanted_petsweep:6::Arcane, monsteraffix_arcaneenchanted_petsweep_reverse:6::Arcane, "
+    .. "arcaneenchanteddummy_spawn:6:2:Arcane, x1_monsteraffix_frozenpulse_monster:14::Frozen pulse"
+d3hud.setting{ key = "list", type = "string", default = DEFAULT_LIST,
+    label = "Monsters' areas: name[:radius[:seconds[:label]]], comma separated",
+    tooltip = "Add the actor's name to draw another area (radius in game units, seconds if it lasts a fixed time, label for the text; each part after the name is optional). Delete an entry to stop drawing it. Clear the field and paste the default back to start over." }
+d3hud.setting{ key = "radius_default", type = "float", default = 10, min = 2, max = 60, label = "Radius of a listed area that gives none (game units)" }
 d3hud.setting{ key = "color_inside", type = "color", default = 0x70FF70, label = "Colour while you stand inside" }
 d3hud.setting{ key = "radius_oculus", type = "float", default = 9.5, min = 3, max = 40, label = "Oculus radius (game units)",
     tooltip = "Not stored in the circle itself, so it is set here. Stand at the edge of a circle and change it until the ring matches." }
@@ -39,23 +53,30 @@ for i = 0, SEGMENTS do
     COS[i], SIN[i] = math.cos(i * 2 * math.pi / SEGMENTS), math.sin(i * 2 * math.pi / SEGMENTS)
 end
 
--- The areas monsters leave, by the actor's name in lower case: what to call it, its radius in world units and, where the
--- area has a fixed life that is worth counting down, its seconds.
-local HOSTILE = {
-    monsteraffix_frozen_iceclusters = { "Frozen ball", 15.8, 3 },
-    monsteraffix_molten_deathstart_proxy = { "Molten blast", 13, 3 },
-    monsteraffix_molten_deathexplosion_proxy = { "Molten", 13 },
-    monsteraffix_molten_firering = { "Molten", 13 },
-    monsteraffix_desecrator_damage_aoe = { "Desecrator", 8 },
-    x1_monsteraffix_thunderstorm_impact = { "Thunderstorm", 16 },
-    monsteraffix_plagued_endcloud = { "Plagued", 12 },
-    creepmobarm = { "Plagued", 12 },
-    gluttony_gascloud_proxy = { "Gas cloud", 20 },
-    monsteraffix_arcaneenchanted_petsweep = { "Arcane", 6 },
-    monsteraffix_arcaneenchanted_petsweep_reverse = { "Arcane", 6 },
-    arcaneenchanteddummy_spawn = { "Arcane", 6, 2 },
-    x1_monsteraffix_frozenpulse_monster = { "Frozen pulse", 14 },
-}
+-- The areas monsters leave, by the actor's name in lower case: { what to call it, radius or nil, seconds or nil }, built
+-- from the "list" setting (again whenever the text changes).
+local hostile_text, HOSTILE = nil, {}
+
+local function trim(t) return (t:gsub("^%s+", ""):gsub("%s+$", "")) end
+
+local function hostile_table()
+    local text = d3hud.get("list")
+    if text ~= hostile_text then
+        hostile_text, HOSTILE = text, {}
+        for entry in text:gmatch("[^,]+") do
+            local f = {}
+            for part in (entry .. ":"):gmatch("([^:]*):") do f[#f + 1] = part end
+            local name = trim(f[1] or ""):lower()
+            if name ~= "" then
+                local label = trim(f[4] or "")
+                local radius, life = tonumber(f[2]), tonumber(f[3])
+                HOSTILE[name] = { label ~= "" and label or name, radius and radius > 0 and radius or nil,
+                                  life and life > 0 and life or nil }
+            end
+        end
+    end
+    return HOSTILE
+end
 
 local first_seen = {}  -- actor id -> time_ms the circle was first seen
 local circles = {}     -- this snapshot's areas: { x, y, dist, id, label, radius, life, kind = "oculus" | "altar" | "hostile" }
@@ -83,10 +104,10 @@ d3hud.on("snapshot", function()
         if a.kind == d3hud.kind.ground_effect then
             seen[a.id] = true
             first_seen[a.id] = first_seen[a.id] or now_ms
-            local hostile = HOSTILE[string.lower(a.name)]
+            local hostile = hostile_table()[string.lower(a.name)]
             if hostile then
                 list[#list + 1] = { x = a.x, y = a.y, dist = a.dist, id = a.id, kind = "hostile",
-                                    label = hostile[1], radius = hostile[2], life = hostile[3] }
+                                    label = hostile[1], radius = hostile[2] or d3hud.get("radius_default"), life = hostile[3] }
             elseif variant(a.name) then
                 local v = variant(a.name)
                 local known = ALTAR[v]

@@ -1,10 +1,15 @@
 #include "SnoTable.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <sstream>
+#include <unordered_set>
+
+#include "GroundEffects.h"
 
 namespace d3hud {
 
@@ -73,21 +78,37 @@ bool IsBonusDrop(const std::string& type, const std::string& name) {
     return type == "CraftingReagent" && name.rfind("Key of ", 0) == 0;  // realm keys (Key of War, ...)
 }
 
-// The actors elite affixes and a few monsters leave on the ground. The names and the radii the plugin draws come from
-// TurboHUD's EliteMonsterSkillPlugin; all of them are rejected by the other rules (helpers, effects, props).
+// The actors elite affixes and a few monsters leave on the ground, by name. The list is the user's (the groundeffects
+// plugin's setting, see GroundEffects.h) and starts as the built-in one; all of the default names are rejected by the other
+// rules (helpers, effects, props), so a name listed here wins over them.
+using NameSet = std::unordered_set<std::string>;
+
+static std::shared_ptr<const NameSet> MakeNames(const std::vector<std::string>& names) {
+    auto set = std::make_shared<NameSet>();
+    for (std::string n : names) {
+        std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        set->insert(std::move(n));
+    }
+    return set;
+}
+
+static std::atomic<std::shared_ptr<const NameSet>>& GroundNames() {
+    static std::atomic<std::shared_ptr<const NameSet>> names = [] {
+        std::vector<std::string> defaults;
+        for (const GroundEffectSpec& s : ParseGroundEffects(kDefaultGroundEffects)) defaults.push_back(s.name);
+        return MakeNames(defaults);
+    }();
+    return names;
+}
+
+void SetGroundEffectNames(const std::vector<std::string>& names) { GroundNames().store(MakeNames(names)); }
+
 static bool IsMonsterGroundEffect(const std::string& name) {
-    static const char* const kNames[] = {
-        "monsteraffix_frozen_iceclusters",           "monsteraffix_molten_deathstart_proxy",
-        "monsteraffix_molten_deathexplosion_proxy",  "monsteraffix_molten_firering",
-        "monsteraffix_desecrator_damage_aoe",        "x1_monsteraffix_thunderstorm_impact",
-        "monsteraffix_plagued_endcloud",             "creepmobarm",
-        "gluttony_gascloud_proxy",                   "monsteraffix_arcaneenchanted_petsweep",
-        "monsteraffix_arcaneenchanted_petsweep_reverse", "arcaneenchanteddummy_spawn",
-        "x1_monsteraffix_frozenpulse_monster",
-    };
+    const std::shared_ptr<const NameSet> names = GroundNames().load();
+    if (names->empty()) return false;
     std::string lower = name;
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return std::find(std::begin(kNames), std::end(kNames), lower) != std::end(kNames);
+    return names->count(lower) != 0;
 }
 
 bool ClassifyActor(const std::string& snoKind, const std::string& name, bool hasAcd, bool dead,
