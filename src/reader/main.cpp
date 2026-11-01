@@ -318,7 +318,11 @@ static bool DescribeItem(const Process& proc, const AttribTable& attribs, const 
     }
     // properties from the item's attribute group; missing attributes mean 0
     uint32_t quality = 0, ancient = 0, unid = 0, augment = 0;
-    if (attribs.Get(proc, r.attribGroup, kAttrItemQualityLevel, &quality) == AttribTable::Result::Unresolved) {
+    const AttribTable::Result qres = attribs.Get(proc, r.attribGroup, kAttrItemQualityLevel, &quality);
+    // Worn gear always has a quality. "Not found" there means the block we hold is a stale one (the game moved its
+    // attributes): report it as unresolved so the caller rescans, instead of showing everything as common/identified.
+    const bool wornButBlank = qres == AttribTable::Result::NotFound && r.location >= 1 && r.location <= 13;
+    if (qres == AttribTable::Result::Unresolved || wornButBlank) {
         it->identified = !r.unidentified;  // fallback: gear-only ACD flag
         it->rarity = ItemRarity::Unknown;  // not "Common": we simply don't know yet
         return false;
@@ -777,6 +781,7 @@ enum GameUi : size_t {
     kUiRiftTimerMarker,
     kUiRiftNormalBar,              // the normal rift's progress bar (rift_container)
     kUiMinimap,                    // the game's minimap: the square its icons are placed in
+    kUiInventoryBkgrnd,            // the inventory's background: visible whenever the inventory is shown
     kUiCount,
 };
 
@@ -811,6 +816,7 @@ static std::vector<std::string> GameUiPaths() {
     p.push_back(rift + "greater_rift_container.rift_timer_marker");
     p.push_back(rift + "rift_container.rift_progress_bar");
     p.push_back("Root.NormalLayer.minimap_dialog_backgroundScreen.minimap_dialog_pve.minimap_pve_arrow_region");
+    p.push_back("Root.NormalLayer.inventory_dialog_mainPage.inventory_bkgrnd");
     return p;
 }
 
@@ -866,7 +872,9 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
         if (out->confirmOpen) out->confirmOk = ui.Read(proc, kUiConfirmOk).rect;
     }
     const UiControlState backpack = ui.Read(proc, kUiBackpack);
-    out->inventoryOpen = backpack.visible;
+    // The backpack control's own visible flag was seen staying clear while the inventory was open (mid-session), so
+    // the dialog's background counts too.
+    out->inventoryOpen = backpack.visible || ui.Read(proc, kUiInventoryBkgrnd).visible;
     out->backpack = backpack.rect;
     if (out->inventoryOpen)
         for (int s = 1; s < kEquipSlots; ++s) out->slots[s] = ui.Read(proc, kUiSlot1 + s - 1).rect;
@@ -1249,6 +1257,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         if (acdThread.h == nullptr) acdJob.busy = false;
     };
     ULONGLONG uiScanAt = 0;
+    const ULONGLONG uiScanStart = GetTickCount64();
     // scenes: first scan once the player position is known (see the publish loop)
     ULONGLONG sceneScanAt = 0, sceneMissingSince = 0;
     // throughput stats, printed every 5 s
@@ -1331,8 +1340,10 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                 WriteActorDump(proc, &acds, &attribs, raw, sno, lastPlayer, actors.base());
         }
         // fill in UI controls that did not exist at startup (dialogs open lazily)
-        if (gameUi.MissingCount() > 0 && !acdJob.busy && !startupJob.busy &&
-            (uiScanAt == 0 || GetTickCount64() - uiScanAt > 8000)) {
+        // The game also rebuilds dialogs while it runs (an inventory that stops reacting mid-session): the controls we
+        // hold then point at dead objects that still look fine. So look them up again now and then (a background sweep).
+        if ((gameUi.MissingCount() > 0 || GetTickCount64() - (uiScanAt != 0 ? uiScanAt : uiScanStart) > 60000) && !acdJob.busy &&
+            !startupJob.busy && (uiScanAt == 0 || GetTickCount64() - uiScanAt > 8000)) {
             uiScanAt = GetTickCount64();
             startUiScan();
         }

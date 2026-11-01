@@ -180,6 +180,7 @@ void MinimapLayout::Describe(SettingsTable& t) {
         t.Add(p + "h", panelH[i], kAnyLo, kAnyHi, 4);
     }
     for (const auto& entry : pluginPanels) DescribePluginPanel(t, entry.first);
+    for (const auto& entry : pluginBoxes) DescribePluginBox(t, entry.first);  // without this a moved box is never saved
     t.Add("salvage.rarityMask", salvageRules.rarityMask, 0u, 0x1Fu);
     t.Add("salvage.keepAncient", salvageRules.keepAncient);
     t.Add("salvage.keepPrimal", salvageRules.keepPrimal);
@@ -2442,7 +2443,9 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
             if (!St(p).hidden && !p.off) DrawPluginPanel(p, opt);
         DrawSettings(snap, opt);  // always reachable
     }
-    if (opt.showMinimap) DrawMinimap(snap, opt);
+    // the inventory and the stash cover the corner the minimap lives in: the game hides its own minimap there, so
+    // do not draw the icons over the panels (the big map is a different window and stays)
+    if (opt.showMinimap && (snap.ui.bigMapOpen || !(snap.ui.inventoryOpen || snap.ui.stashOpen))) DrawMinimap(snap, opt);
     DrawPluginBoxes(opt);        // the plugins' on-screen boxes: independent of F9
     DrawGroundLabels(snap, opt); // independent of F9, like the game's own item labels
     DrawItemBadges(snap);        // independent of F9: only while the game shows inventory/stash
