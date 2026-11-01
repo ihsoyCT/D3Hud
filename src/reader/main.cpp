@@ -899,6 +899,17 @@ static void ReadGameUi(const Process& proc, const UiControls& ui, UiLayout* out)
     out->stashTab = static_cast<int8_t>(tab < 0 ? -1 : page * 5 + tab);
 }
 
+// Scene shapes the game has loaded but scene_cells.bin lacks (a game patch brings new tiles) are read from the game itself
+// (NavAssetScan). What is learned goes to scene_cells_learned.bin next to the exes: the overlay merges it, and the next
+// session starts with it.
+static std::filesystem::path LearnedCellsPath() { return ExeSiblingPath("scene_cells_learned.bin"); }
+
+static int LearnSceneShapes(const Process& proc, NavAssetScan* nav, SceneCells* cells) {
+    const int added = nav->Finish(proc, cells, true);
+    if (added > 0 && !cells->SaveLearned(LearnedCellsPath())) std::print(stderr, "warning: cannot write scene_cells_learned.bin\n");
+    return added;
+}
+
 // Background block re-discovery (one full memory pass each, ~2-3 s): ACD blocks
 // when `snapshot` is set, attribute-group blocks when `groupIds` is set.
 struct AcdScanJob {
@@ -907,7 +918,7 @@ struct AcdScanJob {
     AttribTable* attribs;
     const std::unordered_set<uint32_t>* snoIds;
     SceneTable* scenes;
-    const SceneCells* sceneCells;
+    SceneCells* sceneCells;  // also learns scenes the shipped table lacks (LearnSceneShapes)
     std::vector<RawActor> snapshot;
     std::vector<uint32_t> groupIds;
     bool scanScenes = false;
@@ -940,16 +951,29 @@ static DWORD WINAPI AcdScanThread(LPVOID param) {
     AcdBlockScan acd(job->snapshot, job->snoIds);
     AttribBlockScan attrib(job->groupIds);
     SceneBlockScan scene(*job->sceneCells, nullptr, &job->player);
+    NavAssetScan nav(*job->sceneCells);
     UiPathScan ui(job->ui->paths());
     std::vector<ChunkMatcher*> matchers;
     if (!job->snapshot.empty()) matchers.push_back(&acd);
     if (!job->groupIds.empty()) matchers.push_back(&attrib);
-    if (job->scanScenes) matchers.push_back(&scene);
+    if (job->scanScenes) {
+        matchers.push_back(&scene);
+        matchers.push_back(&nav);
+    }
     if (job->scanUi) matchers.push_back(&ui);
     SharedSweep(*job->proc, matchers);
     if (!job->snapshot.empty()) acd.Finish(job->acds, false);
     if (!job->groupIds.empty()) attrib.Finish(job->attribs, true);
-    if (job->scanScenes) scene.Finish(job->scenes, true);
+    if (job->scanScenes) {
+        if (LearnSceneShapes(*job->proc, &nav, job->sceneCells) > 0) {
+            // records of the new scenes were skipped by this pass (their SNO was unknown): look again
+            SceneBlockScan again(*job->sceneCells, nullptr, &job->player);
+            SharedSweep(*job->proc, {&again});
+            again.Finish(job->scenes, true);
+        } else {
+            scene.Finish(job->scenes, true);
+        }
+    }
     if (job->scanUi) {
         ui.Finish(*job->proc, job->ui, false);
         std::print("ui controls: {} still missing\n", job->ui->MissingCount());
@@ -986,7 +1010,7 @@ struct StartupScanJob {
     AcdTable* acds;
     AttribTable* attribs;
     SceneTable* scenes;
-    const SceneCells* sceneCells;
+    SceneCells* sceneCells;  // also learns scenes the shipped table lacks (LearnSceneShapes)
     const std::unordered_set<uint32_t>* snoIds;
     const SnoTable* sno;
     const ItemNameTable* itemNames;
@@ -1014,12 +1038,20 @@ static DWORD WINAPI StartupScanThread(LPVOID param) {
     {
         AttribBlockScan attrib(groups);
         SceneBlockScan scene(*job->sceneCells, nullptr, nullptr);
+        NavAssetScan nav(*job->sceneCells);
         std::vector<ChunkMatcher*> matchers;
         if (attrib.enabled()) matchers.push_back(&attrib);
         matchers.push_back(&scene);
+        matchers.push_back(&nav);
         SharedSweep(*job->proc, matchers);
         if (attrib.enabled()) attrib.Finish(job->attribs, true);
-        scene.Finish(job->scenes, true);
+        if (LearnSceneShapes(*job->proc, &nav, job->sceneCells) > 0) {
+            SceneBlockScan again(*job->sceneCells, nullptr, nullptr);
+            SharedSweep(*job->proc, {&again});
+            again.Finish(job->scenes, true);
+        } else {
+            scene.Finish(job->scenes, true);
+        }
     }
     BasesCache cache;
     cache.pid = job->pid;
@@ -1181,8 +1213,9 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
     SceneCells sceneCells;
     if (sceneCells.Load(snoPath.parent_path() / "scene_cells.bin"))
         std::print("scene shapes: {} scenes\n", sceneCells.sceneCount());
+    if (sceneCells.Merge(LearnedCellsPath())) std::print("scene shapes with the ones learned earlier: {} scenes\n", sceneCells.sceneCount());
     else
-        std::print(stderr, "cannot load scene_cells.bin - no map prediction\n");
+        std::print(stderr, "no scene_cells.bin - learning the scene shapes from the game\n");
     std::vector<SceneRecord> sceneRecords;
     std::vector<SceneSnapshot> worldScenes;
     uint32_t areaKey = 0;  // see AreaKey: kept while the player is in no known scene
@@ -1232,7 +1265,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
         acdJob.groupIds = itemGroups;
         acdJob.groupIds.insert(acdJob.groupIds.end(), hpGroups.begin(), hpGroups.end());
         if (effectGroupMissing != 0) acdJob.groupIds.push_back(effectGroupMissing);
-        acdJob.scanScenes = scenesToo && sceneCells.sceneCount() > 0;
+        acdJob.scanScenes = scenesToo;  // also with no shipped table: the shapes are then learned from the game
         acdJob.scanUi = false;
         acdJob.player = lastPlayer;
         acdJob.busy = true;
@@ -1260,6 +1293,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
     const ULONGLONG uiScanStart = GetTickCount64();
     // scenes: first scan once the player position is known (see the publish loop)
     ULONGLONG sceneScanAt = 0, sceneMissingSince = 0;
+    std::unordered_set<uint32_t> scenesTried;  // scene SNOs without known cells that a learn scan was started for
     // throughput stats, printed every 5 s
     auto msSince = [&qpcFreq](const LARGE_INTEGER& from) {
         LARGE_INTEGER n;
@@ -1371,7 +1405,8 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                 // map prediction: the current world's scenes; if the player stands in
                 // no known scene (new area, new blocks) rescan, at most every 10 s
                 // a failed read keeps the previous records and is retried on the next tick
-                if (sceneTable.baseCount() > 0) (void)sceneTable.Read(proc, sceneCells, &sceneRecords);
+                std::vector<uint32_t> unknownScenes;
+                if (sceneTable.baseCount() > 0) (void)sceneTable.Read(proc, sceneCells, &sceneRecords, &unknownScenes);
                 CurrentWorldScenes(sceneRecords, lastPlayer, &worldScenes);
                 if (!worldScenes.empty() || !ok) {
                     sceneMissingSince = 0;
@@ -1379,6 +1414,14 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                     sceneMissingSince = inventoryAt;
                 } else if (!acdJob.busy && (sceneScanAt == 0 || (inventoryAt - sceneMissingSince > 3000 &&
                                                                  inventoryAt - sceneScanAt > 10000))) {
+                    sceneScanAt = inventoryAt;
+                    startScan(false, true);
+                }
+                // a tile that loaded after the last scan: look for its cells in the game, once per scene SNO (a scene
+                // the game does not keep cells for must not make this run for ever), at most every 5 s
+                bool newScene = false;
+                for (uint32_t s : unknownScenes) newScene |= scenesTried.insert(s).second;
+                if (newScene && !acdJob.busy && inventoryAt - sceneScanAt > 5000) {
                     sceneScanAt = inventoryAt;
                     startScan(false, true);
                 }
@@ -1743,6 +1786,27 @@ static int DumpScenes(const Process& proc, const std::filesystem::path& snoPath)
         std::print("  0x{:X} base 0x{:X} id {:08X} world {:08X} sno {:7} ({:.0f},{:.0f})-({:.0f},{:.0f})\n", addr,
                    addr - static_cast<uint64_t>(s.id & 0xFFFF) * kSceneStride, s.id, s.world, s.sno, s.x0, s.y0,
                    s.x1, s.y1);
+    // Check of the game's own nav data: learn every scene asset in memory with an EMPTY table and compare with the file.
+    SceneCells none;
+    NavAssetScan nav(none);
+    SharedSweep(proc, {&nav});
+    const int learned = nav.Finish(proc, &none, true);
+    int same = 0, differ = 0, absent = 0;
+    for (const uint32_t sno : nav.Learned()) {
+        const std::vector<CellRect>* mine = none.Find(sno);
+        const std::vector<CellRect>* file = cells.Find(sno);
+        if (file == nullptr) {
+            ++absent;
+            std::print("  scene {} is in memory but not in scene_cells.bin ({} cells)\n", sno, mine != nullptr ? mine->size() : 0);
+        } else if (mine != nullptr && mine->size() == file->size() &&
+                   memcmp(mine->data(), file->data(), mine->size() * sizeof(CellRect)) == 0) {
+            ++same;
+        } else {
+            ++differ;
+            std::print("  scene {} differs from scene_cells.bin\n", sno);
+        }
+    }
+    std::print("from memory: {} scenes; identical to the file {}, different {}, not in the file {}\n", learned, same, differ, absent);
     return 0;
 }
 

@@ -255,6 +255,9 @@ public:
     void SetLayoutPath(const std::filesystem::path& path);
     // Scene shapes for the map prediction (scene_cells.bin); false if missing.
     bool LoadSceneCells(const std::filesystem::path& path) { return sceneCells_.Load(path); }
+    // The shapes the reader learned from the game itself (scenes of a newer game version than scene_cells.bin); merged
+    // now and again whenever the file changes.
+    void SetLearnedCellsPath(const std::filesystem::path& path) { learnedCellsPath_ = path; }
     // Hotkey bindings for main.cpp: re-register when TakeHotkeysDirty(); while a key is being
     // captured in Settings the owner must ignore hotkey presses.
     const uint8_t* hotkeys() const { return layout_.hotkeys; }
@@ -400,6 +403,10 @@ private:
     template <typename ToPx, typename Keep>
     void DrawScenes(const WorldSnapshot& snap, ImDrawList* dl, ToPx toPx, Keep keep);
     SceneCells sceneCells_;
+    std::filesystem::path learnedCellsPath_;
+    std::filesystem::file_time_type learnedCellsTime_{};
+    double learnedCellsCheckAt_ = 0.0;
+    void MergeLearnedCells();
     void DrawActorPanel(const WorldSnapshot& snap, const HudOptions& opt);
     void DrawSalvagePanel(const WorldSnapshot& snap, const HudOptions& opt);
     void DrawHoveredItem(const WorldSnapshot& snap, const HudOptions& opt);

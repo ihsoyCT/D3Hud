@@ -58,7 +58,7 @@ at any resolution). If it ever cannot, or the zoom is off, adjust it in **Settin
 - Markers for monsters (trash, champions, rares, minions, bosses), pylons and shrines
   (with names, distance and a pulsing ring), chests, portals, health globes, ground items
   and the **progress orbs** of rifts (blue for normal rifts, yellow for greater rifts).
-- Map prediction: the walkable level layout (also unexplored parts), entrance/exit labels.
+- Map prediction: the walkable level layout (also unexplored parts), entrance/exit labels. Tiles the shipped table does not know (a newer game patch) are read from the game itself.
 - The same markers on the game's big TAB map.
 - An arrow on the rim to the nearest unused pylon when it is off the map, and a ring around the
   nearest rare or champion.
@@ -253,6 +253,7 @@ Next to the exes (the folder is relocatable, nothing is written elsewhere):
 | File | |
 |---|---|
 | `sno_actors.tsv`, `items_gbid.tsv`, `sno_powers.tsv`, `scene_cells.bin` | Data tables the program needs (shipped) |
+| `scene_cells_learned.bin` | Level tiles the reader read from the game itself because `scene_cells.bin` did not have them (new game patch); created at runtime, safe to delete |
 | `d3hud.ini` | All settings, panel positions, hotkeys and the safe area (created on first save) |
 | `d3hud.<name>.ini` | Saved profiles |
 | `plugins/`, `plugins.ini` | Lua plugins (shipped) and the settings and data they keep |

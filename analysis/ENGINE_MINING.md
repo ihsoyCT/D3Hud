@@ -251,6 +251,22 @@ D3Hud are ours (offsets/layouts), no code copying.
 - Rift level (world 774D001A): a single 320x320 scene (SNO 448403) was the
   only record in memory, so discovery also keeps the block of a lone record
   that contains the player (noise excluded: id 0 / 0xFF000000, world 0).
+- Coverage: the reader drops every record whose scene SNO is not in `scene_cells.bin`, so a game version with new tiles
+  shows up as "scene table: 0 block base(s)" and no prediction (`--scenes` then lists only noise). TurboHUD 2.6.10 data
+  stops at SNO 483080 (3279 scenes); the rift tileset of the current game (487xxx) came from the newer data folder of
+  a TurboHUD LightningMOD build (3444 scenes, a strict superset: no old scene changed). Regenerate with
+  `tools/extract_scene_cells.py <newer data dir> analysis/scene_cells.bin` when a rift or zone stops predicting.
+- The nav cells are in the game's memory too, so a scene the table lacks is read from the game (`NavAssetScan`).
+  Measured live in a rift (`--scenes`, nothing from the table used): a loaded scene ASSET (one per scene SNO, shared by
+  every instance of that scene) keeps `+0 u32 scene SNO`, `+384 u32 cell count`, `+392 u64 pointer to the cells`,
+  `+404 u32 byte size (= count * 32)`. A cell is 32 bytes: `f32 minX, minY, minZ, maxX, maxY, maxZ`, `u16 flags` (bit 0 =
+  walkable, as in the TurboHUD file), `u16 neighbour count`, `u32 first neighbour`. All coordinates and sizes are
+  multiples of 2.5 (scene-relative). The walkable cells equalled `scene_cells.bin` for 682 of 682 scenes found (the SNO
+  at -392 from the pointer held for 379 of 379 uniquely identifiable arrays); one scene (1885) differs. The scene
+  RECORD (stride 1976) holds no pointer to it: the table is keyed by SNO. Scene names (hence the entrance/exit flags) are
+  not in memory, so learned scenes have flags 0. The reader writes what it learns to `scene_cells_learned.bin` next to
+  the exes; the overlay merges that file when it changes. `--scenes` ends with a comparison of the game's cells against
+  `scene_cells.bin` (with an empty table, so it is a real test of the extraction).
 - `D3Hud.Reader --attach "Diablo III64.exe" --scenes` lists every
   self-consistent record with its implied block base.
 

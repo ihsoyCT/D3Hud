@@ -2226,6 +2226,54 @@ static void TestShrineLabels() {
     CHECK(ShrineLabel("Waypoint") == nullptr);
 }
 
+// Nav cells as the game keeps them in memory (32 bytes each), learned into the scene shapes.
+static void TestLearnedSceneCells() {
+    auto putCell = [](std::vector<uint8_t>& mem, float x0, float y0, float x1, float y1, uint16_t flags) {
+        uint8_t c[kGameNavCellSize] = {};
+        const float f[6] = {x0, y0, -0.1f, x1, y1, 0.f};
+        memcpy(c, f, sizeof(f));
+        memcpy(c + 24, &flags, 2);
+        mem.insert(mem.end(), c, c + sizeof(c));
+    };
+    std::vector<uint8_t> mem;
+    putCell(mem, 0.f, 0.f, 30.f, 40.f, 0x0C07);   // walkable
+    putCell(mem, 30.f, 0.f, 45.f, 10.f, 0x3C42);  // not walkable: dropped
+    putCell(mem, 45.f, 0.f, 50.f, 2.5f, 0x0C07);
+    std::vector<CellRect> out;
+    CHECK(ExtractWalkableCells(mem.data(), 3, &out) && out.size() == 2);
+    CHECK(out.size() == 2 && out[1].x0 == 45.f && out[1].y1 == 2.5f);
+    putCell(mem, 10.f, 10.f, 5.f, 20.f, 0x0C07);  // x1 < x0: not a cell, so the whole thing is not an array of cells
+    CHECK(!ExtractWalkableCells(mem.data(), 4, &out) && out.empty());
+    std::vector<uint8_t> solid;  // a tile with no walkable cell is a valid, empty shape (not an unknown scene)
+    putCell(solid, 0.f, 0.f, 30.f, 40.f, 0x3C42);
+    CHECK(ExtractWalkableCells(solid.data(), 1, &out) && out.empty());
+    CHECK(!ExtractWalkableCells(solid.data(), 0, &out));
+    const std::vector<uint8_t> noise(kGameNavCellSize * 2, 0xFF);  // NaN floats
+    CHECK(!ExtractWalkableCells(noise.data(), 2, &out));
+
+    // a learned scene is added once, saved, and merged into another table without replacing what that one knows
+    SceneCells a;
+    CHECK(ExtractWalkableCells(mem.data(), 3, &out));
+    CHECK(a.Add(487056, out) && !a.Add(487056, {}));
+    CHECK(a.Find(487056) != nullptr && a.Find(487056)->size() == 2);
+    const char* path = "test_learned_cells.bin";
+    CHECK(a.SaveLearned(path));
+    SceneCells b;
+    CHECK(b.Add(487056, {{1.f, 1.f, 2.f, 2.f}}));
+    CHECK(b.Add(1, {{0.f, 0.f, 5.f, 5.f}}));
+    CHECK(b.Merge(path) && b.sceneCount() == 2);
+    CHECK(b.Find(487056)->size() == 1);  // the known shape stays
+    SceneCells c;
+    CHECK(c.Merge(path) && c.Find(487056) != nullptr && c.Find(487056)->size() == 2);
+    // what a session merged from the file is saved again with what it learns itself (nothing is lost between runs)
+    CHECK(c.Add(487057, {{0.f, 0.f, 2.5f, 2.5f}}));
+    CHECK(c.SaveLearned(path));
+    SceneCells d;
+    CHECK(d.Merge(path) && d.Find(487056) != nullptr && d.Find(487057) != nullptr);
+    CHECK(!c.Merge("no_such_learned_file.bin"));
+    remove(path);
+}
+
 static void TestScenes() {
     // shape file: one scene with two walkable cells
     const char* path = "test_scene_cells.bin";
@@ -2422,6 +2470,7 @@ int main() {
     TestWorldToScreen();
     TestBigMap();
     TestScenes();
+    TestLearnedSceneCells();
     TestShrineLabels();
     TestSalvageRules();
     TestItemSearch();

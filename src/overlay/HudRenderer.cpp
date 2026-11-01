@@ -2410,7 +2410,19 @@ void HudRenderer::DrawPluginPanelSettings(const std::string& id) {
     }
 }
 
+void HudRenderer::MergeLearnedCells() {
+    const double now = ImGui::GetTime();
+    if (learnedCellsPath_.empty() || now < learnedCellsCheckAt_) return;
+    learnedCellsCheckAt_ = now + 2.0;
+    std::error_code ec;
+    const auto stamp = std::filesystem::last_write_time(learnedCellsPath_, ec);
+    if (ec || stamp == learnedCellsTime_) return;
+    // a file the reader is still writing fails to merge: the stamp is kept only on success, so it is read again
+    if (sceneCells_.Merge(learnedCellsPath_)) learnedCellsTime_ = stamp;
+}
+
 void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName) {
+    MergeLearnedCells();
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleMain = layout_.uiScale;
     style.WindowPadding = layout_.compact ? ImVec2(4.f, 3.f) : ImVec2(8.f, 8.f);
