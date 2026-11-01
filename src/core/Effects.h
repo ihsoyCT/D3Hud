@@ -78,8 +78,9 @@ private:
     double anchorTick_ = 0;
 };
 
-// Power SNO -> internal name (analysis/sno_powers.tsv: sno, name), e.g. "Generic_EnchantressCheatDeathPassive",
-// and a name for people: "Enchantress Cheat Death Passive".
+// Power SNO -> internal name (analysis/sno_powers.tsv: sno, name, english), e.g. "Generic_EnchantressCheatDeathPassive",
+// and a name for people: the game's English text when the table has it (tools/build_power_names.py), else the internal
+// name made readable: "Enchantress Cheat Death Passive".
 class PowerNames {
 public:
     [[nodiscard]] bool Load(const std::filesystem::path& path);
@@ -95,6 +96,7 @@ public:
 
 private:
     std::unordered_map<uint32_t, std::string> codes_;
+    std::unordered_map<uint32_t, std::string> english_;
 };
 
 }  // namespace d3hud

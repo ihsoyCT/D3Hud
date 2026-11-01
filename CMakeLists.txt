@@ -31,7 +31,9 @@ add_library(d3hud_core STATIC
     src/core/SceneCells.cpp
     src/core/Effects.cpp
     src/core/Wallet.cpp
-    src/core/GroundEffects.cpp)
+    src/core/GroundEffects.cpp
+    src/core/PlayerStats.cpp
+    src/core/DisplayNames.cpp)
 target_include_directories(d3hud_core PUBLIC src/core)
 target_compile_definitions(d3hud_core PUBLIC _CRT_SECURE_NO_WARNINGS)
 
@@ -78,6 +80,10 @@ add_custom_command(TARGET D3Hud.Reader POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/analysis/sno_powers.tsv $<TARGET_FILE_DIR:D3Hud.Reader>/sno_powers.tsv
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/analysis/names_en.tsv $<TARGET_FILE_DIR:D3Hud.Reader>/names_en.tsv
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/analysis/rare_names.tsv $<TARGET_FILE_DIR:D3Hud.Reader>/rare_names.tsv
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/analysis/scene_cells.bin $<TARGET_FILE_DIR:D3Hud.Reader>/scene_cells.bin)
 
 add_executable(d3hud_tests src/tests/test_core.cpp src/tests/host_api_c.c)
@@ -108,6 +114,8 @@ install(FILES
     analysis/sno_actors.tsv
     analysis/items_gbid.tsv
     analysis/sno_powers.tsv
+    analysis/names_en.tsv
+    analysis/rare_names.tsv
     analysis/scene_cells.bin
     README.md
     DESTINATION .)

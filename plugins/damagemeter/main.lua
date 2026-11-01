@@ -72,12 +72,12 @@ local function update()
             if s then
                 local lost = s.hp - a.hp_current
                 if lost > 0 and lost <= s.max * 1.01 then
-                    add_damage(t, lost, a.name, a.hp_max)
+                    add_damage(t, lost, a.display_name or a.name, a.hp_max)
                     s.hurt = t
                 end
-                s.hp, s.max, s.frac, s.name = a.hp_current, a.hp_max, a.hp, a.name
+                s.hp, s.max, s.frac, s.name = a.hp_current, a.hp_max, a.hp, a.display_name or a.name
             else
-                seen[a.id] = { hp = a.hp_current, max = a.hp_max, frac = a.hp, name = a.name, hurt = -1e9 }
+                seen[a.id] = { hp = a.hp_current, max = a.hp_max, frac = a.hp, name = a.display_name or a.name, hurt = -1e9 }
             end
             if a.hp > 0 and d3hud.world_to_screen(a.x, a.y, 0) then  -- alive and on the screen
                 remaining = remaining + a.hp_current

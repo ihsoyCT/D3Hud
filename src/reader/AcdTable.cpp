@@ -144,6 +144,14 @@ bool AcdTable::ReadRaw(const Process& proc, uint32_t acdId, uint8_t* out) const 
     return false;
 }
 
+bool AcdTable::ReadRareName(const Process& proc, uint32_t acdId, uint32_t* prefix, uint32_t* suffix) const {
+    uint8_t rec[kAcdStride];
+    if (!ReadRaw(proc, acdId, rec)) return false;
+    memcpy(prefix, rec + 0x1DC, 4);
+    memcpy(suffix, rec + 0x1E0, 4);
+    return true;
+}
+
 bool AcdTable::ReadAffixMask(const Process& proc, uint32_t acdId, uint32_t* mask) const {
     uint8_t rec[kAcdStride];
     if (!ReadRaw(proc, acdId, rec)) return false;

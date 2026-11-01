@@ -100,7 +100,9 @@ as an array; `actor(i)` returns one or `nil`. Each has:
 | `id` | the actor's id (stable while it lives) |
 | `x`, `y`, `dist`, `heading` | position in world units, distance from the player, heading in radians |
 | `kind`, `kind_name` | the kind as a number and as text; the numbers are in `d3hud.kind` |
-| `name` | the game's internal name, e.g. `x1_Fallen_Champion` (for ground items: the item's display name) |
+| `name` | the game's internal name, e.g. `x1_Fallen_Champion` (for ground items: the item's display name). **Match on this.** |
+| `display_name` | what the game calls it, in English (`"Risen"`; a rare: its generated name, `"Kauza, Torturer of Souls"`), from `names_en.tsv` and `rare_names.tsv` (API 11); the internal name when the game has no English name for it. Show this to people |
+| `type_name` | the kind of monster in English also for a rare (`"Returned Archer"`), same fallback (API 11) |
 | `hp` | life as 0..1, **-1 when the life is not read** (only champions, rares and bosses are) |
 | `hp_current`, `hp_max` | life in game units (0 when not read) |
 | `affix_mask`, `affixes`, `affix_names` | champions, rares, bosses: the monster affixes. `affixes` are keys (`"molten"`), `affix_names` as the game shows them (`"Molten"`), both in the order of `d3hud.affixes` |
@@ -125,6 +127,7 @@ and legendary, set and bonus items lying on the ground.
 | `grid_x`, `grid_y`, `height` | cell of the backpack or stash (stash: `grid_y` counts tabs * 10 + row) and height in cells |
 | `verdict` | what the built-in salvage rules say: 0 unknown, 1 junk, 2 keep, 3 check |
 | `augment_rank` | Caldesann's Despair gem rank (0 = none) |
+| `stack` | stack size of gems and crafting materials (API 8), 0 for everything else |
 | `flags` | as for actors |
 
 ### Wallet: `d3hud.wallet()` (API 6)
@@ -134,6 +137,54 @@ while the reader has not found them (no character in the world yet). Keys: `gold
 `arcane_dust`, `veiled_crystal`, `deaths_breath`, `forgotten_soul`, `khanduran_rune`, `caldeum_nightshade`,
 `arreat_war_tapestry`, `corrupted_angel_flesh`, `westmarch_holy_water`, `primordial_ashes`, `greater_rift_keystone` and the Hellfire materials `vial_of_putridness`, `idol_of_terror`, `heart_of_fright`, `leorics_regret` (which of the first three is which is a guess: all three read 1). The numbers are read about twice a
 second. Gem stacks in the backpack are not part of it (they are item stacks).
+
+### Player: `d3hud.player()` (API 7)
+
+The character's own numbers, from its attribute map (read ten times a second), or `nil` while the reader has not read them.
+
+| Field | |
+|---|---|
+| `class`, `class_id` | `"Demon Hunter"` and 3 (1 Barbarian, 2 Crusader, 3 Demon Hunter, 4 Monk, 5 Necromancer, 6 Witch Doctor, 7 Wizard; 0 unknown) |
+| `level`, `paragon`, `paragon_points` | level (70 at the cap), paragon level, unspent paragon points |
+| `life`, `life_max`, `life_regen` | game units (regeneration per second) |
+| `resources` | one `{ type, name, current, max, regen }` per resource the class has. Names are known for the Demon Hunter's `Hatred` (5) and `Discipline` (6); other ids read `"Resource <n>"` until they are seen live |
+| `xp_to_next`, `paragon_xp_to_next` | experience still **missing** for the next (paragon) level: it falls while you play and jumps up at a level-up, so count gains as the drops |
+| `strength`, `dexterity`, `intelligence`, `vitality` | the totals |
+| `armor`, `resist_all`, `resist` | `resist` is `{ physical, fire, lightning, cold, poison, arcane }` |
+| `attack_speed`, `move_speed` | multipliers: `move_speed` 1.65 is 65% faster |
+| `cooldown_reduction` | a fraction: 0.32 is 32% |
+| `gold_find`, `magic_find` | percent |
+| `highest_solo_rift`, `highest_unlocked_rift`, `last_rift_level` | the account's rift records |
+| `deaths` | how often the character has died (API 9): take differences, e.g. at the start and end of a rift |
+
+### Skills: `d3hud.skills()` (API 7)
+
+The skills the character has equipped, actives and passives, ordered by power (**not** by action bar slot: the slot is not an
+attribute and the reader does not know it yet). `frame().skill_count` is their number.
+
+| Field | |
+|---|---|
+| `sno`, `name`, `code` | the power, as for effects |
+| `passive` | a passive skill |
+| `rune`, `rune_letter` | 0 / `""` for no rune, else 1..5 / `"A"`..`"E"` |
+| `on_cooldown`, `cooldown_duration`, `cooldown_remaining`, `timed` | seconds of game time; `timed` is false while the game clock is not known |
+
+### Passives: `d3hud.passives()` (API 10)
+
+The powers that are on the character without a timer: passive skills, legendary item and gem powers, set bonuses, event
+buffs. The game keeps them as buffs with a stack count and no end, so they never appear in `d3hud.effects()`. Each is
+`{ sno, name, code, slot, stacks }`, once per icon slot (a power can hold several; Squirt's Necklace, power `483552`, keeps its
+10 stacks in slot 5). `frame().passive_count` is their number. Use it to see which legendary powers are active and to measure the
+uptime of a stack that has no timer.
+
+### Health: `d3hud.health()` (API 7)
+
+How well the reader sees the game. For each source one of `"unknown"`, `"ok"`, `"degraded"` (found, but part of it does not
+resolve: a table the game rebuilt, attributes still being located) or `"missing"`: `actors`, `records`, `attributes`,
+`inventory`, `player`, `ui`, `scenes`, `wallet`. `ok` is true when none is degraded or missing. Also `actors_seen`,
+`actors_dropped` (more actors than the snapshot holds, 256), `items_dropped`, `monsters_unresolved`, `items_unresolved`,
+`ui_missing` (dialogs that were never opened do not exist yet, so some missing controls are normal) and `ticks_per_second`
+(the reader loop). Use it to tell "nothing there" from "the reader cannot see".
 
 ### Effects: `d3hud.effects()` (API 2)
 
@@ -249,7 +300,7 @@ Both draw with the same small set of widgets and are called only while they are 
 
 - `d3hud.panel{ id, title, width, height, draw = function(ui) ... end }` is a **dock panel**: a tab in the dock, expanding when
   hovered, pinned with F8 + click, draggable. `width` and `height` greater than 0 make it resizable. The host remembers its
-  place and offers *show in dock*, *keep open* and *reset position* on the plugin's page.
+  place and offers *show in dock*, *keep open* and *reset position* on the plugin's page. Every panel also gets a row in Settings > Hotkeys ("Toggle panel: ...", unbound until the user picks a key) that pins or unpins it; the plugin does nothing for this. Boxes (`d3hud.box`) are drawn below the panels and settings windows.
 - `d3hud.page{ id, title, group, order, draw = function(ui) ... end }` is a **page of the Settings window** for what the schema of
   [settings](#settings) cannot express. The plugin's *first* page also shows its options, its dock panel controls and its box
   controls. A plugin that registers no page but has options, a panel or a box gets an automatic one. Open one directly with
@@ -353,7 +404,7 @@ loader yet**. The header must keep compiling as C. Rules that keep old plugins w
 \* In the header but **not provided by the overlay yet** (the table entry is null): check before use. The `drop` event is the
 same.
 
-The structs are `d3h_frame`, `d3h_actor`, `d3h_item`, `d3h_effect`, `d3h_image`, `d3h_event`, `d3h_setting_desc`,
+The structs are `d3h_frame`, `d3h_actor`, `d3h_item`, `d3h_effect`, `d3h_passive`, `d3h_player`, `d3h_skill`, `d3h_health`, `d3h_image`, `d3h_event`, `d3h_setting_desc`,
 `d3h_panel_desc`, `d3h_page_desc`, `d3h_box_desc` and the widget table `d3h_ui`. The Lua tables above are these structs with
 friendlier names.
 
@@ -367,6 +418,11 @@ friendlier names.
 | 4 | `d3hud.image()`, `d3hud.draw_image()` |
 | 5 | actor kind `ground_effect` (`d3hud.kind.ground_effect`): the circles the Oculus Ring and the Altar of Rites leave on the ground, and the areas elite affixes leave (the `name` says which) |
 | 6 | `d3hud.wallet()`: gold, blood shards and crafting materials |
+| 7 | `d3hud.player()`, `d3hud.skills()`, `d3hud.health()`, `frame().skill_count` |
+| 8 | `item.stack` |
+| 9 | `player().deaths` |
+| 10 | `d3hud.passives()`, `frame().passive_count` |
+| 11 | `actor.display_name` |
 
 Changing the interface means: the new entry in `HostApi.h` (at the end, a new version number), its implementation in
 `src/overlay/PluginHost.cpp`, the Lua binding in `src/plugins/LuaPlugin.cpp` (registered only when the host has the function), a

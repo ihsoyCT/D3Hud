@@ -140,7 +140,11 @@ bool PowerNames::Load(const std::filesystem::path& path) {
         const size_t tab = line.find('\t');
         if (tab == std::string::npos) continue;
         const unsigned long sno = strtoul(line.c_str(), nullptr, 10);
-        if (sno != 0) codes_[static_cast<uint32_t>(sno)] = line.substr(tab + 1);
+        if (sno == 0) continue;
+        // sno, internal name and, when the game has text for it, the English name
+        const size_t tab2 = line.find('\t', tab + 1);
+        codes_[static_cast<uint32_t>(sno)] = line.substr(tab + 1, tab2 == std::string::npos ? std::string::npos : tab2 - tab - 1);
+        if (tab2 != std::string::npos && tab2 + 1 < line.size()) english_[static_cast<uint32_t>(sno)] = line.substr(tab2 + 1);
     }
     return !codes_.empty();
 }
@@ -151,6 +155,7 @@ const std::string* PowerNames::Code(uint32_t sno) const {
 }
 
 std::string PowerNames::Readable(uint32_t sno) const {
+    if (const auto it = english_.find(sno); it != english_.end()) return it->second;
     const std::string* code = Code(sno);
     return code != nullptr ? Prettify(*code) : "Power " + std::to_string(sno);
 }

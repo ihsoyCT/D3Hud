@@ -145,6 +145,7 @@ struct MinimapLayout {
     struct PluginPanelState {
         bool pinned = false, hidden = false;
         float x = -1.f, y = -1.f, w = 0.f, h = 0.f;  // x < 0 = docked
+        uint8_t hotkey = 0;  // virtual-key code that opens / closes (pins) the panel, 0 = none
     };
     std::map<std::string, PluginPanelState> pluginPanels;
     void DescribePluginPanel(SettingsTable& table, const std::string& id);
@@ -191,6 +192,7 @@ struct HudOptions {
     bool showMinimap = true;
     bool showPanels = true;
     bool inputInteractive = false;    // F8 state: true = overlay captures mouse
+    unsigned pluginPanelToggleMask = 0;  // bit i: the hotkey of plugin panel i fired this frame
     unsigned panelToggleMask = 0;     // bit i: the hotkey of panel i fired this frame (Draw consumes it)
     int mapOrientation = 0;           // F7 cycles; see OrientForMap (live default: 2)
     float cursorX = -1.f, cursorY = -1.f;  // mouse in overlay client px (Win32: works click-through)
@@ -261,6 +263,14 @@ public:
     // Hotkey bindings for main.cpp: re-register when TakeHotkeysDirty(); while a key is being
     // captured in Settings the owner must ignore hotkey presses.
     const uint8_t* hotkeys() const { return layout_.hotkeys; }
+    // The hotkeys of the plugins' dock panels (every plugin panel gets one to bind in Settings > Hotkeys), in registration order.
+    static constexpr int kMaxPluginHotkeys = 32;
+    std::vector<uint8_t> PluginPanelHotkeys() const {
+        std::vector<uint8_t> v;
+        for (const PluginPanel& p : pluginPanels_)
+            if (v.size() < kMaxPluginHotkeys) v.push_back(PluginHotkeyOf(p));
+        return v;
+    }
     bool TakeHotkeysDirty() { const bool d = hotkeysDirty_; hotkeysDirty_ = false; return d; }
     bool capturingHotkey() const { return captureHotkey_ >= 0; }
     bool readerAutostart() const { return layout_.readerAutostart; }
@@ -294,6 +304,10 @@ private:
     PanelView ViewOf(PluginPanel& p);
     // Looked up by id each time: "reset everything" replaces layout_, which would leave a stored pointer dangling.
     MinimapLayout::PluginPanelState& St(const PluginPanel& p) { return layout_.pluginPanels[p.id]; }
+    uint8_t PluginHotkeyOf(const PluginPanel& p) const {
+        const auto it = layout_.pluginPanels.find(p.id);
+        return it == layout_.pluginPanels.end() ? uint8_t{0} : it->second.hotkey;
+    }
     // Panel framework: returns true when the panel should draw its body.
     // `defaultSize` > 0 makes the panel user-resizable (size remembered).
     bool PanelOpenView(const PanelView& v, const HudOptions& opt, const char* title, ImVec2 defaultSize);
@@ -375,6 +389,7 @@ private:
     void DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps);
     double resetArmedUntil_ = 0.0;  // first click of "reset everything"
     bool ExportDropsCsv(const std::filesystem::path& path) const;
+    double healthBadSince_ = 0.0;  // when the reader first reported a source it cannot read (0 = all well)
     double flashUntil_ = 0.0;   // drop alert: screen-border flash
     uint32_t flashRgb_ = 0;
     std::vector<std::string> profiles_;  // names of d3hud.<name>.ini next to d3hud.ini

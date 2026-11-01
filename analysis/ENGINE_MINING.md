@@ -418,7 +418,7 @@ Barbarian and Demon Hunter 2 3 5 6; the Demon Hunter lap seen live was Fire, Lig
 player but `ClientEffect` actors (the minimap drops that SNO kind), named `p2_itemPassive_unique_ring_017_dome` (the Oculus Ring,
 `Unique_Ring_017`) and the colour variants `..._dome_blue` (483599) and `..._dome_teal` (483618), which the Altar of Rites
 makes when a potion is drunk (potion, kill, Oculus, potion gave blue, plain, teal). SNO table also has `_dome_purple` (483612), which is the altar's damage effect (user), and
-`p75_..._dome_purple_red` (488528), not seen yet. Each circle existed for exactly 7.4 s, was first seen 13 to 27 units from
+`p75_..._dome_purple_red` (488528), which is the altar's damage circle (+50%; confirmed by the user 2026-11-01, who also found blue = resource cost -50% and teal = cooldowns faster; plain `_dome_purple` has no known meaning). Each circle existed for exactly 7.4 s, was first seen 13 to 27 units from
 the player, and the actor holds a centre only: the radius is not in it (the plugin has it as an option; measure by standing
 at the edge). `ClassifyActor` keeps them as `ActorKind::GroundEffect`; the same probe finds monster ground effects the same way.
 
@@ -448,3 +448,72 @@ of the game's material panel sit together in one table, found by searching the h
 - Found by shape (the ids of the first twelve records are 1, 2, 3, ... with zero filler words, `LooksLikeWallet`), one heap pass in a
   background thread, repeated (at most every 8 s) when a read fails the shape check. Published as `WorldSnapshot::wallet`
   (snapshot version 14) and to plugins as `d3hud.wallet()` (API 6). Probes: `--wallet`, `--stacks`, `--find-values a,b,c`.
+
+## Player stats and skills (the player's attribute map; measured live 2026-11-01, Demon Hunter level 70)
+
+`--player-attrs` dumps the whole map (about 1000 entries). Indices are the 2.6.10 list in `attributes.tsv` up to about 350 and +5
+from there (the cooldown attribute is 357 + 5 = 362; below 115 the list matches). Everything the reader publishes in
+`PlayerSnapshot` (core/PlayerStats.h) is one of these:
+
+| Index | Name | Modifier | Value |
+|---|---|---|---|
+| 14..17 | Strength/Dexterity/Intelligence/Vitality_Total | - | float |
+| 38 | Armor_Total | - | float |
+| 41/42, 43/44 | Experience_Next_Hi/Lo, Alt_Experience_Next_Hi/Lo | - | u32 halves of the experience still **missing** for the next level / paragon level (the current experience is not stored: it is the difference) |
+| 56, 65 | Gold_Find_Total, Magic_Find_Total | - | float, percent |
+| 57, 59 | Level, Alt_Level | - | int (Alt_Level = paragon level, read 1280) |
+| 95, 96 | Resistance_Total (per type), Resistance_All | damage type 1..6 / - | float |
+| 100, 102 | Skill, Skill_Total | power SNO | nonzero = the power is equipped (Skill_Total also lists the `Generic_*` powers every hero has: use item, punch, potion, stone of recall...) |
+| 115, 124, 133 | Hitpoints_Cur, Hitpoints_Max_Total, Hitpoints_Regen_Per_Second_Total | - | float |
+| 148/149 | Resource_Type_Primary/Secondary | - | the resource id (Demon Hunter 5 Hatred / 6 Discipline) |
+| 150, 153, 160 | Resource_Cur, Resource_Max_Total, Resource_Regen_Total | resource id | float |
+| 167..169 | Highest_Solo_Rift_Level, Highest_Unlocked_Rift_Level, Last_Rift_Started_Level | - | int (135 / 136 / 119) |
+| 185, 201, 211 | Movement_Scalar_Total, Attacks_Per_Second_Total, Power_Cooldown_Reduction_Percent_All_Capped | - | float (1.65, 2.04, 0.32) |
+| 362/363 | Power_Cooldown / _Start | power SNO | finish / start tick; idle `0xFFFFFFFF` / `0x7FFFFFFF` (also exists for skills that are not on cooldown) |
+| 695..699 | Rune_A..Rune_E | power SNO | 1 for the rune the skill uses; no entry for no rune |
+| 1074 | Trait | power SNO | 1 = passive skill on (item powers use it too, so combine with Skill_Total) |
+| 1315 | Paragon_Bonus_Points_Available | - | int |
+
+Skills = the powers with Skill_Total nonzero that are not `Generic_*`. Live: 6 actives (Bolas D, Smoke Screen D, Shadow Power B,
+Impale A, Strafe D, Vengeance B) and 4 passives (Cull the Weak, Thrill of the Hunt, Numbing Traps, Ambush). **Not found:** the
+action bar slot of a skill (no attribute for it; the bar's UI controls show icons only), the difficulty / torment level (not in
+the player's map; probably in the game or world object), crit chance (no plain attribute in the map: it is derived).
+
+Reader health (`ReaderHealth`): a state per source, set each snapshot from what the reader already knows (block counts, whether
+lookups resolve). Derived, not measured in the game.
+
+## English names (where the game keeps them; found live 2026-11-01)
+
+**SNO name table.** The game keeps a table of the assets it has loaded as 24-byte records `{u64 name pointer, u32 sno, u32 group,
+u64 asset}`; the names are pooled NUL-separated strings (`P2_ItemPassive_Unique_Ring_016`). Group 27 is the powers (1941 loaded),
+42 other assets, 41 conversations, 38 animations. Only loaded assets have a record, so some powers on the character (318801,
+246515, 318820, 428348, 444522 on the Demon Hunter that was measured) have no name in memory. `analysis/sno_powers.tsv` has the
+360 names this added.
+
+**English text.** The StringLists are pooled strings too: a key, then its text, separated only by NUL bytes (`DemonHunter_SmokeScreen_name`
+-> `Smoke Screen`; `<power>_desc` is the tooltip; an item power's own key holds its description, e.g.
+`P66_ItemPassive_Unique_Ring_931` -> "While not taking damage, damage dealt is increased by up to 100% and damage taken is
+increased by up to 50%."). `tools/extract_game_strings.py` reads all of them out of the running process (76,800 key/text
+pairs) and `tools/build_power_names.py` puts the English name of each power into the third column of `sno_powers.tsv` (317 powers: skills
+and passives via `<name>_name`; item powers have no name of their own, an item is linked to its power by game data). The overlay's
+`d3hud.effects()` names use it; the rest are made readable from the internal name.
+
+**Permanent powers.** Powers with no timer (passive skills, legendary item and gem powers, set bonuses) are buffs with a stack count
+and no end tick. `PassiveSnapshot` / `d3hud.passives()` publish them (75 on the measured character). Squirt's Necklace is power 483552
+(`P66_ItemPassive_Unique_Ring_931`): present only while the necklace is worn, 10 stacks in icon slot 5, description above.
+
+**One list for all names.** `tools/build_names_en.py` writes `analysis/names_en.tsv` (internal name -> English, about 9,950 names:
+items from `items_gbid.tsv`, powers, and actors looked up as `<name>_name` or `<name>` in the game's text, accepted only when the
+text looks like a name). About 70% of the monsters get one (`ZombieSkinny_A` -> "Risen"); the others, and anything else without
+text in the game, stay on their internal name. The pooled strings also hold unrelated pairs, so a few actors can get a wrong
+name; the filter (capital letter, 3 to 48 characters, no underscore, no "test") keeps most of that out. The host
+(`DisplayNames`, `d3h_actor.display_name`, Lua `actor.display_name`) uses it for the plugins; `name` stays the internal name to
+match on.
+
+**Rare names (found live 2026-11-01).** A rare's name ("Kauza, Torturer of Souls") is not its monster type's text: the game
+generates it from two strings and keeps their GBIDs in the monster's ACD record, the prefix at `+0x1DC` and the suffix at `+0x1E0`.
+The GBID is the same hash as for items (`h = h * 33 + lower(c)` over the key): `RareGenericPrefix068` = "Kauza",
+`RareGenericSuffix043` = ", Torturer of Souls" (the suffix text carries its own separator). `--affixes` found them by hashing every
+`RareGeneric*` key and looking for the values in a rare's dumped record. `ActorSnapshot::rarePrefix/rareSuffix` carry them,
+`analysis/rare_names.tsv` (139 parts) maps them to text, `d3hud.actors()` gives `display_name` and `type_name`. Champions have no such name.
+

@@ -3,7 +3,7 @@
 -- in red. The game draws them faintly; this makes them easy to see and says how long some have left.
 --
 -- The reader sees them as actors of kind ground_effect (`p2_itemPassive_unique_ring_017_dome*`, found with
--- `D3Hud.Reader --nearby`). The plain name is the Oculus Ring; the coloured variants (_blue, _teal, _purple) are the altar's, and purple is its damage effect.
+-- `D3Hud.Reader --nearby`). The plain name is the Oculus Ring; the coloured variants (_blue, _teal, _purple) are the altar's, and purple_red is its damage effect.
 -- The size and the life of a circle are not in the actor. For your own circles they are options (stand at the edge of one and
 -- change "Radius"); for the monsters' areas the table below has them, taken from TurboHUD's EliteMonsterSkillPlugin.
 
@@ -84,11 +84,11 @@ local now_ms = 0
 
 -- What the altar's colours are known to be; any other variant is labelled with its colour.
 -- The potion's circles (Triune Circle theme): what each gives while you stand in it, and its own colour. The game names
--- the variants by colour; "teal" is the green one (to be confirmed in the game).
+-- the variants by colour (confirmed in the game: purple_red is the damage one, teal the cooldowns, blue the resource cost).
 local ALTAR = {
-    purple = { "Damage +50%", 0xFF6EE0 },
-    blue = { "Cooldowns faster", 0x5AA0FF },
-    teal = { "Resource cost -50%", 0x5CE07C },
+    purple_red = { "Damage +50%", 0xFF6EE0 },
+    blue = { "Resource cost -50%", 0x5AA0FF },
+    teal = { "Cooldowns faster", 0x5CE07C },
 }
 
 -- "" for the Oculus Ring's dome, "teal" for dome_teal, nil for any other name

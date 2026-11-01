@@ -17,7 +17,7 @@ A Diablo III HUD for Windows x64, C++23, CMake + Visual Studio 2022.
 ## Layout
 
 ```
-src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h, Wallet.h (gold, blood shards, materials), Effects.h (buffs/cooldowns,
+src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h, Wallet.h (gold, blood shards, materials), PlayerData.h + PlayerStats.h (the character's numbers, equipped skills, reader health), Effects.h (buffs/cooldowns,
               game clock estimate, power names), Boxes.h (placement of plugin boxes), PluginAssets.h (what a plugin may load);
               all pure and unit-tested. HostApi.h (the plain-C plugin API)
 src/plugins   LuaPlugin (sandboxed Lua + host API binding), PluginSettings (no UI, unit-tested)

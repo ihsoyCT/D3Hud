@@ -42,6 +42,7 @@
 #include "Process.h"
 #include "SharedRing.h"
 #include "GroundEffects.h"
+#include "PlayerStats.h"
 #include "SharedScan.h"
 #include "SnoTable.h"
 #include "UiControls.h"
@@ -286,6 +287,7 @@ static int FillActors(const Process& proc, const AcdTable* acds, const AttribTab
     float best = 1e30f;
     int unresolvedCount = 0;
     snap->actorCount = 0;
+    snap->health.actorsDropped = 0;
     for (const RawActor& a : raw) {
         const SnoInfo* info = sno.Find(a.sno);
         ActorKind kind;
@@ -301,7 +303,10 @@ static int FillActors(const Process& proc, const AcdTable* acds, const AttribTab
                 *havePlayer = true;
             }
         }
-        if (snap->actorCount >= kMaxActors) continue;
+        if (snap->actorCount >= kMaxActors) {
+            if (snap->health.actorsDropped < 0xFFFF) ++snap->health.actorsDropped;  // a huge pack: say so instead of hiding it
+            continue;
+        }
         ActorSnapshot& s = snap->actors[snap->actorCount++];
         s.id = a.id;
         s.world = {a.x, a.z};
@@ -312,10 +317,13 @@ static int FillActors(const Process& proc, const AcdTable* acds, const AttribTab
         s.currentHp = s.maxHp = 0.f;  // 0 = unknown (only elites and bosses are read)
         s.affixMask = 0;
         s.affixCount = 0;
+        s.rarePrefix = s.rareSuffix = 0;
         if (kind == ActorKind::Champion || kind == ActorKind::Rare || kind == ActorKind::Boss) {
             uint32_t missing = 0;
             (void)MonsterHp(proc, acds, attribs, a, &s.currentHp, &s.maxHp, &missing);  // unreadable: stays unknown
             if (missing != 0 && hpMissingGroups != nullptr) hpMissingGroups->push_back(missing);
+            if (kind == ActorKind::Rare && acds != nullptr && a.hasAcd())
+                (void)acds->ReadRareName(proc, a.acd, &s.rarePrefix, &s.rareSuffix);  // not found: no name part
             uint32_t affixes = 0;
             if (acds != nullptr && a.hasAcd() && acds->ReadAffixMask(proc, a.acd, &affixes)) {
                 s.affixMask = affixes;
@@ -358,6 +366,10 @@ static bool DescribeItem(const Process& proc, const AttribTable& attribs, const 
     attribs.Get(proc, r.attribGroup, kAttrAncientRank, &ancient);
     attribs.Get(proc, r.attribGroup, kAttrUnidentified, &unid);
     attribs.Get(proc, r.attribGroup, kAttrAugmentGemRank, &augment);
+    uint32_t stackHi = 0, stackLo = 0;  // a stack of gems or materials: Hi << 32 | Lo
+    attribs.Get(proc, r.attribGroup, kAttrItemStackQuantityHi, &stackHi);
+    attribs.Get(proc, r.attribGroup, kAttrItemStackQuantityLo, &stackLo);
+    it->stack = stackHi != 0 ? 0xFFFFFFFFu : stackLo;
     it->rarity = RarityFromQuality(quality, n != nullptr && n->inSet);
     it->ancient = ancient == 1;
     it->primal = ancient >= 2;
@@ -602,6 +614,23 @@ static int WatchPlayerAttribs(const Process& proc, const std::filesystem::path& 
                        n == 12 ? "  [muted]" : "");
         };
         if (first) {
+            PlayerSnapshot ps;
+            ExtractPlayerStats(es, &ps);
+            std::print("player: level {} paragon {} (+{} points) | life {:.0f} / {:.0f} | xp missing {} / paragon {}\n", ps.level,
+                       ps.paragonLevel, ps.paragonPointsFree, ps.life, ps.lifeMax, ps.xpToNext, ps.paragonXpToNext);
+            std::print("  resources {}: {:.0f}/{:.0f}, {}: {:.0f}/{:.0f} | move x{:.2f} attack x{:.2f} cdr {:.0f}% | armor {:.0f}\n",
+                       ps.resourceType[0], ps.resource[0], ps.resourceMax[0], ps.resourceType[1], ps.resource[1],
+                       ps.resourceMax[1], ps.moveSpeed, ps.attackSpeed, ps.cooldownReduction * 100.f, ps.armor);
+            PowerNames names;
+            (void)names.Load(snoPath.parent_path() / "sno_powers.tsv");
+            std::vector<SkillSnapshot> sk;
+            ExtractSkills(es, [&names](uint32_t power) {
+                const std::string* c = names.Code(power);
+                return c != nullptr && c->starts_with("Generic_");
+            }, &sk);
+            for (const SkillSnapshot& k : sk)
+                std::print("  skill {:7} {:<36} {} rune {} cooldown {}..{}\n", k.sno, names.Readable(k.sno), k.passive ? "passive" : "active ",
+                           k.rune, k.cooldownStartTick, k.cooldownEndTick);
             const std::filesystem::path out = ExeDir() / "dumps" / "player_attrs.tsv";
             std::filesystem::create_directories(out.parent_path());
             if (File f = OpenFile(out, L"wb")) {
@@ -1342,6 +1371,22 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
     std::vector<AttribEntry> playerAttrs;
     std::vector<EffectSnapshot> effects;
     GameClock gameClock;
+    // the player's numbers and equipped skills come from the same attribute map
+    PlayerSnapshot playerStats;
+    std::vector<SkillSnapshot> skills;
+    std::vector<PassiveSnapshot> passives;
+    ULONGLONG playerReadAt = 0;  // when the attribute map was last read
+    HeroClass heroClass = HeroClass::Unknown;
+    PowerNames powerNames;
+    (void)powerNames.Load(snoPath.parent_path() / "sno_powers.tsv");  // without it every power counts as a skill
+    const auto notASkill = [&powerNames](uint32_t power) {
+        const std::string* code = powerNames.Code(power);
+        return code != nullptr && code->starts_with("Generic_");
+    };
+    // what the reader reports about itself (ReaderHealth)
+    int healthItemsUnresolved = 0;
+    float ticksPerSecond = 0.f;
+    const size_t uiControlTotal = GameUiPaths().size();
     auto qpcMs = [&qpcFreq]() {
         LARGE_INTEGER n;
         QueryPerformanceCounter(&n);
@@ -1386,6 +1431,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                 if (havePlayer) {
                     lastPlayer = {player.x, player.z};
                     playerAcd = player.acd;
+                    if (const SnoInfo* pi = sno.Find(player.sno)) heroClass = HeroClassFromActorName(pi->name.c_str());
                     snap.playerPos = lastPlayer;
                     snap.playerHeading = player.heading;
                     ok = true;
@@ -1418,6 +1464,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                    "{} actors, {} monsters without acd record | {} effects, game tick {}\n",
                    statTicks / secs, statPublished / secs, statRead / statTicks,
                    statFill / statTicks, raw.size(), statUnresolved, effects.size(), gameClock.Tick(qpcMs()));
+            ticksPerSecond = static_cast<float>(statTicks / secs);
             statRead = statFill = 0;
             statTicks = statPublished = 0;
             statSince = GetTickCount64();
@@ -1426,6 +1473,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
             if (acds.baseCount() > 0 && GetTickCount64() - inventoryAt >= (snap.ui.salvageOpen ? 200u : 1000u)) {
                 const int itemsUnresolved = BuildInventory(proc, acds, attribs, sno, itemNames,
                                                            &inventory, &itemGroups, &stash);
+                healthItemsUnresolved = itemsUnresolved;
                 inventoryAt = GetTickCount64();
                 // first read finds no attribute blocks yet; afterwards rescan at most every 10 s
                 if (itemsUnresolved > 0 && !acdJob.busy &&
@@ -1475,6 +1523,11 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                         if (res == AttribTable::Result::Found) {
                             effectGroupMissing = 0;
                             ExtractEffects(playerAttrs, &effects);
+                            playerStats.heroClass = static_cast<uint8_t>(heroClass);
+                            ExtractPlayerStats(playerAttrs, &playerStats);
+                            ExtractSkills(playerAttrs, notASkill, &skills);
+                            ExtractPassives(playerAttrs, &passives);
+                            playerReadAt = nowMs;
                             gameClock.Update(readMs, effects.data(), effects.size());
                         } else if (res == AttribTable::Result::Unresolved) {
                             effectGroupMissing = pr.attribGroup;
@@ -1488,6 +1541,14 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                 snap.effectCount = static_cast<uint32_t>(effects.size());
                 std::copy(effects.begin(), effects.end(), snap.effects);
                 snap.gameTick = gameClock.Tick(qpcMs());
+            }
+            snap.player = playerStats;
+            if (playerReadAt == 0 || GetTickCount64() - playerReadAt > 3000) snap.player.valid = 0;  // the map went stale
+            if (snap.player.valid) {
+                snap.skillCount = static_cast<uint32_t>(skills.size());
+                std::copy(skills.begin(), skills.end(), snap.skills);
+                snap.passiveCount = static_cast<uint32_t>(passives.size());
+                std::copy(passives.begin(), passives.end(), snap.passives);
             }
             {
                 const ULONGLONG t = GetTickCount64();
@@ -1532,6 +1593,7 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                 if (it.rarity != ItemRarity::Legendary && it.rarity != ItemRarity::Set && !it.bonus) continue;
                 groundByActor[a.id] = &it;
                 if (snap.itemCount < kMaxItems) snap.items[snap.itemCount++] = it;
+                else if (snap.health.itemsDropped < 0xFFFF) ++snap.health.itemsDropped;
             }
             // ground-item dots carry the item's name and properties (world labels)
             for (uint16_t i = 0; i < snap.actorCount; ++i) {
@@ -1550,8 +1612,10 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
             // the open stash tab's items (for their badges)
             if (snap.ui.stashOpen && snap.ui.stashTab >= 0)
                 for (const ItemSnapshot& s : stash)
-                    if (s.gridY / kStashRowsPerTab == snap.ui.stashTab && snap.itemCount < kMaxItems)
-                        snap.items[snap.itemCount++] = s;
+                    if (s.gridY / kStashRowsPerTab == snap.ui.stashTab) {
+                        if (snap.itemCount < kMaxItems) snap.items[snap.itemCount++] = s;
+                        else if (snap.health.itemsDropped < 0xFFFF) ++snap.health.itemsDropped;
+                    }
             // hovered item (every tick): point at it, appending other stash items on demand
             uint32_t hoveredAcd = 0;
             if (gameUi.TooltipItem(proc, kUiTooltip, &hoveredAcd)) {
@@ -1564,6 +1628,31 @@ static int RunPublish(const Process& proc, double seconds, const std::filesystem
                     snap.items[snap.itemCount++] = *s;
                     snap.hoveredItemPlus1 = snap.itemCount;
                 }
+            }
+            {
+                ReaderHealth& h = snap.health;
+                auto set = [&h](HealthSource src, HealthState st) { h.state[static_cast<int>(src)] = static_cast<uint8_t>(st); };
+                const size_t uiMissing = gameUi.MissingCount();
+                h.actorsSeen = static_cast<uint16_t>(std::min<size_t>(snap.actorCount + h.actorsDropped, 0xFFFF));
+                h.monstersUnresolved = static_cast<uint16_t>(std::min(statUnresolved, 0xFFFF));
+                h.itemsUnresolved = static_cast<uint16_t>(std::min(healthItemsUnresolved, 0xFFFF));
+                h.uiMissing = static_cast<uint16_t>(std::min<size_t>(uiMissing, 0xFFFF));
+                h.ticksPerSecond = ticksPerSecond;
+                set(HealthSource::Actors, actors.valid() ? HealthState::Ok : HealthState::Degraded);  // no array: only the player is tracked
+                set(HealthSource::Records, acds.baseCount() == 0 ? HealthState::Missing
+                                           : statUnresolved > 0  ? HealthState::Degraded : HealthState::Ok);
+                set(HealthSource::Attributes, attribs.baseCount() == 0 ? HealthState::Missing
+                                              : (effectGroupMissing != 0 || healthItemsUnresolved > 0 || !hpGroups.empty())
+                                                    ? HealthState::Degraded : HealthState::Ok);
+                set(HealthSource::Inventory, healthItemsUnresolved > 0 ? HealthState::Degraded
+                                             : inventory.empty() ? HealthState::Unknown : HealthState::Ok);
+                set(HealthSource::Player, snap.player.valid ? HealthState::Ok
+                                          : playerAcd == 0xFFFFFFFF ? HealthState::Missing : HealthState::Degraded);
+                // dialogs that were never opened do not exist yet, so some missing controls are normal: only none found is bad
+                set(HealthSource::Ui, uiMissing >= uiControlTotal ? HealthState::Missing : HealthState::Ok);
+                set(HealthSource::Scenes, sceneTable.baseCount() == 0 ? HealthState::Missing
+                                          : worldScenes.empty() ? HealthState::Degraded : HealthState::Ok);
+                set(HealthSource::Wallet, wallet.valid ? HealthState::Ok : HealthState::Missing);
             }
             failures = 0;
             statPublished++;
@@ -1643,7 +1732,7 @@ static int DumpItems(const Process& proc, const std::filesystem::path& snoPath) 
         std::print("  {:<17} {:<32} {:<9}{}{}{}\n", where, it.name, RarityName(it.rarity),
                    it.primal ? " PRIMAL" : it.ancient ? " ancient" : "",
                    it.augmentRank ? std::format(" augment {} (+{} main stat)", it.augmentRank, it.augmentRank * 5) : "",
-                   it.identified ? "" : "  [unidentified]");
+                   it.identified ? (it.stack ? std::format("  x{}", it.stack) : std::string()) : "  [unidentified]");
     }
     return 0;
 }
@@ -1758,6 +1847,56 @@ private:
     std::vector<Hit> hits_;
 };
 
+// --attr-anywhere i,j,...: every attribute entry [next][key][value] in memory whose key is one of these plain attribute
+// indices (current client numbering), with the values found: for attributes that are not on the player (difficulty, ...)
+// and so show up in no group we know. A research probe.
+class AttrKeyScan : public ChunkMatcher {
+public:
+    explicit AttrKeyScan(std::vector<uint32_t> indices) : indices_(std::move(indices)) {}
+    size_t tail() const override { return 16; }
+    void Match(const uint8_t* data, size_t n, uint64_t addr, size_t chunkSize) override {
+        const size_t limit = MatchLimit(n, chunkSize, tail());
+        for (size_t o = 0; o + 16 <= limit && o < chunkSize; o += 8) {
+            uint32_t key;
+            memcpy(&key, data + o + 8, 4);
+            const uint32_t index = key & 0xFFFu;  // any modifier: the number above 12 bits is printed with the hit
+            if (std::find(indices_.begin(), indices_.end(), index) == indices_.end()) continue;
+            uint64_t next;
+            memcpy(&next, data + o, 8);
+            if (next != 0 && (next < 0x10000 || next > 0x7FFFFFFFFFFF)) continue;  // not a chain link
+            uint32_t value;
+            memcpy(&value, data + o + 12, 4);
+            hits_.push_back({addr + o, key, value});
+        }
+    }
+    struct Hit {
+        uint64_t addr;
+        uint32_t index, value;
+    };
+    const std::vector<Hit>& hits() const { return hits_; }
+
+private:
+    std::vector<uint32_t> indices_;
+    std::vector<Hit> hits_;
+};
+
+static int AttrAnywhere(const Process& proc, const std::string& list) {
+    std::vector<uint32_t> indices;
+    std::stringstream ss(list);
+    for (std::string piece; std::getline(ss, piece, ',');) indices.push_back(static_cast<uint32_t>(strtoul(piece.c_str(), nullptr, 10)));
+    AttrKeyScan scan(indices);
+    SharedSweep(proc, {&scan});
+    std::map<std::pair<uint32_t, uint32_t>, int> histogram;  // (index, value) -> entries
+    for (const auto& h : scan.hits()) ++histogram[{h.index, h.value}];  // index = the whole key
+    std::print("{} entries\n", scan.hits().size());
+    for (const auto& [key, count] : histogram) {
+        float f;
+        memcpy(&f, &key.second, 4);
+        std::print("  key 0x{:08X} value {:>11} (0x{:08X}, f {:.3f}): {} entries\n", key.first, key.second, key.second, f, count);
+    }
+    return 0;
+}
+
 static int FindValues(const Process& proc, const std::string& list) {
     std::vector<uint32_t> values;
     std::stringstream ss(list);
@@ -1855,7 +1994,7 @@ int main(int argc, char** argv) {
     bool dumpItems = false;
     bool dumpStacks = false;
     bool dumpWallet = false;
-    std::string findValues;
+    std::string findValues, attrAnywhere;
     bool dumpScenes = false;
     bool probeAffixes = false;
     bool playerAttribs = false;
@@ -1877,6 +2016,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--stacks")) dumpStacks = true;
         else if (!strcmp(argv[i], "--wallet")) dumpWallet = true;
         else if (!strcmp(argv[i], "--find-values") && i + 1 < argc) findValues = argv[++i];
+        else if (!strcmp(argv[i], "--attr-anywhere") && i + 1 < argc) attrAnywhere = argv[++i];
         else if (!strcmp(argv[i], "--scenes")) dumpScenes = true;
         else if (!strcmp(argv[i], "--affixes")) probeAffixes = true;
         else if (!strcmp(argv[i], "--player-attrs")) playerAttribs = true;
@@ -1945,6 +2085,7 @@ int main(int argc, char** argv) {
         if (dumpStacks) return DumpStacks(*proc, sno);
         if (dumpWallet) return DumpWallet(*proc);
         if (!findValues.empty()) return FindValues(*proc, findValues);
+        if (!attrAnywhere.empty()) return AttrAnywhere(*proc, attrAnywhere);
         if (dumpScenes) return DumpScenes(*proc, sno);
         if (probeAffixes) return ProbeAffixes(*proc, sno);
         if (nearby) return WatchNearby(*proc, sno, publishSeconds > 0 ? publishSeconds : 120.0, nearbyRadius);

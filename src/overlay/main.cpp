@@ -46,6 +46,7 @@ static bool g_clickThrough = true;
 static bool g_textFocus = false;  // an ImGui text field is active: the overlay holds the keyboard
 static ULONGLONG g_textFocusAt = 0;
 static bool g_hotkeysSuspended = false;  // a key is being captured in Settings > Hotkeys
+static unsigned g_pluginToggleMask = 0;  // plugin panel hotkeys pressed since the last frame
 static unsigned g_panelToggleMask = 0;   // panel hotkeys pressed since the last frame
 static bool g_hotButton = false;  // click-through lifted only while the cursor is over the salvage button
 static bool g_showPanels = true;
@@ -152,11 +153,18 @@ static void SetClickThrough(HWND hwnd, bool on) {
 }
 
 // (Re)register the global hotkeys: id = 1 + action, vk 0 = unbound.
-static void RegisterHotkeys(const uint8_t* vks) {
+constexpr int kPluginHotkeyBase = 100;  // ids of the plugin panels' hotkeys: base + panel index
+static void RegisterHotkeys(const uint8_t* vks, const std::vector<uint8_t>& pluginVks) {
     for (int i = 0; i < MinimapLayout::kHotkeyCount; ++i) {
         UnregisterHotKey(g_hwnd, i + 1);
         if (vks[i] != 0 && !RegisterHotKey(g_hwnd, i + 1, 0, vks[i]))
             std::print(stderr, "warning: hotkey {} (vk {}) register failed\n", i, vks[i]);
+    }
+    for (int i = 0; i < HudRenderer::kMaxPluginHotkeys; ++i) {
+        UnregisterHotKey(g_hwnd, kPluginHotkeyBase + i);
+        if (static_cast<size_t>(i) < pluginVks.size() && pluginVks[i] != 0 &&
+            !RegisterHotKey(g_hwnd, kPluginHotkeyBase + i, 0, pluginVks[i]))
+            std::print(stderr, "warning: plugin panel hotkey {} (vk {}) register failed\n", i, pluginVks[i]);
     }
 }
 
@@ -170,7 +178,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_HOTKEY:
             if (g_hotkeysSuspended) return 0;
             // ids are 1 + MinimapLayout::HotkeyAction; the keys are user-configurable
-            if (wp >= 5) g_panelToggleMask |= 1u << (wp - 5);
+            if (wp >= kPluginHotkeyBase) g_pluginToggleMask |= 1u << (wp - kPluginHotkeyBase);
+            else if (wp >= 5) g_panelToggleMask |= 1u << (wp - 5);
             switch (static_cast<int>(wp)) {
                 case 1:  // click-through (default F8)
                     g_hotButton = false;
@@ -574,10 +583,12 @@ int main(int argc, char** argv) {
         opts.mouseLive = !g_clickThrough;
         opts.mapOrientation = g_mapOrientation;
         g_hotkeysSuspended = renderer.capturingHotkey() || g_textFocus;
-        if (renderer.TakeHotkeysDirty()) RegisterHotkeys(renderer.hotkeys());
+        if (renderer.TakeHotkeysDirty()) RegisterHotkeys(renderer.hotkeys(), renderer.PluginPanelHotkeys());
         opts.hotCount = 0;  // refilled by Draw
         opts.panelToggleMask = g_panelToggleMask;
         g_panelToggleMask = 0;
+        opts.pluginPanelToggleMask = g_pluginToggleMask;
+        g_pluginToggleMask = 0;
         {
             // Win32 cursor: ImGui gets no mouse input while the overlay is click-through
             POINT cur;
@@ -736,6 +747,7 @@ int main(int argc, char** argv) {
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     for (int i = 0; i < MinimapLayout::kHotkeyCount; ++i) UnregisterHotKey(g_hwnd, i + 1);
+    for (int i = 0; i < HudRenderer::kMaxPluginHotkeys; ++i) UnregisterHotKey(g_hwnd, kPluginHotkeyBase + i);
     if (g_rtv) g_rtv->Release();
     if (g_swap) g_swap->Release();
     if (g_dcompVisual) g_dcompVisual->Release();

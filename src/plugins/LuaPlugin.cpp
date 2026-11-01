@@ -17,6 +17,7 @@
 
 #include "MonsterAffixes.h"
 #include "Paths.h"
+#include "PlayerData.h"
 #include "Wallet.h"
 
 namespace d3hud {
@@ -129,6 +130,8 @@ struct LuaBinding {
         SetNum(L, "actor_count", f.actor_count);
         SetNum(L, "item_count", f.item_count);
         SetNum(L, "effect_count", f.effect_count);
+        SetNum(L, "skill_count", f.skill_count);
+        SetNum(L, "passive_count", f.passive_count);
         SetNum(L, "hovered_item", f.hovered_item >= 0 ? f.hovered_item + 1 : 0);  // 1-based, 0 = none
         SetNum(L, "screen_w", f.screen_w);
         SetNum(L, "screen_h", f.screen_h);
@@ -175,6 +178,8 @@ struct LuaBinding {
         SetBool(L, "unidentified", (a.flags & D3H_FLAG_UNIDENTIFIED) != 0);
         SetBool(L, "used", (a.flags & D3H_FLAG_USED) != 0);  // pylon / shrine already clicked
         SetStr(L, "name", a.name);
+        SetStr(L, "display_name", a.display_name[0] != '\0' ? a.display_name : a.name);
+        SetStr(L, "type_name", a.type_name[0] != '\0' ? a.type_name : a.name);  // the monster type, also for a rare (API 11)  // the English name ("Risen"); the internal name when unknown (API 11)
         SetNum(L, "affix_mask", a.affix_mask);
         lua_createtable(L, 0, 0);  // affixes: keys ("molten"), in the order of d3hud.affixes
         lua_createtable(L, 0, 0);  // affix_names: as the game shows them
@@ -275,6 +280,156 @@ struct LuaBinding {
         return 1;
     }
 
+    // d3hud.player() -> the player's own numbers, or nil while the reader has not read them:
+    //   { class, class_id, level, paragon, paragon_points, highest_solo_rift, highest_unlocked_rift, last_rift_level,
+    //     life, life_max, life_regen, resources = { { type, name, current, max, regen }, ... } (one per resource the class has),
+    //     xp_to_next, paragon_xp_to_next (what is still missing: falls while you play), strength, dexterity, intelligence,
+    //     vitality, armor, resist_all, resist = { physical, fire, lightning, cold, poison, arcane }, attack_speed,
+    //     move_speed (1.65 = 65% faster), cooldown_reduction (0.32 = 32%), gold_find, magic_find }
+    static int Player(lua_State* L) {
+        d3h_player p{};
+        p.size = sizeof(p);
+        if (!Self(L)->host_.get_player(&p) || !p.valid) return 0;
+        lua_createtable(L, 0, 36);
+        SetStr(L, "class", HeroClassName(static_cast<HeroClass>(p.hero_class)));
+        SetNum(L, "class_id", p.hero_class);
+        SetNum(L, "level", p.level);
+        SetNum(L, "paragon", p.paragon_level);
+        SetNum(L, "paragon_points", p.paragon_points_free);
+        SetNum(L, "highest_solo_rift", p.highest_solo_rift);
+        SetNum(L, "highest_unlocked_rift", p.highest_unlocked_rift);
+        SetNum(L, "last_rift_level", p.last_rift_level);
+        SetNum(L, "life", p.life);
+        SetNum(L, "life_max", p.life_max);
+        SetNum(L, "life_regen", p.life_regen);
+        lua_createtable(L, 2, 0);
+        int n = 0;
+        for (int i = 0; i < 2; ++i) {
+            if (p.resource_type[i] == 255) continue;
+            lua_createtable(L, 0, 5);
+            SetNum(L, "type", p.resource_type[i]);
+            SetStr(L, "name", ResourceName(p.resource_type[i]).c_str());
+            SetNum(L, "current", p.resource[i]);
+            SetNum(L, "max", p.resource_max[i]);
+            SetNum(L, "regen", p.resource_regen[i]);
+            lua_rawseti(L, -2, ++n);
+        }
+        lua_setfield(L, -2, "resources");
+        SetNum(L, "xp_to_next", p.xp_to_next);
+        SetNum(L, "paragon_xp_to_next", p.paragon_xp_to_next);
+        SetNum(L, "strength", p.strength);
+        SetNum(L, "dexterity", p.dexterity);
+        SetNum(L, "intelligence", p.intelligence);
+        SetNum(L, "vitality", p.vitality);
+        SetNum(L, "armor", p.armor);
+        SetNum(L, "resist_all", p.resist_all);
+        static const char* const kTypes[6] = {"physical", "fire", "lightning", "cold", "poison", "arcane"};
+        lua_createtable(L, 0, 6);
+        for (int i = 0; i < 6; ++i) SetNum(L, kTypes[i], p.resist[i]);
+        lua_setfield(L, -2, "resist");
+        SetNum(L, "attack_speed", p.attack_speed);
+        SetNum(L, "move_speed", p.move_speed);
+        SetNum(L, "cooldown_reduction", p.cooldown_reduction);
+        SetNum(L, "gold_find", p.gold_find);
+        SetNum(L, "magic_find", p.magic_find);
+        SetNum(L, "deaths", p.deaths);
+        return 1;
+    }
+
+    // The game's resource ids that were seen live (Demon Hunter); others are named by number.
+    static std::string ResourceName(int type) {
+        if (type == 5) return "Hatred";
+        if (type == 6) return "Discipline";
+        return "Resource " + std::to_string(type);
+    }
+
+    // d3hud.skills() -> array of the equipped skills, actives and passives:
+    //   { sno, name, code, rune (0 none, 1..5), rune_letter ("" or "A".."E"), passive, on_cooldown, cooldown_duration,
+    //     cooldown_remaining, timed } (seconds of game time; the action bar slot is not known)
+    static int Skills(lua_State* L) {
+        const d3h_host& h = Self(L)->host_;
+        d3h_frame f{};
+        f.size = sizeof(f);
+        h.get_frame(&f);
+        lua_createtable(L, static_cast<int>(f.skill_count), 0);
+        for (uint32_t i = 0; i < f.skill_count; ++i) {
+            d3h_skill k{};
+            k.size = sizeof(k);
+            if (!h.get_skill(i, &k)) break;
+            lua_createtable(L, 0, 10);
+            lua_pushinteger(L, k.sno);
+            lua_setfield(L, -2, "sno");
+            SetStr(L, "name", k.name);
+            SetStr(L, "code", k.code);
+            lua_pushinteger(L, k.rune);
+            lua_setfield(L, -2, "rune");
+            const char letter[2] = {k.rune >= 1 && k.rune <= 5 ? static_cast<char>('A' + k.rune - 1) : '\0', '\0'};
+            SetStr(L, "rune_letter", letter);
+            SetBool(L, "passive", k.passive != 0);
+            SetBool(L, "on_cooldown", k.on_cooldown != 0);
+            SetNum(L, "cooldown_duration", k.cooldown_duration);
+            SetNum(L, "cooldown_remaining", k.cooldown_remaining);
+            SetBool(L, "timed", k.timed != 0);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
+        }
+        return 1;
+    }
+
+    // d3hud.passives() -> array of the powers on the character without a timer (passive skills, legendary item and gem powers,
+    // set bonuses, event buffs): { sno, name, code, slot, stacks }. A power can appear once per icon slot; stacks are in the
+    // slot that holds them (Squirt's Necklace keeps 10 in slot 5).
+    static int Passives(lua_State* L) {
+        const d3h_host& h = Self(L)->host_;
+        d3h_frame f{};
+        f.size = sizeof(f);
+        h.get_frame(&f);
+        lua_createtable(L, static_cast<int>(f.passive_count), 0);
+        for (uint32_t i = 0; i < f.passive_count; ++i) {
+            d3h_passive k{};
+            k.size = sizeof(k);
+            if (!h.get_passive(i, &k)) break;
+            lua_createtable(L, 0, 5);
+            lua_pushinteger(L, k.sno);
+            lua_setfield(L, -2, "sno");
+            SetStr(L, "name", k.name);
+            SetStr(L, "code", k.code);
+            lua_pushinteger(L, k.slot);
+            lua_setfield(L, -2, "slot");
+            lua_pushinteger(L, k.stacks);
+            lua_setfield(L, -2, "stacks");
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i) + 1);
+        }
+        return 1;
+    }
+
+    // d3hud.health() -> how well the reader sees the game: { ok, actors, records, attributes, inventory, player, ui, scenes,
+    // wallet (each "unknown" | "ok" | "degraded" | "missing"), actors_seen, actors_dropped, items_dropped,
+    // monsters_unresolved, items_unresolved, ui_missing, ticks_per_second }; ok = nothing is degraded or missing.
+    static int Health(lua_State* L) {
+        d3h_health h{};
+        h.size = sizeof(h);
+        if (!Self(L)->host_.get_health(&h)) return 0;
+        static const char* const kSources[D3H_HEALTH_SOURCES] = {"actors",   "records", "attributes", "inventory",
+                                                                 "player",   "ui",      "scenes",     "wallet"};
+        static const char* const kStates[4] = {"unknown", "ok", "degraded", "missing"};
+        lua_createtable(L, 0, 16);
+        bool ok = true;
+        for (int i = 0; i < D3H_HEALTH_SOURCES; ++i) {
+            const int st = h.state[i] >= 0 && h.state[i] < 4 ? h.state[i] : 0;
+            ok = ok && st <= 1;
+            SetStr(L, kSources[i], kStates[st]);
+        }
+        SetBool(L, "ok", ok);
+        SetNum(L, "actors_seen", h.actors_seen);
+        SetNum(L, "actors_dropped", h.actors_dropped);
+        SetNum(L, "items_dropped", h.items_dropped);
+        SetNum(L, "monsters_unresolved", h.monsters_unresolved);
+        SetNum(L, "items_unresolved", h.items_unresolved);
+        SetNum(L, "ui_missing", h.ui_missing);
+        SetNum(L, "ticks_per_second", h.ticks_per_second);
+        return 1;
+    }
+
     static int Item(lua_State* L) {
         const lua_Integer i = luaL_checkinteger(L, 1);
         d3h_item it{};
@@ -291,6 +446,7 @@ struct LuaBinding {
         SetNum(L, "grid_y", it.grid_y);
         SetNum(L, "height", it.height);
         SetNum(L, "augment_rank", it.augment_rank);
+        SetNum(L, "stack", it.stack);
         SetStr(L, "name", it.name);
         SetStr(L, "type_name", it.type_name);
         return 1;
@@ -958,6 +1114,14 @@ std::unique_ptr<LuaPlugin> LuaPlugin::Load(const std::filesystem::path& dir, con
         LuaBinding::Register(L, p.get(), "effects", LuaBinding::Effects);
     if (D3H_HOST_HAS(&host, get_wallet) && host.get_wallet != nullptr)
         LuaBinding::Register(L, p.get(), "wallet", LuaBinding::Wallet);
+    if (D3H_HOST_HAS(&host, get_player) && host.get_player != nullptr)
+        LuaBinding::Register(L, p.get(), "player", LuaBinding::Player);
+    if (D3H_HOST_HAS(&host, get_skill) && host.get_skill != nullptr)
+        LuaBinding::Register(L, p.get(), "skills", LuaBinding::Skills);
+    if (D3H_HOST_HAS(&host, get_passive) && host.get_passive != nullptr)
+        LuaBinding::Register(L, p.get(), "passives", LuaBinding::Passives);
+    if (D3H_HOST_HAS(&host, get_health) && host.get_health != nullptr)
+        LuaBinding::Register(L, p.get(), "health", LuaBinding::Health);
     if (D3H_HOST_HAS(&host, world_to_screen) && host.world_to_screen != nullptr)
         LuaBinding::Register(L, p.get(), "world_to_screen", LuaBinding::WorldToScreenFn);
     if (D3H_HOST_HAS(&host, text_size) && host.text_size != nullptr)

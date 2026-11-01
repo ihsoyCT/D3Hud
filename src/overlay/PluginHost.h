@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "DisplayNames.h"
 #include "Effects.h"
 #include "ImageStore.h"
 #include "LuaPlugin.h"
@@ -20,6 +21,10 @@
 #include "Snapshot.h"
 
 namespace d3hud {
+
+// While true, the plugins' draw_* calls land on the background list (below every window) whatever the layer. The renderer
+// sets it around a box, so dock panels and settings windows are drawn above boxes.
+void SetPluginDrawBehindWindows(bool behind);
 
 class HudRenderer;
 
@@ -85,6 +90,8 @@ private:
     const WorldSnapshot* snap_ = nullptr;  // valid during OnFrame
     double tickNow_ = -1;  // the game tick of this frame (extrapolated from the snapshot), -1 unknown
     PowerNames powers_;    // names for the effects
+    DisplayNames names_;   // English names of monsters and other actors
+    RareNames rareNames_;  // the generated names of rares
     float screenW_ = 0, screenH_ = 0;
     uint64_t lastFrameIndex_ = ~0ull;
     uint32_t lastWorld_ = 0;

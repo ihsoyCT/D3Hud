@@ -13,6 +13,9 @@
 
 namespace d3hud {
 
+static bool g_drawBehind = false;
+void SetPluginDrawBehindWindows(bool behind) { g_drawBehind = behind; }
+
 namespace {
 
 PluginHost* g_host = nullptr;  // the C callbacks have no context argument; one host per process
@@ -74,6 +77,8 @@ struct PluginHost::HostFns {
             f.rift_timer_fraction = u.riftTimerFraction;
             f.stash_tab = u.stashTab;
             f.effect_count = s->effectCount;
+            f.skill_count = s->player.valid ? s->skillCount : 0;
+            f.passive_count = s->player.valid ? s->passiveCount : 0;
         }
         // a plugin built against a shorter struct gets just that prefix
         memcpy(out, &f, std::min<size_t>(size, sizeof(f)));
@@ -96,6 +101,10 @@ struct PluginHost::HostFns {
         r.rarity = static_cast<int32_t>(a.itemRarity);
         r.flags = a.itemFlags;
         strncpy_s(r.name, sizeof(r.name), a.name, _TRUNCATE);
+        const std::string type = g_host->names_.Of(a.name);
+        strncpy_s(r.type_name, sizeof(r.type_name), type.c_str(), _TRUNCATE);
+        const std::string rare = a.kind == ActorKind::Rare ? g_host->rareNames_.Compose(a.rarePrefix, a.rareSuffix) : std::string();
+        strncpy_s(r.display_name, sizeof(r.display_name), (rare.empty() ? type : rare).c_str(), _TRUNCATE);
         r.size = out->size;  // the caller's struct size: a prefix is copied
         memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
         return 1;
@@ -141,6 +150,110 @@ struct PluginHost::HostFns {
         return 1;
     }
 
+    static d3h_bool GetPlayer(d3h_player* out) {
+        const WorldSnapshot* s = g_host->snap_;
+        if (s == nullptr) return 0;
+        const PlayerSnapshot& p = s->player;
+        d3h_player r{};
+        r.size = out->size;  // the caller's struct size: a prefix is copied
+        r.valid = p.valid != 0;
+        if (r.valid) {
+            r.hero_class = p.heroClass;
+            r.level = p.level;
+            r.paragon_level = p.paragonLevel;
+            r.paragon_points_free = p.paragonPointsFree;
+            r.highest_solo_rift = p.highestSoloRift;
+            r.highest_unlocked_rift = p.highestUnlockedRift;
+            r.last_rift_level = p.lastRiftLevel;
+            r.life = p.life;
+            r.life_max = p.lifeMax;
+            r.life_regen = p.lifeRegen;
+            for (int i = 0; i < 2; ++i) {
+                r.resource_type[i] = p.resourceType[i];
+                r.resource[i] = p.resource[i];
+                r.resource_max[i] = p.resourceMax[i];
+                r.resource_regen[i] = p.resourceRegen[i];
+            }
+            r.xp_to_next = static_cast<double>(p.xpToNext);
+            r.paragon_xp_to_next = static_cast<double>(p.paragonXpToNext);
+            r.strength = p.strength;
+            r.dexterity = p.dexterity;
+            r.intelligence = p.intelligence;
+            r.vitality = p.vitality;
+            r.armor = p.armor;
+            r.resist_all = p.resistAll;
+            for (int i = 0; i < 6; ++i) r.resist[i] = p.resist[i];
+            r.attack_speed = p.attackSpeed;
+            r.move_speed = p.moveSpeed;
+            r.cooldown_reduction = p.cooldownReduction;
+            r.gold_find = p.goldFind;
+            r.magic_find = p.magicFind;
+            r.deaths = p.deaths;
+        }
+        memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
+        return 1;
+    }
+
+    static d3h_bool GetSkill(uint32_t i, d3h_skill* out) {
+        const WorldSnapshot* s = g_host->snap_;
+        if (s == nullptr || !s->player.valid || i >= s->skillCount || i >= static_cast<uint32_t>(kMaxSkills)) return 0;
+        const SkillSnapshot& k = s->skills[i];
+        d3h_skill r{};
+        r.size = out->size;
+        r.sno = k.sno;
+        r.rune = k.rune;
+        r.passive = k.passive != 0;
+        if (k.cooldownEndTick >= 0 && g_host->tickNow_ >= 0 && g_host->tickNow_ < k.cooldownEndTick) {
+            r.on_cooldown = 1;
+            EffectSnapshot e;  // the same time maths as for effects
+            e.startTick = k.cooldownStartTick >= 0 ? k.cooldownStartTick : static_cast<int32_t>(g_host->tickNow_);
+            e.endTick = k.cooldownEndTick;
+            const EffectTimes t = TimesOf(e, g_host->tickNow_);
+            r.cooldown_duration = t.duration;
+            r.cooldown_remaining = t.remaining;
+        }
+        r.timed = g_host->tickNow_ >= 0;
+        const std::string readable = g_host->powers_.Readable(k.sno);
+        strncpy_s(r.name, sizeof(r.name), readable.c_str(), _TRUNCATE);
+        if (const std::string* code = g_host->powers_.Code(k.sno)) strncpy_s(r.code, sizeof(r.code), code->c_str(), _TRUNCATE);
+        memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
+        return 1;
+    }
+
+    static d3h_bool GetPassive(uint32_t i, d3h_passive* out) {
+        const WorldSnapshot* s = g_host->snap_;
+        if (s == nullptr || !s->player.valid || i >= s->passiveCount || i >= static_cast<uint32_t>(kMaxPassives)) return 0;
+        const PassiveSnapshot& k = s->passives[i];
+        d3h_passive r{};
+        r.size = out->size;
+        r.sno = k.sno;
+        r.slot = k.slot;
+        r.stacks = k.stacks;
+        const std::string readable = g_host->powers_.Readable(k.sno);
+        strncpy_s(r.name, sizeof(r.name), readable.c_str(), _TRUNCATE);
+        if (const std::string* code = g_host->powers_.Code(k.sno)) strncpy_s(r.code, sizeof(r.code), code->c_str(), _TRUNCATE);
+        memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
+        return 1;
+    }
+
+    static d3h_bool GetHealth(d3h_health* out) {
+        const WorldSnapshot* s = g_host->snap_;
+        if (s == nullptr) return 0;
+        const ReaderHealth& h = s->health;
+        d3h_health r{};
+        r.size = out->size;
+        for (int i = 0; i < D3H_HEALTH_SOURCES && i < kHealthSources; ++i) r.state[i] = h.state[i];
+        r.actors_seen = h.actorsSeen;
+        r.actors_dropped = h.actorsDropped;
+        r.items_dropped = h.itemsDropped;
+        r.monsters_unresolved = h.monstersUnresolved;
+        r.items_unresolved = h.itemsUnresolved;
+        r.ui_missing = h.uiMissing;
+        r.ticks_per_second = h.ticksPerSecond;
+        memcpy(out, &r, std::min<size_t>(out->size, sizeof(r)));
+        return 1;
+    }
+
     static d3h_bool GetItem(uint32_t i, d3h_item* out) {
         const WorldSnapshot* s = g_host->snap_;
         if (s == nullptr || i >= s->itemCount) return 0;
@@ -158,6 +271,7 @@ struct PluginHost::HostFns {
         r.grid_y = it.gridY;
         r.height = it.height;
         r.augment_rank = it.augmentRank;
+        r.stack = it.stack;
         strncpy_s(r.name, sizeof(r.name), it.name, _TRUNCATE);
         strncpy_s(r.type_name, sizeof(r.type_name), it.typeName, _TRUNCATE);
         r.size = out->size;  // the caller's struct size: a prefix is copied
@@ -180,7 +294,7 @@ struct PluginHost::HostFns {
 
     static void DrawText(int32_t layer, d3h_vec2 pos, d3h_color color, const char* text, float scale) {
         if (text == nullptr) return;
-        ImDrawList* dl = layer <= D3H_LAYER_MARKERS ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+        ImDrawList* dl = ListFor(layer);
         ImFont* font = ImGui::GetFont();
         dl->AddText(font, ImGui::GetFontSize() * std::clamp(scale, 0.25f, 8.f), ImVec2(pos.x, pos.y),
                     ArgbToImColor(color), text);
@@ -194,7 +308,7 @@ struct PluginHost::HostFns {
     }
 
     static ImDrawList* ListFor(int32_t layer) {
-        return layer <= D3H_LAYER_MARKERS ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+        return layer <= D3H_LAYER_MARKERS || g_drawBehind ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
     }
     static void DrawLine(int32_t layer, d3h_vec2 a, d3h_vec2 b, d3h_color color, float thickness) {
         ListFor(layer)->AddLine(ImVec2(a.x, a.y), ImVec2(b.x, b.y), ArgbToImColor(color), std::clamp(thickness, 0.5f, 32.f));
@@ -398,6 +512,12 @@ PluginHost::PluginHost(HudRenderer& renderer) : renderer_(renderer) {
     host_.get_item = HostFns::GetItem;
     host_.get_effect = HostFns::GetEffect;
     host_.get_wallet = HostFns::GetWallet;
+    host_.get_player = HostFns::GetPlayer;
+    host_.get_skill = HostFns::GetSkill;
+    host_.get_health = HostFns::GetHealth;
+    host_.get_passive = HostFns::GetPassive;
+    if (!rareNames_.Load(ExeDir() / "rare_names.tsv")) std::print(stderr, "no rare_names.tsv - rares show their monster type\n");
+    if (!names_.Load(ExeDir() / "names_en.tsv")) std::print(stderr, "no names_en.tsv - actors show their internal names\n");
     if (!powers_.Load(ExeDir() / "sno_powers.tsv")) std::print(stderr, "no sno_powers.tsv - effects get generic names\n");
     host_.world_to_screen = HostFns::WorldToScreenFn;
     host_.subscribe = HostFns::Subscribe;

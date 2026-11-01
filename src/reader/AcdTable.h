@@ -89,6 +89,9 @@ public:
     bool ReadRaw(const Process& proc, uint32_t acdId, uint8_t* out) const;
 
     // Affixes of an elite: bit i = kMonsterAffixes[i] (MonsterAffixes.h); false if the record is not found.
+    // The two GBIDs of a rare monster's generated name (prefix, suffix) at +0x1DC / +0x1E0 of its record, measured live:
+    // hashes of "RareGenericPrefix068" / "RareGenericSuffix043" = "Kauza, Torturer of Souls". False when the record is gone.
+    bool ReadRareName(const Process& proc, uint32_t acdId, uint32_t* prefix, uint32_t* suffix) const;
     bool ReadAffixMask(const Process& proc, uint32_t acdId, uint32_t* mask) const;
 
     // Every live ACD record in the known blocks that has a placement (location

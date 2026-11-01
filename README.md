@@ -173,6 +173,15 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
   while standing next to it), give its radius in game units, and remove an entry to stop drawing it. The reader picks the
   change up from `plugins.ini` within a few seconds.
 
+- **Rift log** (`plugins/riftlog`) is a panel with the rift in progress and the last runs (12 by default, kept between sessions):
+  greater rift level, time, when the guardian appeared, deaths, paragon experience gained, the time left in a greater rift, and
+  how long chosen buffs were up (open "Buffs on you right now" in the panel while the buff is up and click it, e.g. Squirt's
+  Necklace). A run starts and ends with the game's rift bar and counts after 20 seconds.
+- **Names.** Monsters, items and powers show the game's English names where the game has them (`names_en.tsv`, built from the
+  game's own text by `tools/build_names_en.py`); the rest keep their internal names.
+- **Player stats** (`plugins/playerstats`) shows what the reader knows about the character: life, resources, level and
+  paragon, paragon experience per hour, defences, speeds, the equipped skills with their runes and cooldowns, and how well the
+  reader sees the game (which of its data sources are found, stale or missing).
 - **Materials** (`plugins/materials`) lists your gold, blood shards, Greater Rift keystones and crafting materials (the numbers of
   the game's material panel) in a dock panel, with what you gained since you started. While the inventory is open a table of four
   rows (other, bounty, crafting, Hellfire) shows them on the screen, each with a small label over its number; move it like the other boxes.
