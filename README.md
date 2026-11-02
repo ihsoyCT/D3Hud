@@ -58,7 +58,7 @@ at any resolution). If it ever cannot, or the zoom is off, adjust it in **Settin
 - Markers for monsters (trash, champions, rares, minions, bosses), pylons and shrines
   (with names, distance and a pulsing ring), chests, portals, health globes, ground items
   and the **progress orbs** of rifts (blue for normal rifts, yellow for greater rifts).
-- Map prediction: the walkable level layout (also unexplored parts), entrance/exit labels.
+- Map prediction: the walkable level layout (also unexplored parts), entrance/exit labels. Tiles the shipped table does not know (a newer game patch) are read from the game itself.
 - The same markers on the game's big TAB map.
 - An arrow on the rim to the nearest unused pylon when it is off the map, and a ring around the
   nearest rare or champion.
@@ -162,6 +162,30 @@ Small Lua scripts in the `plugins` folder add features without rebuilding the pr
   next to the element you want (Fire, Cold, Lightning, ...), once per hero class. Then the element's icon and "Fire in 6.3"
   are drawn on the screen in the colour of the element, turning yellow just before, and "FIRE NOW 2.1" while it is active.
 
+- **Ground effects** (`plugins/groundeffects`) draws a ring on the floor for the circles the Oculus Ring and the Altar of Rites
+  leave (the Altar's when you drink a potion), with the seconds left in the middle; the ring changes colour while you stand
+  inside. The game does not publish a circle's size, so *Radius* is an option: stand at the edge of one and adjust it. The
+  areas elite monsters leave (molten, desecrator, plagued, arcane, frozen, thunderstorm) get red rings of their known size,
+  with a countdown for the ones that explode after a fixed time. Where the time is known the ring is a clock: the part
+  that has gone fades (opacity is an option) and a hand sweeps round from the middle. Which monster areas are drawn is a list
+  you can edit on the plugin's page (*Monsters' areas*): comma separated entries `name[:radius[:seconds[:label]]]`, starting
+  with the built-in ones. Add the actor name of another area (find it with `D3Hud.Reader.exe --attach "Diablo III64" --nearby`
+  while standing next to it), give its radius in game units, and remove an entry to stop drawing it. The reader picks the
+  change up from `plugins.ini` within a few seconds.
+
+- **Rift log** (`plugins/riftlog`) is a panel with the rift in progress and the last runs (12 by default, kept between sessions):
+  greater rift level, time, when the guardian appeared, deaths, paragon experience gained, the time left in a greater rift, and
+  how long chosen buffs were up (open "Buffs on you right now" in the panel while the buff is up and click it, e.g. Squirt's
+  Necklace). A run starts and ends with the game's rift bar and counts after 20 seconds.
+- **Names.** Monsters, items and powers show the game's English names where the game has them (`names_en.tsv`, built from the
+  game's own text by `tools/build_names_en.py`); the rest keep their internal names.
+- **Player stats** (`plugins/playerstats`) shows what the reader knows about the character: life, resources, level and
+  paragon, paragon experience per hour, defences, speeds, the equipped skills with their runes and cooldowns, and how well the
+  reader sees the game (which of its data sources are found, stale or missing).
+- **Materials** (`plugins/materials`) lists your gold, blood shards, Greater Rift keystones and crafting materials (the numbers of
+  the game's material panel) in a dock panel, with what you gained since you started. While the inventory is open a table of four
+  rows (other, bounty, crafting, Hellfire) shows them on the screen, each with a small label over its number; move it like the other boxes.
+
 **Moving the plugins' boxes.** What the plugins draw on the screen (the Convention countdown, the DPS lines, the list of
 health bars, the time split, the effect bars) sits in boxes you can move. Press **Move on-screen boxes** on Settings >
 Plugins (or *Move on the screen* on a plugin's own page): every box gets a blue frame and its name, even when it has nothing
@@ -220,6 +244,12 @@ D3Hud.Reader.exe --attach "Diablo III64" --items       # equipped and backpack i
 D3Hud.Reader.exe --attach "Diablo III64" --affixes     # research: where do elites keep their affixes (see analysis/MONSTER_AFFIXES.md)
 D3Hud.Reader.exe --attach "Diablo III64" --player-attrs [--seconds N]
                                                        # research: the player's attributes (buffs, cooldowns), then what changes
+D3Hud.Reader.exe --attach "Diablo III64" --nearby [--radius R] [--seconds N]
+                                                       # research: actors near you that the map does not keep (ground effects, skill effects)
+D3Hud.Reader.exe --attach "Diablo III64" --wallet      # gold, blood shards and crafting materials, as the reader reads them
+D3Hud.Reader.exe --attach "Diablo III64" --stacks      # research: every placed item with its stack count (gems)
+D3Hud.Reader.exe --attach "Diablo III64" --find-values 7338,9174,6797
+                                                       # research: where in memory do these numbers sit together
 D3Hud.Reader.exe --attach "Diablo III64" --ui <text>   # list UI controls whose path contains <text>
 D3Hud.Reader.exe --attach "Diablo III64" --ui-watch <text> [--seconds N]
                                                        # watch what changes in those controls
@@ -236,12 +266,13 @@ Next to the exes (the folder is relocatable, nothing is written elsewhere):
 | File | |
 |---|---|
 | `sno_actors.tsv`, `items_gbid.tsv`, `sno_powers.tsv`, `scene_cells.bin` | Data tables the program needs (shipped) |
+| `scene_cells_learned.bin` | Level tiles the reader read from the game itself because `scene_cells.bin` did not have them (new game patch); created at runtime, safe to delete |
 | `d3hud.ini` | All settings, panel positions, hotkeys and the safe area (created on first save) |
 | `d3hud.<name>.ini` | Saved profiles |
 | `plugins/`, `plugins.ini` | Lua plugins (shipped) and the settings and data they keep |
 | `reader.log` | Output of the background reader |
 | `d3hud_drops.csv` | Created by *Export session to CSV* in the Drops settings |
-| `dumps\` | Created by the reader's F10 actor dump and by `--player-attrs` |
+| `dumps\` | Created by the reader's F10 actor dump and by `--player-attrs` and `--nearby` |
 
 Keep the folder somewhere your user can write to (not `Program Files`).
 

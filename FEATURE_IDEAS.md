@@ -102,7 +102,7 @@ plugins. **Port next (the data exists)**
 **Needs reader work first**
 
 - ExplosiveMonsterPlugin (Corpulent, Fast Mummy corpses): the reader drops dead monsters, so it would have to publish those few kinds.
-- InventoryMaterialCount, BloodShard, KanaiCubedItems: stack sizes are not in `ItemSnapshot`.
+- InventoryMaterialCount, BloodShard: done (the wallet, `d3hud.wallet()`, plugin `materials`). KanaiCubedItems: stack sizes of items are still not in `ItemSnapshot`.
 - MonsterRiftProgressionColoring: needs a table monster -> rift progress value (game data, not in memory).
 - TopExperienceStatistics (XP per hour, paragon): experience counters are not read.
 - AttributeLabelList and EliteMonsterSkill: arbitrary attributes; a monster's group is readable, and so is the player's (buffs and cooldowns, `AttribTable::Enumerate`); a general attribute browser would need names for the indices (`analysis/attributes.tsv` is the 2.6.10 list, +5 from about index 357).

@@ -10,7 +10,7 @@ plugins/myplugin/
 ```
 
 `name` is letters, digits, `-` and `_`. `api` is the interface version the plugin was written for; use the highest of the
-functions you call (`effects()` needs 2, `box{}` 3, pictures 4). The overlay loads every folder at start; **restart the overlay
+functions you call (`effects()` needs 2, `box{}` 3, pictures 4, actors of kind `ground_effect` 5). The overlay loads every folder at start; **restart the overlay
 to reload**.
 
 **The full interface is in [`PLUGIN.md`](../PLUGIN.md)**: what a plugin can read, every function, events, boxes, panels, settings,
@@ -56,6 +56,8 @@ Read them as examples: they are complete and tested.
 | `healthbars/` | life bars over elites, a list with their affixes | `actors()`, `world_to_screen`, the `draw` library, a box, a page of its own |
 | `damagemeter/` | DPS, fights, time to kill | measuring from `actors()` over time, a dock panel, a box |
 | `effects/` | buffs and cooldowns with their time left | `effects()`, a dock panel, a box with bars, choice settings |
+| `groundeffects/` | rings on the ground for the Oculus Ring and Altar of Rites circles and for the areas elite monsters leave, with the seconds left | actors of kind `ground_effect`, `world_to_screen` rings, first-seen timing |
+| `materials/` | gold, blood shards, keystones and crafting materials: a list with the gains, and a four-row table while the inventory is open | `wallet()`, a dock panel, a box that shows only with the inventory open |
 | `convention/` | seconds until the Convention of Elements element you want | learning a cycle from `effect.slot`, hidden settings as memory, pictures, a box |
 
 ## Good habits

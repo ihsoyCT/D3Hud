@@ -66,6 +66,9 @@ AttribTable::Result AttribTable::Get(const Process& proc, uint32_t groupId, uint
     }
     const uint32_t key = AttribKey(index);
     const uint64_t off = static_cast<uint64_t>(groupId & 0xFFFF) * kAttribGroupStride;
+    // A block the game has since freed or reused can keep the header of a group, with stale or empty buckets. So a
+    // base that answers "not found" does not end the search: a later one may hold the attribute.
+    bool matched = false;
     for (uint64_t base : bases) {
         uint8_t hdr[0x1C];
         if (!proc.Read(base + off, hdr, sizeof(hdr))) continue;
@@ -73,9 +76,9 @@ AttribTable::Result AttribTable::Get(const Process& proc, uint32_t groupId, uint
         memcpy(&id, hdr, 4);
         memcpy(&mask, hdr + 0x18, 4);
         if (id != groupId || !IsMask(mask)) continue;  // another block's group (or stale)
+        matched = true;
         uint64_t entry = 0;
-        if (!proc.Read(base + off + kAttribBucketsOffset + 8ull * AttribBucket(key, mask), &entry, 8))
-            return Result::NotFound;
+        if (!proc.Read(base + off + kAttribBucketsOffset + 8ull * AttribBucket(key, mask), &entry, 8)) continue;
         for (int hops = 0; entry != 0 && hops < 64; ++hops) {
             uint8_t e[16];
             if (!proc.Read(entry, e, sizeof(e))) break;
@@ -87,8 +90,8 @@ AttribTable::Result AttribTable::Get(const Process& proc, uint32_t groupId, uint
             }
             memcpy(&entry, e, 8);
         }
-        return Result::NotFound;
     }
+    if (matched) return Result::NotFound;
     return Result::Unresolved;
 }
 

@@ -12,7 +12,7 @@ namespace d3hud {
 static constexpr uint32_t kSnoOffset = 236, kRectMinOffset = 256, kRectMaxOffset = 376, kWorldOffset = 12;
 static constexpr uint32_t kMaxSlots = 2048;
 
-bool DecodeScene(const uint8_t* rec, uint32_t slot, const SceneCells& known, SceneRecord* out) {
+bool DecodeSceneShape(const uint8_t* rec, uint32_t slot, SceneRecord* out) {
     memcpy(&out->id, rec, 4);
     if (out->id == 0xFFFFFFFF || (out->id & 0xFFFF) != slot) return false;
     memcpy(&out->world, rec + kWorldOffset, 4);
@@ -23,7 +23,11 @@ bool DecodeScene(const uint8_t* rec, uint32_t slot, const SceneCells& known, Sce
     if (!std::isfinite(w) || !std::isfinite(h) || out->x0 < 0.f || out->y0 < 0.f || w < 30.f || h < 30.f ||
         w > 480.f || h > 480.f || out->x1 > 1e5f || out->y1 > 1e5f)
         return false;
-    return known.Find(out->sno) != nullptr;
+    return true;
+}
+
+bool DecodeScene(const uint8_t* rec, uint32_t slot, const SceneCells& known, SceneRecord* out) {
+    return DecodeSceneShape(rec, slot, out) && known.Find(out->sno) != nullptr;
 }
 
 void SceneBlockScan::Match(const uint8_t* data, size_t n, uint64_t addr, size_t chunkSize) {
@@ -48,6 +52,40 @@ void SceneBlockScan::Match(const uint8_t* data, size_t n, uint64_t addr, size_t 
     }
 }
 
+void NavAssetScan::Match(const uint8_t* data, size_t n, uint64_t addr, size_t chunkSize) {
+    (void)addr;
+    const size_t limit = MatchLimit(n, chunkSize, tail());
+    for (size_t i = 0; i + tail() <= limit && i < chunkSize; i += 8) {
+        uint32_t count, bytes;
+        memcpy(&count, data + i + 384, 4);
+        if (count == 0 || count > 20000) continue;
+        memcpy(&bytes, data + i + 404, 4);
+        if (bytes != count * kGameNavCellSize) continue;
+        uint32_t sno;
+        memcpy(&sno, data + i, 4);
+        // real scene SNOs start above 1700; smaller numbers are what the check above lets through by chance
+        if (sno < 1000 || sno > 0x00FFFFFF || known_.Find(sno) != nullptr || seen_.count(sno) != 0) continue;
+        uint64_t cells;
+        memcpy(&cells, data + i + 392, 8);
+        if (cells < 0x10000 || cells > 0x7FFFFFFFFFFF) continue;
+        seen_.insert(sno);
+        if (found_.size() < 4000) found_.push_back({sno, count, cells});
+    }
+}
+
+int NavAssetScan::Finish(const Process& proc, SceneCells* cells, bool verbose) {
+    int added = 0;
+    std::vector<uint8_t> buf;
+    std::vector<CellRect> rects;
+    for (const Asset& a : found_) {
+        buf.resize(static_cast<size_t>(a.count) * kGameNavCellSize);
+        if (!proc.Read(a.cells, buf.data(), buf.size()) || !ExtractWalkableCells(buf.data(), a.count, &rects)) continue;
+        if (cells->Add(a.sno, rects)) ++added;
+    }
+    if (verbose) std::print("nav assets: {} candidate(s), {} new scene shape(s) learned from the game\n", found_.size(), added);
+    return added;
+}
+
 int SceneBlockScan::Finish(SceneTable* table, bool verbose) {
     std::vector<std::pair<int, uint64_t>> ranked;
     for (const auto& [base, votes] : tally_)
@@ -67,8 +105,10 @@ int SceneTable::Discover(const Process& proc, const SceneCells& known, bool verb
     return scan.Finish(this, verbose);
 }
 
-bool SceneTable::Read(const Process& proc, const SceneCells& known, std::vector<SceneRecord>* out) const {
+bool SceneTable::Read(const Process& proc, const SceneCells& known, std::vector<SceneRecord>* out,
+                      std::vector<uint32_t>* unknown) const {
     out->clear();
+    if (unknown != nullptr) unknown->clear();
     std::vector<uint64_t> bases;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -82,7 +122,11 @@ bool SceneTable::Read(const Process& proc, const SceneCells& known, std::vector<
             if (!proc.Read(base + static_cast<uint64_t>(first) * kSceneStride, buf.data(), buf.size())) continue;
             for (uint32_t k = 0; k < kBatch; ++k) {
                 SceneRecord rec;
-                if (!DecodeScene(buf.data() + static_cast<size_t>(k) * kSceneStride, first + k, known, &rec)) continue;
+                if (!DecodeSceneShape(buf.data() + static_cast<size_t>(k) * kSceneStride, first + k, &rec)) continue;
+                if (known.Find(rec.sno) == nullptr) {
+                    if (unknown != nullptr && rec.sno >= 1000 && rec.sno <= 0x00FFFFFF) unknown->push_back(rec.sno);
+                    continue;
+                }
                 if (seen.insert((static_cast<uint64_t>(rec.world) << 32) | rec.id).second) out->push_back(rec);
             }
         }

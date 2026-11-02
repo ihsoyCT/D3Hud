@@ -24,8 +24,14 @@
 extern "C" {
 #endif
 
-#define D3H_API_VERSION 4 /* 2: effects (get_effect), d3h_frame.effect_count; 3: movable boxes (register_box);
-                             4: images (load_image, draw_image) */
+#define D3H_API_VERSION 11 /* 2: effects (get_effect), d3h_frame.effect_count; 3: movable boxes (register_box);
+                             4: images (load_image, draw_image); 5: actor kind ground_effect;
+                             6: gold, blood shards and crafting materials (get_wallet);
+                             7: the player's numbers, equipped skills and the reader's health (get_player, get_skill, get_health);
+                             8: d3h_item.stack (stack size of gems and materials);
+                             9: d3h_player.deaths;
+                             10: permanent powers (get_passive, d3h_frame.passive_count);
+                             11: d3h_actor.display_name (the English name; a rare's generated name), type_name */
 #define D3H_NAME_LEN 48
 
 typedef int32_t d3h_bool; /* 0 / 1 */
@@ -48,7 +54,7 @@ typedef enum d3h_actor_kind {
     D3H_ACTOR_PLAYER = 0, D3H_ACTOR_TRASH, D3H_ACTOR_CHAMPION, D3H_ACTOR_RARE, D3H_ACTOR_MINION,
     D3H_ACTOR_BOSS, D3H_ACTOR_PYLON, D3H_ACTOR_SHRINE, D3H_ACTOR_CHEST, D3H_ACTOR_GLOBE,
     D3H_ACTOR_GROUND_ITEM, D3H_ACTOR_PORTAL, D3H_ACTOR_PYLON_SPAWN, D3H_ACTOR_RIFT_ORB,
-    D3H_ACTOR_RIFT_ORB_TIERED
+    D3H_ACTOR_RIFT_ORB_TIERED, D3H_ACTOR_GROUND_EFFECT /* API 5: a circle on the ground; the name says which */
 } d3h_actor_kind;
 
 /* Same numbering as ItemRarity. */
@@ -87,6 +93,10 @@ typedef struct d3h_frame {
     int32_t stash_tab;         /* selected global stash tab, -1 unknown */
     /* appended in API 2 */
     uint32_t effect_count;     /* running buffs and cooldowns of the player, see d3h_effect */
+    /* appended in API 7 */
+    uint32_t skill_count;      /* equipped skills (actives and passives), see d3h_skill */
+    /* appended in API 10 */
+    uint32_t passive_count;    /* permanent powers, see d3h_passive */
 } d3h_frame;
 
 typedef struct d3h_actor {
@@ -102,6 +112,9 @@ typedef struct d3h_actor {
     /* appended in API 1 before release; older plugins never see them (check `size`) */
     float hp_current, hp_max; /* life in game units; 0 when unknown */
     uint32_t affix_mask;      /* elites: bit i = affix i of the host's affix table (d3hud.affixes in Lua) */
+    /* appended in API 11 */
+    char display_name[D3H_NAME_LEN]; /* what the game calls it ("Risen"; a rare: "Kauza, Torturer of Souls"); the internal name when the host has no English name */
+    char type_name[D3H_NAME_LEN];    /* the kind of monster in English, also for a rare ("Returned Archer"); same fallback */
 } d3h_actor;
 
 typedef struct d3h_item {
@@ -117,6 +130,8 @@ typedef struct d3h_item {
     int32_t augment_rank;
     char name[D3H_NAME_LEN];
     char type_name[D3H_NAME_LEN];
+    /* appended in API 8 */
+    uint32_t stack; /* stack size of gems and crafting materials, 0 when the item is not a stack */
 } d3h_item;
 
 typedef enum d3h_effect_kind {
@@ -140,6 +155,77 @@ typedef struct d3h_effect {
     int32_t slot;      /* buff icon slot (0..31): one power can use several, and some (Convention of Elements) use the slot as
                           the element that is active; 0 for cooldowns */
 } d3h_effect;
+
+/* The account's counters: gold, blood shards and the crafting materials (what the game's material panel shows). API 6.
+ * `materials` is in the order of the Lua keys (d3hud.wallet): reusable_parts, arcane_dust, veiled_crystal, deaths_breath,
+ * forgotten_soul, khanduran_rune, caldeum_nightshade, arreat_war_tapestry, corrupted_angel_flesh, westmarch_holy_water,
+ * primordial_ashes, greater_rift_keystone, vial_of_putridness, idol_of_terror, heart_of_fright, leorics_regret. */
+#define D3H_MATERIAL_SLOTS 16
+typedef struct d3h_wallet {
+    uint32_t size;
+    d3h_bool valid;        /* 0: the reader has not found the counters (yet); everything else is then 0 */
+    double gold;
+    uint32_t blood_shards;
+    uint32_t material_count; /* how many entries of `materials` are set */
+    uint32_t materials[D3H_MATERIAL_SLOTS];
+} d3h_wallet;
+
+/* The player's own numbers. API 7. `valid` is 0 while the reader has not read them (then everything else is 0). Life and
+ * resources are in game units; the speeds are multipliers (1.0 = base, 1.65 = 65% faster); cooldown_reduction is a
+ * fraction (0.32 = 32%). Resource ids are the game's (Demon Hunter: 5 Hatred, 6 Discipline); 255 = the class has no such
+ * resource. xp_* is what is still missing for the next (paragon) level: it falls while you play. */
+typedef struct d3h_player {
+    uint32_t size;
+    d3h_bool valid;
+    int32_t hero_class; /* 0 unknown, 1 Barbarian, 2 Crusader, 3 Demon Hunter, 4 Monk, 5 Necromancer, 6 Witch Doctor, 7 Wizard */
+    int32_t level, paragon_level, paragon_points_free;
+    int32_t highest_solo_rift, highest_unlocked_rift, last_rift_level;
+    float life, life_max, life_regen;
+    int32_t resource_type[2];
+    float resource[2], resource_max[2], resource_regen[2];
+    double xp_to_next, paragon_xp_to_next;
+    float strength, dexterity, intelligence, vitality;
+    float armor, resist_all;
+    float resist[6]; /* physical, fire, lightning, cold, poison, arcane */
+    float attack_speed, move_speed, cooldown_reduction, gold_find, magic_find;
+    /* appended in API 9 */
+    int32_t deaths; /* how often the character has died: take differences */
+} d3h_player;
+
+/* A skill the player has equipped. API 7. The action bar slot is not known (it is not an attribute). */
+typedef struct d3h_skill {
+    uint32_t size;
+    uint32_t sno;      /* the power */
+    int32_t rune;      /* 0 none, 1..5 = rune A..E */
+    d3h_bool passive;
+    d3h_bool on_cooldown;
+    float cooldown_duration;  /* seconds, 0 when not on cooldown */
+    float cooldown_remaining; /* 0 when not on cooldown or when the game clock is not known yet */
+    d3h_bool timed;    /* 0 while the game clock is not known */
+    char name[D3H_NAME_LEN]; /* readable: "Rapid Fire"; "Power <sno>" when unknown */
+    char code[D3H_NAME_LEN]; /* internal name, empty when unknown */
+} d3h_skill;
+
+/* A power on the character without a timer: a passive skill, a legendary item or gem power, a set bonus. API 10. */
+typedef struct d3h_passive {
+    uint32_t size;
+    uint32_t sno;
+    int32_t slot;   /* icon slot: a power can hold several */
+    int32_t stacks;
+    char name[D3H_NAME_LEN];
+    char code[D3H_NAME_LEN];
+} d3h_passive;
+
+/* How well the reader sees the game. API 7. state[i]: 0 unknown, 1 ok, 2 degraded (found but partly unresolved), 3 missing;
+ * i = 0 actors, 1 records, 2 attributes, 3 inventory, 4 player, 5 ui, 6 scenes, 7 wallet. */
+#define D3H_HEALTH_SOURCES 8
+typedef struct d3h_health {
+    uint32_t size;
+    int32_t state[D3H_HEALTH_SOURCES];
+    int32_t actors_seen, actors_dropped; /* actors the reader listed; those it could not publish (cap) */
+    int32_t items_dropped, monsters_unresolved, items_unresolved, ui_missing;
+    float ticks_per_second;
+} d3h_health;
 
 /* ---- Events ----------------------------------------------------------------------------- */
 
@@ -346,6 +432,17 @@ typedef struct d3h_host {
      * (screen pixels) with `tint` (0xAARRGGBB, white = as is), from the same places as the other draw_* functions. API 4. */
     d3h_bool (*load_image)(const char* name, d3h_image* out);
     void (*draw_image)(int32_t layer, int32_t image, d3h_rect rect, d3h_color tint);
+
+    /* gold, blood shards and crafting materials. API 6. */
+    d3h_bool (*get_wallet)(d3h_wallet* out);
+
+    /* the player's numbers, its equipped skills (0 <= index < d3h_frame.skill_count) and the reader's health. API 7. */
+    d3h_bool (*get_player)(d3h_player* out);
+    d3h_bool (*get_skill)(uint32_t index, d3h_skill* out);
+    d3h_bool (*get_health)(d3h_health* out);
+
+    /* the character's permanent powers, 0 <= index < d3h_frame.passive_count. API 10. */
+    d3h_bool (*get_passive)(uint32_t index, d3h_passive* out);
 } d3h_host;
 
 /* True when the host's table is large enough to contain `field` (a newer plugin on an older host). */

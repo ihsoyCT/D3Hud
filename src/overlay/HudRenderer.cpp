@@ -1,4 +1,5 @@
 #include "HudRenderer.h"
+#include "PluginHost.h"
 
 #include <algorithm>
 #include <bit>
@@ -40,6 +41,7 @@ ImU32 KindColor(ActorKind k) {
         case ActorKind::PylonSpawn:return IM_COL32(0, 230, 230, 150);    // faint cyan
         case ActorKind::RiftOrb:   return IM_COL32(80, 170, 255, 255);   // blue
         case ActorKind::RiftOrbTiered: return IM_COL32(255, 225, 80, 255);  // yellow
+        case ActorKind::GroundEffect:  return IM_COL32(120, 200, 255, 255);  // light blue
     }
     return IM_COL32(255, 255, 255, 255);
 }
@@ -119,6 +121,8 @@ void MinimapLayout::ResetMarkers() {
     set(ActorKind::PylonSpawn, 0x00F0FF, 6.0f, MarkerShape::Diamond, 0.6f, true);
     set(ActorKind::RiftOrb,       0x50AAFF, 4.5f, MarkerShape::Dot, 1.0f, false, true);  // blue, pulsing: fills the rift bar
     set(ActorKind::RiftOrbTiered, 0xFFE150, 4.5f, MarkerShape::Dot, 1.0f, false, true);  // yellow (greater rifts)
+    set(ActorKind::GroundEffect,  0x78C8FF, 5.0f, MarkerShape::Ring, 0.8f);  // the plugin draws the circle itself
+    kinds[static_cast<int>(ActorKind::GroundEffect)].show = false;           // a dot on the minimap adds little
 }
 
 static const char* const kPanelNames[MinimapLayout::kPanelCount] = {"Info", "Drops", "Items", "Actors", "Settings"};
@@ -177,6 +181,7 @@ void MinimapLayout::Describe(SettingsTable& t) {
         t.Add(p + "h", panelH[i], kAnyLo, kAnyHi, 4);
     }
     for (const auto& entry : pluginPanels) DescribePluginPanel(t, entry.first);
+    for (const auto& entry : pluginBoxes) DescribePluginBox(t, entry.first);  // without this a moved box is never saved
     t.Add("salvage.rarityMask", salvageRules.rarityMask, 0u, 0x1Fu);
     t.Add("salvage.keepAncient", salvageRules.keepAncient);
     t.Add("salvage.keepPrimal", salvageRules.keepPrimal);
@@ -238,6 +243,7 @@ void MinimapLayout::DescribePluginPanel(SettingsTable& t, const std::string& id)
     const std::string p = "pluginpanel." + id + ".";
     t.Add(p + "pinned", st.pinned);
     t.Add(p + "hidden", st.hidden);
+    t.Add(p + "hotkey", st.hotkey, uint8_t{0}, uint8_t{254}, 0);
     t.Add(p + "x", st.x, lo, hi, 4);
     t.Add(p + "y", st.y, lo, hi, 4);
     t.Add(p + "w", st.w, lo, hi, 4);
@@ -676,7 +682,7 @@ void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& op
     PanelScope panel(*this, PanelId::Actors, opt, "Actors (minimap source)");
     if (!panel) return;
 
-    int perKind[static_cast<int>(ActorKind::RiftOrbTiered) + 1] = {};
+    int perKind[MinimapLayout::kKindCount] = {};
     std::vector<std::pair<float, uint16_t>> order;
     order.reserve(snap.actorCount);
     for (uint16_t i = 0; i < snap.actorCount; ++i) {
@@ -684,13 +690,13 @@ void HudRenderer::DrawActorPanel(const WorldSnapshot& snap, const HudOptions& op
         const float dx = a.world.x - snap.playerPos.x, dy = a.world.y - snap.playerPos.y;
         order.push_back({std::sqrt(dx * dx + dy * dy), i});
         const int k = static_cast<int>(a.kind);
-        if (k >= 0 && k <= static_cast<int>(ActorKind::RiftOrbTiered)) perKind[k]++;
+        if (k >= 0 && k < MinimapLayout::kKindCount) perKind[k]++;
     }
     std::sort(order.begin(), order.end());
 
     // per-kind counts in their map colours
     ImGui::Text("%u actors:", snap.actorCount);
-    for (int k = 0; k <= static_cast<int>(ActorKind::RiftOrbTiered); ++k) {
+    for (int k = 0; k < MinimapLayout::kKindCount; ++k) {
         if (perKind[k] == 0) continue;
         const ActorKind kind = static_cast<ActorKind>(k);
         ImGui::SameLine();
@@ -1629,6 +1635,25 @@ void HudRenderer::DrawHotkeySettings() {
             }
             ImGui::PopID();
         }
+        // every panel a plugin adds can be opened by a key as well (unbound until chosen here)
+        for (size_t i = 0; i < pluginPanels_.size() && i < static_cast<size_t>(MinimapLayout::kHotkeyCount + kMaxPluginHotkeys); ++i) {
+            if (static_cast<int>(i) >= kMaxPluginHotkeys) break;
+            PluginPanel& p = pluginPanels_[i];
+            const int h = MinimapLayout::kHotkeyCount + static_cast<int>(i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Toggle panel: %s", p.title.c_str());
+            ImGui::TableNextColumn();
+            ImGui::PushID(h);
+            char name[48];
+            if (captureHotkey_ == h) snprintf(name, sizeof(name), "press a key...");
+            else KeyName(St(p).hotkey, name, sizeof(name));
+            if (ImGui::Button(name, ImVec2(170.0f * layout_.uiScale, 0.0f))) {
+                captureHotkey_ = captureHotkey_ == h ? -1 : h;
+                captureReady_ = false;
+            }
+            ImGui::PopID();
+        }
         ImGui::EndTable();
     }
     if (captureHotkey_ < 0) return;
@@ -1642,12 +1667,18 @@ void HudRenderer::DrawHotkeySettings() {
         captureReady_ = true;  // wait until the key that started the capture is released
     } else if (captureReady_) {
         const int h = captureHotkey_;
+        // the action's key: a built-in action, or (from kHotkeyCount up) a plugin panel
+        auto keyOf = [this](int action) -> uint8_t& {
+            return action < MinimapLayout::kHotkeyCount ? layout_.hotkeys[action]
+                                                        : layout_.pluginPanels[pluginPanels_[action - MinimapLayout::kHotkeyCount].id].hotkey;
+        };
         if (pressed == VK_BACK && h >= MinimapLayout::kHkPanelFirst) {
-            layout_.hotkeys[h] = 0;
+            keyOf(h) = 0;
         } else if (pressed != VK_ESCAPE) {
-            for (int o = 0; o < MinimapLayout::kHotkeyCount; ++o)  // one action per key
-                if (o != h && layout_.hotkeys[o] == pressed) layout_.hotkeys[o] = 0;
-            layout_.hotkeys[h] = static_cast<uint8_t>(pressed);
+            const int total = MinimapLayout::kHotkeyCount + static_cast<int>(std::min<size_t>(pluginPanels_.size(), kMaxPluginHotkeys));
+            for (int o = 0; o < total; ++o)  // one action per key
+                if (o != h && keyOf(o) == pressed) keyOf(o) = 0;
+            keyOf(h) = static_cast<uint8_t>(pressed);
         }
         captureHotkey_ = -1;
         captureReady_ = false;
@@ -1748,9 +1779,35 @@ void HudRenderer::DrawReaderSettings() {
 // On-screen diagnostics, bottom-left: fps/counts and the reader's state.
 void HudRenderer::DrawDiagnostics(const WorldSnapshot& snap, const HudOptions& opt, double fps) {
     if (!layout_.diagFps && !(layout_.diagReader && opt.reader != nullptr)) return;
-    char lines[3][160];
-    ImU32 cols[3];
+    char lines[4][160];
+    ImU32 cols[4];
     int n = 0;
+    if (layout_.diagReader && opt.reader != nullptr) {
+        // what the reader cannot see (a table the game rebuilt, a dialog it never found): shown once it has lasted a few
+        // seconds, so the usual moments of looking things up do not flash
+        const ReaderHealth& h = snap.health;
+        char bad[150] = {};
+        size_t len = 0;
+        for (int i = 0; i < kHealthSources; ++i) {
+            const auto st = static_cast<HealthState>(h.state[i]);
+            if (st != HealthState::Degraded && st != HealthState::Missing) continue;
+            len += static_cast<size_t>(snprintf(bad + len, sizeof(bad) - len, "%s%s %s", len ? ", " : "",
+                                                HealthSourceName(static_cast<HealthSource>(i)),
+                                                st == HealthState::Missing ? "missing" : "degraded"));
+            if (len >= sizeof(bad) - 24) break;
+        }
+        if (h.actorsDropped > 0 && len < sizeof(bad) - 24)
+            snprintf(bad + len, sizeof(bad) - len, "%s%u actors over the limit", len ? ", " : "", h.actorsDropped);
+        if (bad[0] == '\0') {
+            healthBadSince_ = 0.0;
+        } else {
+            if (healthBadSince_ == 0.0) healthBadSince_ = ImGui::GetTime();
+            if (ImGui::GetTime() - healthBadSince_ > 4.0) {
+                snprintf(lines[n], sizeof(lines[n]), "reader sees badly: %s", bad);
+                cols[n++] = IM_COL32(255, 170, 50, 255);
+            }
+        }
+    }
     if (layout_.diagFps) {
         snprintf(lines[n], sizeof(lines[n]), "%.0f fps | actors %u | items %u | frame %llu", fps, snap.actorCount,
                  snap.itemCount, static_cast<unsigned long long>(snap.frameIndex));
@@ -2211,6 +2268,7 @@ void HudRenderer::AddPluginPanel(std::string id, std::string title, std::functio
     SettingsTable t;  // what an earlier session saved: the layout file was read before the plugin registered
     layout_.DescribePluginPanel(t, p.id);
     (void)t.Load(layoutPath_);  // no file yet is fine
+    hotkeysDirty_ = true;  // a new panel may come with a key from an earlier session
 }
 
 void HudRenderer::AddPluginBox(std::string id, std::string title, BoxDraw draw, ImVec2 defaultPos, BoxLook look) {
@@ -2269,7 +2327,10 @@ void HudRenderer::DrawPluginBoxes(HudOptions& opt) {
         }
         ImGui::End();
     }
-    ImDrawList* fg = ImGui::GetForegroundDrawList();  // where the plugins' draw_* calls land
+    // Boxes go on the background list, under every window: the dock panels and the settings are drawn above them
+    // (the foreground list is above all windows). The plugins' draw_* calls are sent there too while a box draws.
+    ImDrawList* fg = ImGui::GetBackgroundDrawList();
+    ImDrawList* top = ImGui::GetForegroundDrawList();  // the move frames and labels stay on top
     for (PluginBox& b : pluginBoxes_) {
         if (b.off) continue;
         MinimapLayout::PluginBoxState& st = layout_.pluginBoxes[b.id];
@@ -2287,7 +2348,9 @@ void HudRenderer::DrawPluginBoxes(HudOptions& opt) {
         fg->ChannelsSplit(2);
         fg->ChannelsSetCurrent(1);
         ImVec2 used(0.f, 0.f);
+        SetPluginDrawBehindWindows(true);
         b.draw(ImVec2(outer.x + style.padding, outer.y + style.padding), &used);
+        SetPluginDrawBehindWindows(false);
         fg->ChannelsSetCurrent(0);
         const bool empty = used.x <= 0.f && used.y <= 0.f;
         b.size = empty ? ImVec2(0.f, 0.f) : ImVec2(used.x + 2.f * style.padding, used.y + 2.f * style.padding);
@@ -2313,8 +2376,8 @@ void HudRenderer::DrawPluginBoxes(HudOptions& opt) {
             const ImVec2 e(a.x + shown.x, a.y + shown.y);
             ImGui::InvisibleButton("##drag", shown);
             const bool active = ImGui::IsItemActive();
-            fg->AddRectFilled(a, e, IM_COL32(60, 170, 255, active ? 80 : 36));
-            fg->AddRect(a, e, IM_COL32(120, 210, 255, 240), 0.f, 0, 2.f);
+            top->AddRectFilled(a, e, IM_COL32(60, 170, 255, active ? 80 : 36));
+            top->AddRect(a, e, IM_COL32(120, 210, 255, 240), 0.f, 0, 2.f);
             // "plugin: box", e.g. "convention: Convention of Elements" (just the title when it is the plugin's name)
             const std::string plugin = b.id.substr(0, b.id.find('.'));
             const bool same = _stricmp(plugin.c_str(), b.title.c_str()) == 0;
@@ -2322,9 +2385,9 @@ void HudRenderer::DrawPluginBoxes(HudOptions& opt) {
             const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
             const float lx = std::clamp(a.x, 0.f, std::max(0.f, display.x - ts.x - 10.f));
             const ImVec2 tp(lx, a.y - ts.y - 5.f >= 0.f ? a.y - ts.y - 5.f : a.y);  // above the box; inside it at the top of the screen
-            fg->AddRectFilled(tp, ImVec2(tp.x + ts.x + 10.f, tp.y + ts.y + 4.f), IM_COL32(20, 90, 140, 245));
-            fg->AddRect(tp, ImVec2(tp.x + ts.x + 10.f, tp.y + ts.y + 4.f), IM_COL32(120, 210, 255, 255));
-            fg->AddText(ImVec2(tp.x + 5.f, tp.y + 2.f), IM_COL32(255, 255, 255, 255), label.c_str());
+            top->AddRectFilled(tp, ImVec2(tp.x + ts.x + 10.f, tp.y + ts.y + 4.f), IM_COL32(20, 90, 140, 245));
+            top->AddRect(tp, ImVec2(tp.x + ts.x + 10.f, tp.y + ts.y + 4.f), IM_COL32(120, 210, 255, 255));
+            top->AddText(ImVec2(tp.x + 5.f, tp.y + 2.f), IM_COL32(255, 255, 255, 255), label.c_str());
             if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.f)) {
                 const ImVec2 md = ImGui::GetIO().MouseDelta;
                 const Vec2 moved = BoxMoved(outer, {md.x, md.y}, {shown.x, shown.y}, display.x, display.y);
@@ -2406,12 +2469,29 @@ void HudRenderer::DrawPluginPanelSettings(const std::string& id) {
     }
 }
 
+void HudRenderer::MergeLearnedCells() {
+    const double now = ImGui::GetTime();
+    if (learnedCellsPath_.empty() || now < learnedCellsCheckAt_) return;
+    learnedCellsCheckAt_ = now + 2.0;
+    std::error_code ec;
+    const auto stamp = std::filesystem::last_write_time(learnedCellsPath_, ec);
+    if (ec || stamp == learnedCellsTime_) return;
+    // a file the reader is still writing fails to merge: the stamp is kept only on success, so it is read again
+    if (sceneCells_.Merge(learnedCellsPath_)) learnedCellsTime_ = stamp;
+}
+
 void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, const char* sourceName) {
+    MergeLearnedCells();
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleMain = layout_.uiScale;
     style.WindowPadding = layout_.compact ? ImVec2(4.f, 3.f) : ImVec2(8.f, 8.f);
     style.FramePadding = layout_.compact ? ImVec2(3.f, 1.f) : ImVec2(4.f, 3.f);
     style.ItemSpacing = layout_.compact ? ImVec2(4.f, 2.f) : ImVec2(8.f, 4.f);
+    for (size_t i = 0; i < pluginPanels_.size() && i < static_cast<size_t>(kMaxPluginHotkeys); ++i)
+        if (opt.pluginPanelToggleMask & (1u << i)) {
+            St(pluginPanels_[i]).pinned = !St(pluginPanels_[i]).pinned;
+            SaveLayout();
+        }
     for (int i = 0; i < kPanels; ++i)
         if (opt.panelToggleMask & (1u << i)) {
             layout_.panelPinned[i] = !layout_.panelPinned[i];
@@ -2439,7 +2519,9 @@ void HudRenderer::Draw(const WorldSnapshot& snap, HudOptions& opt, double fps, c
             if (!St(p).hidden && !p.off) DrawPluginPanel(p, opt);
         DrawSettings(snap, opt);  // always reachable
     }
-    if (opt.showMinimap) DrawMinimap(snap, opt);
+    // the inventory and the stash cover the corner the minimap lives in: the game hides its own minimap there, so
+    // do not draw the icons over the panels (the big map is a different window and stays)
+    if (opt.showMinimap && (snap.ui.bigMapOpen || !(snap.ui.inventoryOpen || snap.ui.stashOpen))) DrawMinimap(snap, opt);
     DrawPluginBoxes(opt);        // the plugins' on-screen boxes: independent of F9
     DrawGroundLabels(snap, opt); // independent of F9, like the game's own item labels
     DrawItemBadges(snap);        // independent of F9: only while the game shows inventory/stash

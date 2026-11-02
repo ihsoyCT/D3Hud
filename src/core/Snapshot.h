@@ -9,9 +9,12 @@
 #include <cstring>
 #include <type_traits>
 
+#include "PlayerData.h"
+#include "Wallet.h"
+
 namespace d3hud {
 
-constexpr uint32_t kSnapshotVersion = 13;  // 13: effects (buffs and cooldowns of the player) + gameTick; 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect; 12: ActorSnapshot::affixMask
+constexpr uint32_t kSnapshotVersion = 18;  // 18: ActorSnapshot::rarePrefix/rareSuffix; 17: permanent powers (passives); 16: ItemSnapshot::stack; 15: player stats, equipped skills, reader health; 14: wallet (gold, blood shards, materials); 13: effects (buffs and cooldowns of the player) + gameTick; 2: kMaxItems 256, item height, UiLayout; 3: big map; 4: scenes; 5: salvage UI; 6: rift progress; 7: stash tab/page rects; 8: which stash buttons exist; 9: salvage-all buttons; 10: greater rift timer; 11: the game's minimap rect; 12: ActorSnapshot::affixMask
 constexpr int kMaxScenes = 512;  // scenes of the current world (a rift has ~100-250)
 constexpr int kMaxActors = 256;
 constexpr int kMaxItems = 256;  // inventory + equipped + the visible stash tab (70)
@@ -34,6 +37,8 @@ enum class ActorKind : uint8_t {
     PylonSpawn,  // greater rift: possible pylon location (MarkerLocation_TieredRiftPylon)
     RiftOrb,         // progress orb dropped in normal/challenge rifts (p1_normal_rifts_Orb, Challenge_Rifts_Orb)
     RiftOrbTiered,   // progress orb of greater rifts (p1_tiered_rifts_Orb)
+    GroundEffect,    // an area on the ground: the circles of the Oculus Ring and the Altar of Rites, and the pools and blasts
+                     // of elite affixes (molten, desecrator, plagued, ...). The actor's name says which.
 };
 
 inline const char* ActorKindName(ActorKind k) {
@@ -53,6 +58,7 @@ inline const char* ActorKindName(ActorKind k) {
         case ActorKind::PylonSpawn: return "PylonSpawn";
         case ActorKind::RiftOrb:    return "RiftOrb";
         case ActorKind::RiftOrbTiered: return "RiftOrbGR";
+        case ActorKind::GroundEffect:  return "Ground";
     }
     return "?";
 }
@@ -93,6 +99,9 @@ struct ActorSnapshot {
     ItemRarity itemRarity = ItemRarity::Unknown;
     uint8_t itemFlags = 0;     // kItemFlag* bits; pylons/shrines: kActorFlagUsed
     uint32_t affixMask = 0;    // champions / rares / bosses: bit i = kMonsterAffixes[i] (MonsterAffixes.h)
+    // Rares: the two parts of the generated name ("Kauza" + ", Torturer of Souls") as GBIDs of the game's name strings
+    // (hash of "RareGenericPrefix068"); 0 = none. The host turns them into text (RareNames.h). Version 18.
+    uint32_t rarePrefix = 0, rareSuffix = 0;
 };
 
 constexpr uint8_t kItemFlagAncient = 1, kItemFlagPrimal = 2, kItemFlagBonus = 4, kItemFlagUnidentified = 8;
@@ -152,6 +161,7 @@ struct ItemSnapshot {
     uint8_t height = 1;                       // grid cells tall (rings/amulets/belts/gems 1, else 2)
     uint8_t augmentRank = 0;                  // Caldesann's Despair gem rank (0 = not augmented)
     uint8_t bonus = 0;                        // 1 = bonus drop (crucible, key, Ramaladni's, legendary gem, ...)
+    uint32_t stack = 0;                       // stack size of gems and materials (0 = not a stack / unknown), version 16
 };
 
 // Game UI geometry, in D3's virtual UI units (1200 tall, a centred 4:3 area of
@@ -284,17 +294,32 @@ struct WorldSnapshot {
     int32_t gameTick = -1;  // the game's clock at this snapshot (estimated, see GameClock), -1 unknown
     uint32_t effectCount = 0;
     EffectSnapshot effects[kMaxEffects];
+    // Appended in version 14: gold, blood shards and crafting materials
+    WalletSnapshot wallet;
+    // Appended in version 15: the player's own numbers, the skills it has equipped, and how well the reader sees the game
+    PlayerSnapshot player;
+    uint32_t skillCount = 0;
+    SkillSnapshot skills[kMaxSkills];
+    ReaderHealth health;
+    // Appended in version 17: powers on the character without a timer (passive skills, item powers, set bonuses)
+    uint32_t passiveCount = 0;
+    PassiveSnapshot passives[kMaxPassives];
 };
 
 static_assert(std::is_trivially_copyable_v<WorldSnapshot>, "snapshots must be memcpy-able");
 // Frozen ABI for the replay format / shared-memory ring (MSVC x64), version 2:
 // Actor: 8+8+4+4+4+1+1+48+2 = 80 (align 8). Item: 8+4+1*5+48+48+6 = 119 -> 120.
 // UiLayout: 4 + 16 * (2 + kEquipSlots) + 8 = 268.
-static_assert(sizeof(ActorSnapshot) == 88, "ActorSnapshot layout changed");
-static_assert(sizeof(ItemSnapshot) == 120, "ItemSnapshot layout changed");
+static_assert(sizeof(ActorSnapshot) == 96, "ActorSnapshot layout changed");
+static_assert(sizeof(ItemSnapshot) == 128, "ItemSnapshot layout changed");
 static_assert(sizeof(UiLayout) == 516, "UiLayout layout changed");
 static_assert(sizeof(EffectSnapshot) == 16, "EffectSnapshot layout changed");
-static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 88 + kMaxItems * 120,
+static_assert(sizeof(WalletSnapshot) == 80, "WalletSnapshot layout changed");
+static_assert(sizeof(PlayerSnapshot) == 144, "PlayerSnapshot layout changed");
+static_assert(sizeof(PassiveSnapshot) == 8, "PassiveSnapshot layout changed");
+static_assert(sizeof(SkillSnapshot) == 16, "SkillSnapshot layout changed");
+static_assert(sizeof(ReaderHealth) == 24, "ReaderHealth layout changed");
+static_assert(offsetof(WorldSnapshot, ui) == 48 + kMaxActors * 96 + kMaxItems * 128,
               "WorldSnapshot layout changed");
 
 // Map orientation: D3's isometric camera shows the world axes diagonally, so

@@ -1,10 +1,15 @@
 #include "SnoTable.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <sstream>
+#include <unordered_set>
+
+#include "GroundEffects.h"
 
 namespace d3hud {
 
@@ -73,8 +78,46 @@ bool IsBonusDrop(const std::string& type, const std::string& name) {
     return type == "CraftingReagent" && name.rfind("Key of ", 0) == 0;  // realm keys (Key of War, ...)
 }
 
+// The actors elite affixes and a few monsters leave on the ground, by name. The list is the user's (the groundeffects
+// plugin's setting, see GroundEffects.h) and starts as the built-in one; all of the default names are rejected by the other
+// rules (helpers, effects, props), so a name listed here wins over them.
+using NameSet = std::unordered_set<std::string>;
+
+static std::shared_ptr<const NameSet> MakeNames(const std::vector<std::string>& names) {
+    auto set = std::make_shared<NameSet>();
+    for (std::string n : names) {
+        std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        set->insert(std::move(n));
+    }
+    return set;
+}
+
+static std::atomic<std::shared_ptr<const NameSet>>& GroundNames() {
+    static std::atomic<std::shared_ptr<const NameSet>> names = [] {
+        std::vector<std::string> defaults;
+        for (const GroundEffectSpec& s : ParseGroundEffects(kDefaultGroundEffects)) defaults.push_back(s.name);
+        return MakeNames(defaults);
+    }();
+    return names;
+}
+
+void SetGroundEffectNames(const std::vector<std::string>& names) { GroundNames().store(MakeNames(names)); }
+
+static bool IsMonsterGroundEffect(const std::string& name) {
+    const std::shared_ptr<const NameSet> names = GroundNames().load();
+    if (names->empty()) return false;
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return names->count(lower) != 0;
+}
+
 bool ClassifyActor(const std::string& snoKind, const std::string& name, bool hasAcd, bool dead,
                    ActorKind* out) {
+    if (IsMonsterGroundEffect(name)) {
+        if (snoKind == "Monster" && dead) return false;  // the pulse / sweep helpers are monsters: no corpses
+        *out = ActorKind::GroundEffect;
+        return true;
+    }
     // invisible server prop marking where a greater rift pylon may spawn
     if (name == "MarkerLocation_TieredRiftPylon") {
         *out = ActorKind::PylonSpawn;
@@ -112,6 +155,12 @@ bool ClassifyActor(const std::string& snoKind, const std::string& name, bool has
             return true;
         }
         return false;
+    }
+    // The Oculus Ring's circle and the Altar of Rites circles share this effect (colour variants: _blue, _teal, ...).
+    // Found with Reader --nearby; effects are not kept otherwise, so each kind we want is named here.
+    if (snoKind == "ClientEffect" && Contains(name, "itemPassive_unique_ring_017_dome")) {
+        *out = ActorKind::GroundEffect;
+        return true;
     }
     if (snoKind == "Item" && Contains(name, "rifts_orb")) {
         // the orbs that fill the rift progress bar: shown even without an ACD (they are not items)

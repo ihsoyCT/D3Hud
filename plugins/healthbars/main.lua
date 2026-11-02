@@ -133,7 +133,7 @@ local function draw_list(x0, y0, elites, tag_opts)
             room = room - tw - 4
         end
         if names then
-            draw.shadowed(x0 + 4, y + (h - th) / 2, draw.WHITE, draw.fit(fmt.pretty(a.name), room, scale), scale)
+            draw.shadowed(x0 + 4, y + (h - th) / 2, draw.WHITE, draw.fit(fmt.pretty(a.display_name or a.name), room, scale), scale)
         end
         y = y + h + gap
         if a.tags then

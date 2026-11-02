@@ -17,7 +17,7 @@ A Diablo III HUD for Windows x64, C++23, CMake + Visual Studio 2022.
 ## Layout
 
 ```
-src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h, Effects.h (buffs/cooldowns,
+src/core      Snapshot.h (frozen ABI), SharedRing, ReplayIO, SceneGen, Salvage.h, ItemSearch.h, Settings.h, Wallet.h (gold, blood shards, materials), PlayerData.h + PlayerStats.h (the character's numbers, equipped skills, reader health), Effects.h (buffs/cooldowns,
               game clock estimate, power names), Boxes.h (placement of plugin boxes), PluginAssets.h (what a plugin may load);
               all pure and unit-tested. HostApi.h (the plain-C plugin API)
 src/plugins   LuaPlugin (sandboxed Lua + host API binding), PluginSettings (no UI, unit-tested)
@@ -64,7 +64,8 @@ D3Hud.Reader.exe --selftest                                # reader smoke test (
 4. **Finding new game data**: use `D3Hud.Reader.exe --attach "Diablo III64.exe" --ui <text>` to list UI
    controls and `--ui-watch <text> --seconds N` while playing to see which fields change. Measure first,
    then code; write what you found into `analysis/ENGINE_MINING.md`. Prefer reading UI geometry/values
-   over new memory scans. The player's own attributes (buffs, cooldowns) are watched with `--player-attrs`.
+   over new memory scans. The player's own attributes (buffs, cooldowns) are watched with `--player-attrs`, and effects on the ground (the actors the map
+   drops) with `--nearby`.
 5. **Pure logic goes in `src/core`** with a test in `src/tests/test_core.cpp`
    (examples: salvage rules, item search, rift progress/timer math).
 6. **The overlay window is `WS_EX_NOACTIVATE` and click-through** by default. Clickable regions are

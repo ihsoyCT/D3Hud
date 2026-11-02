@@ -31,6 +31,8 @@ constexpr uint32_t kAttribBucketsOffset = 0x34;  // group + 0x18 (map) + 0x1C (b
 constexpr uint32_t kAttrItemQualityLevel = 383;  // 0..2 normal, 3..5 magic, 6..8 rare, 9 legendary
 constexpr uint32_t kAttrAncientRank = 413;       // 1 ancient, 2 primal
 constexpr uint32_t kAttrUnidentified = 414;      // 1 = unidentified (gear and consumables)
+constexpr uint32_t kAttrItemStackQuantityHi = 400;  // stack size of gems and materials: Hi<<32 | Lo (the tsv's 395/396 + 5)
+constexpr uint32_t kAttrItemStackQuantityLo = 401;
 constexpr uint32_t kAttrAugmentGemRank = 432;    // CubeEnchantedGemRank: Caldesann's Despair augment
 constexpr uint32_t kAttrHitpointsCur = 115;       // float bits; monsters keep their current life here
 constexpr uint32_t kAttrHitpointsMaxTotal = 124;  // float bits
